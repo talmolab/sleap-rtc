@@ -273,6 +273,7 @@ class FileManager:
         pattern: str,
         file_size: int = None,
         max_depth: int = None,
+        mount_label: str = None,
     ) -> dict:
         """Resolve a file pattern to matching files within mounts.
 
@@ -280,6 +281,7 @@ class FileManager:
             pattern: Filename or pattern to search for.
             file_size: Expected file size for ranking (optional).
             max_depth: Maximum directory depth to search.
+            mount_label: Label of specific mount to search, or None/"all" for all mounts.
 
         Returns:
             Dictionary with candidates, truncated, timeout, and search_time_ms.
@@ -306,7 +308,20 @@ class FileManager:
         # Extract just the filename if a full path was provided
         search_name = Path(pattern).name
 
-        for mount in self.mounts:
+        # Filter mounts if mount_label specified
+        mounts_to_search = self.mounts
+        if mount_label and mount_label.lower() != "all":
+            mounts_to_search = [m for m in self.mounts if m.label == mount_label]
+            if not mounts_to_search:
+                return {
+                    "candidates": [],
+                    "truncated": False,
+                    "timeout": False,
+                    "error": f"Mount '{mount_label}' not found",
+                    "error_code": "MOUNT_NOT_FOUND",
+                }
+
+        for mount in mounts_to_search:
             if timed_out:
                 break
 

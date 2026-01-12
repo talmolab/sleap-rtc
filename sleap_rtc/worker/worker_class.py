@@ -1598,10 +1598,11 @@ class RTCWorkerClient:
 
             elif msg_type == MSG_FS_RESOLVE:
                 # Fuzzy/wildcard path resolution
-                # Format: FS_RESOLVE::pattern::file_size::max_depth
+                # Format: FS_RESOLVE::pattern::file_size::max_depth::mount_label
                 pattern = parts[1] if len(parts) > 1 else ""
                 file_size = int(parts[2]) if len(parts) > 2 and parts[2] else None
                 max_depth = int(parts[3]) if len(parts) > 3 and parts[3] else None
+                mount_label = parts[4] if len(parts) > 4 and parts[4] else None
 
                 if not pattern:
                     return f"{MSG_FS_ERROR}{MSG_SEPARATOR}{FS_ERROR_INVALID_REQUEST}{MSG_SEPARATOR}Pattern is required"
@@ -1610,6 +1611,7 @@ class RTCWorkerClient:
                     pattern=pattern,
                     file_size=file_size,
                     max_depth=max_depth,
+                    mount_label=mount_label,
                 )
 
                 # Check for errors in result

@@ -31,6 +31,8 @@ from sleap_rtc.protocol import (
     parse_message,
     MSG_FS_RESOLVE,
     MSG_FS_RESOLVE_RESPONSE,
+    MSG_FS_GET_MOUNTS,
+    MSG_FS_MOUNTS_RESPONSE,
     MSG_FS_ERROR,
     MSG_SEPARATOR,
     MSG_USE_WORKER_PATH,
@@ -39,6 +41,7 @@ from sleap_rtc.protocol import (
 )
 from sleap_rtc.client.file_selector import (
     select_file_from_candidates,
+    MountSelector,
     NoMatchMenu,
     prompt_wildcard_pattern,
     prompt_manual_path,
@@ -403,11 +406,51 @@ class RTCClient:
 
     # ===== Filesystem Path Resolution =====
 
+    async def _send_fs_get_mounts(self, timeout: float = 10.0) -> list:
+        """Send FS_GET_MOUNTS message to Worker and wait for response.
+
+        Args:
+            timeout: Timeout in seconds for response.
+
+        Returns:
+            List of mount dictionaries with 'label' and 'path' keys.
+        """
+        if self.data_channel.readyState != "open":
+            return []
+
+        # Clear any stale responses
+        while not self.fs_response_queue.empty():
+            try:
+                self.fs_response_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+
+        # Send request
+        logging.info("Sending FS_GET_MOUNTS")
+        self.data_channel.send(MSG_FS_GET_MOUNTS)
+
+        # Wait for response
+        try:
+            response = await asyncio.wait_for(
+                self.fs_response_queue.get(), timeout=timeout
+            )
+            if response.startswith(MSG_FS_MOUNTS_RESPONSE):
+                json_str = response.split(MSG_SEPARATOR, 1)[1]
+                return json.loads(json_str)
+            return []
+        except asyncio.TimeoutError:
+            logging.warning("Timeout waiting for FS_GET_MOUNTS response")
+            return []
+        except Exception as e:
+            logging.error(f"Error getting mounts: {e}")
+            return []
+
     async def _send_fs_resolve(
         self,
         pattern: str,
         file_size: int = None,
         max_depth: int = None,
+        mount_label: str = None,
         timeout: float = 15.0,
     ) -> dict:
         """Send FS_RESOLVE message to Worker and wait for response.
@@ -416,6 +459,7 @@ class RTCClient:
             pattern: Filename or wildcard pattern to search for.
             file_size: Optional file size for ranking matches.
             max_depth: Optional max directory depth to search.
+            mount_label: Optional mount label to filter search (or "all").
             timeout: Timeout in seconds for response.
 
         Returns:
@@ -424,10 +468,11 @@ class RTCClient:
         if self.data_channel.readyState != "open":
             return {"error": "Data channel not open", "candidates": []}
 
-        # Build message
+        # Build message: FS_RESOLVE::pattern::file_size::max_depth::mount_label
         parts = [MSG_FS_RESOLVE, pattern]
         parts.append(str(file_size) if file_size else "")
         parts.append(str(max_depth) if max_depth else "")
+        parts.append(mount_label if mount_label else "")
         message = MSG_SEPARATOR.join(parts)
 
         # Clear any stale responses
@@ -471,20 +516,24 @@ class RTCClient:
         self,
         local_path: str,
         non_interactive: bool = False,
+        mount_label: str = None,
     ) -> Optional[str]:
         """Resolve a local file path to a Worker filesystem path.
 
         This method:
-        1. Extracts the filename from the local path
-        2. Gets local file size if the file exists
-        3. Sends FS_RESOLVE to Worker
-        4. If exact match found, returns it immediately
-        5. If multiple matches, shows arrow selector
-        6. If no matches, shows options menu
+        1. Fetches available mounts from Worker
+        2. Shows mount selector (unless mount_label provided or non_interactive)
+        3. Extracts the filename from the local path
+        4. Gets local file size if the file exists
+        5. Sends FS_RESOLVE to Worker with selected mount
+        6. If exact match found, returns it immediately
+        7. If multiple matches, shows arrow selector
+        8. If no matches, shows options menu
 
         Args:
             local_path: Local path to the file (may not exist locally).
-            non_interactive: If True, auto-select first candidate.
+            non_interactive: If True, auto-select first candidate and default to all mounts.
+            mount_label: Specific mount label to search (skips mount selector).
 
         Returns:
             Resolved Worker path, or None if cancelled/failed.
@@ -504,10 +553,32 @@ class RTCClient:
         # Check if pattern contains wildcards
         has_wildcards = any(c in filename for c in "*?[")
 
-        # Send resolution request
+        # Fetch mounts from worker and show selector if needed
+        selected_mount = mount_label
+        if not selected_mount:
+            if non_interactive:
+                # Non-interactive mode defaults to "all"
+                selected_mount = "all"
+            else:
+                # Fetch available mounts
+                mounts = await self._send_fs_get_mounts()
+                if not mounts:
+                    print("\nError: No filesystems configured on worker.")
+                    print("Configure mounts in sleap-rtc.toml under [[worker.io.mounts]]")
+                    return None
+
+                # Show mount selector
+                selector = MountSelector(mounts)
+                selected_mount = selector.run()
+                if selected_mount is None or selector.cancelled:
+                    logging.info("Mount selection cancelled")
+                    return None
+
+        # Send resolution request with selected mount
         result = await self._send_fs_resolve(
             pattern=filename,
             file_size=file_size,
+            mount_label=selected_mount,
         )
 
         # Handle errors
@@ -557,8 +628,10 @@ class RTCClient:
         elif action == "wildcard":
             pattern = prompt_wildcard_pattern(filename)
             if pattern:
-                # Retry with wildcard pattern
-                result = await self._send_fs_resolve(pattern=pattern, file_size=file_size)
+                # Retry with wildcard pattern (use same mount selection)
+                result = await self._send_fs_resolve(
+                    pattern=pattern, file_size=file_size, mount_label=selected_mount
+                )
                 candidates = result.get("candidates", [])
                 if candidates:
                     return select_file_from_candidates(
@@ -715,7 +788,9 @@ class RTCClient:
             # Try to resolve the local file path on the Worker
             logging.info(f"Resolving file path: {self.file_path}")
             resolved_path = await self.resolve_file_path(
-                self.file_path, non_interactive=self.non_interactive
+                self.file_path,
+                non_interactive=self.non_interactive,
+                mount_label=self.mount_label,
             )
 
         if resolved_path:
@@ -1556,6 +1631,7 @@ class RTCClient:
         min_gpu_memory: int = None,
         worker_path: str = None,
         non_interactive: bool = False,
+        mount_label: str = None,
     ):
         """Sends initial SDP offer to worker peer and establishes both connection & datachannel to be used by both parties.
 
@@ -1572,6 +1648,7 @@ class RTCClient:
             min_gpu_memory: Minimum GPU memory in MB for worker filtering
             worker_path: Explicit path on worker filesystem (skips resolution)
             non_interactive: Auto-select best match without prompting (for CI/scripts)
+            mount_label: Specific mount label to search (skips mount selection)
         Returns:
             None
         """
@@ -1584,6 +1661,7 @@ class RTCClient:
             # Path resolution options
             self.worker_path = worker_path
             self.non_interactive = non_interactive
+            self.mount_label = mount_label
 
             # Initialize reconnect attempts.
             logging.info("Setting up RTC data channel reconnect attempts...")

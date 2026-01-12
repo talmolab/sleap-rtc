@@ -5,8 +5,10 @@ from fuzzy search results, with fallback to numbered selection for
 terminals that don't support cursor movement.
 """
 
+import asyncio
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from typing import List, Optional, Callable
 
 # Terminal capability detection
@@ -207,10 +209,26 @@ class ArrowSelector:
             mouse_support=False,
         )
 
-        try:
+        def run_app():
+            """Run the prompt_toolkit app (for use in thread)."""
             app.run()
-        except Exception:
+
+        try:
+            # Check if we're inside an existing event loop
+            try:
+                asyncio.get_running_loop()
+                # We're in an async context - run prompt_toolkit in a separate thread
+                # to avoid event loop conflicts
+                with ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(run_app)
+                    future.result()  # Wait for completion
+            except RuntimeError:
+                # No running loop - can run directly
+                app.run()
+        except Exception as e:
             # Fall back to numbered on any error
+            import logging
+            logging.debug(f"Interactive selection failed, falling back to numbered: {e}")
             return self._run_numbered()
 
         return result[0]
@@ -242,6 +260,186 @@ class ArrowSelector:
                     return self.candidates[idx]
                 else:
                     print(f"Please enter a number between 1 and {len(self.candidates)}")
+
+            except ValueError:
+                print("Invalid input. Please enter a number.")
+            except (EOFError, KeyboardInterrupt):
+                self.cancelled = True
+                return None
+
+
+class MountSelector:
+    """Interactive mount selection using arrow keys.
+
+    Allows users to select which filesystem mount to search when
+    multiple mounts are configured on the worker.
+
+    Usage:
+        selector = MountSelector(mounts)
+        selected = selector.run()
+        if selected:
+            print(f"Selected: {selected}")  # mount label or "all"
+    """
+
+    def __init__(
+        self,
+        mounts: List[dict],
+        title: str = "Select filesystem to search:",
+        allow_all: bool = True,
+        allow_cancel: bool = True,
+    ):
+        """Initialize selector.
+
+        Args:
+            mounts: List of mount dicts with 'label' and 'path' keys.
+            title: Title to display above the selection list.
+            allow_all: Whether to include "All filesystems" option.
+            allow_cancel: Whether to allow canceling selection with Escape.
+        """
+        self.mounts = mounts
+        self.title = title
+        self.allow_all = allow_all
+        self.allow_cancel = allow_cancel
+        self.selected_index = 0
+        self.cancelled = False
+
+    def _get_options(self) -> List[tuple]:
+        """Get list of (label, display_text) options."""
+        options = []
+        for mount in self.mounts:
+            label = mount.get("label", "Unknown")
+            path = mount.get("path", "")
+            options.append((label, f"{label} ({path})"))
+        if self.allow_all:
+            options.append(("all", "All filesystems"))
+        return options
+
+    def run(self) -> Optional[str]:
+        """Run the selector and return the selected mount label.
+
+        Returns:
+            Mount label string, "all", or None if cancelled.
+        """
+        options = self._get_options()
+        if not options:
+            return None
+
+        if _is_interactive_terminal():
+            return self._run_interactive(options)
+        else:
+            return self._run_numbered(options)
+
+    def _run_interactive(self, options: List[tuple]) -> Optional[str]:
+        """Run interactive arrow-key selection using prompt_toolkit."""
+        try:
+            from prompt_toolkit import Application
+            from prompt_toolkit.key_binding import KeyBindings
+            from prompt_toolkit.layout import Layout
+            from prompt_toolkit.layout.containers import Window
+            from prompt_toolkit.layout.controls import FormattedTextControl
+            from prompt_toolkit.formatted_text import FormattedText
+        except ImportError:
+            return self._run_numbered(options)
+
+        kb = KeyBindings()
+        result = [None]
+
+        @kb.add("up")
+        @kb.add("k")
+        def move_up(event):
+            self.selected_index = (self.selected_index - 1) % len(options)
+
+        @kb.add("down")
+        @kb.add("j")
+        def move_down(event):
+            self.selected_index = (self.selected_index + 1) % len(options)
+
+        @kb.add("enter")
+        def confirm(event):
+            result[0] = options[self.selected_index][0]
+            event.app.exit()
+
+        @kb.add("escape")
+        @kb.add("q")
+        def cancel(event):
+            if self.allow_cancel:
+                self.cancelled = True
+                event.app.exit()
+
+        @kb.add("c-c")
+        def ctrl_c(event):
+            self.cancelled = True
+            event.app.exit()
+
+        def get_formatted_text():
+            lines = []
+            lines.append(("bold", f"\n{self.title}\n\n"))
+
+            for i, (label, display) in enumerate(options):
+                selected = i == self.selected_index
+                prefix = "> " if selected else "  "
+                line = f"{prefix}{display}"
+
+                if selected:
+                    lines.append(("bold fg:cyan", line + "\n"))
+                else:
+                    lines.append(("", line + "\n"))
+
+            lines.append(("dim", "\n[↑/↓] Navigate  [Enter] Confirm  [Esc] Cancel\n"))
+            return FormattedText(lines)
+
+        layout = Layout(Window(content=FormattedTextControl(get_formatted_text)))
+        app = Application(
+            layout=layout,
+            key_bindings=kb,
+            full_screen=False,
+            mouse_support=False,
+        )
+
+        def run_app():
+            app.run()
+
+        try:
+            try:
+                asyncio.get_running_loop()
+                with ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(run_app)
+                    future.result()
+            except RuntimeError:
+                app.run()
+        except Exception as e:
+            import logging
+            logging.debug(f"Interactive mount selection failed, falling back to numbered: {e}")
+            return self._run_numbered(options)
+
+        return result[0]
+
+    def _run_numbered(self, options: List[tuple]) -> Optional[str]:
+        """Run numbered selection for dumb terminals."""
+        print(f"\n{self.title}\n")
+
+        for i, (label, display) in enumerate(options, 1):
+            print(f"  {i}. {display}")
+
+        print()
+        if self.allow_cancel:
+            print("Enter number to select, or 'c' to cancel")
+        else:
+            print("Enter number to select")
+
+        while True:
+            try:
+                choice = input("\nSelection: ").strip().lower()
+
+                if choice == "c" and self.allow_cancel:
+                    self.cancelled = True
+                    return None
+
+                idx = int(choice) - 1
+                if 0 <= idx < len(options):
+                    return options[idx][0]
+                else:
+                    print(f"Please enter a number between 1 and {len(options)}")
 
             except ValueError:
                 print("Invalid input. Please enter a number.")

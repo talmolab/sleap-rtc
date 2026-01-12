@@ -15,6 +15,7 @@ def run_RTCclient(
     min_gpu_memory: int = None,
     worker_path: str = None,
     non_interactive: bool = False,
+    mount_label: str = None,
     **kwargs,
 ):
     """Standalone function to run the RTC client with CLI arguments.
@@ -30,6 +31,7 @@ def run_RTCclient(
         min_gpu_memory: Minimum GPU memory in MB for worker filtering
         worker_path: Explicit path on worker filesystem (skips resolution)
         non_interactive: Auto-select best match without prompting (for CI/scripts)
+        mount_label: Specific mount label to search (skips mount selection)
         **kwargs: Additional arguments passed to run_client
     """
     # Create client instance (DNS will be loaded from config)
@@ -58,6 +60,7 @@ def run_RTCclient(
         # Path resolution parameters
         "worker_path": worker_path,
         "non_interactive": non_interactive,
+        "mount_label": mount_label,
     }
 
     # Add any additional kwargs
