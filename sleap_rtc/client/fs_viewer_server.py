@@ -64,6 +64,9 @@ class FSViewerServer:
         self._debounce_task: Optional[asyncio.Task] = None
         self._pending_request: Optional[Dict[str, Any]] = None
 
+        # Track request metadata for column view support
+        self._request_metadata: Optional[Dict[str, Any]] = None
+
     async def start(self, port: int = DEFAULT_PORT, open_browser: bool = True) -> str:
         """Start the server.
 
@@ -189,7 +192,9 @@ class FSViewerServer:
                 # Debounce list_dir requests
                 path = msg.get("path", "")
                 offset = msg.get("offset", 0)
-                await self._debounced_list_dir(path, offset)
+                column_index = msg.get("column_index")
+                append = msg.get("append", False)
+                await self._debounced_list_dir(path, offset, column_index, append)
 
             elif msg_type == "resolve":
                 # Path resolution request
@@ -203,9 +208,16 @@ class FSViewerServer:
         except json.JSONDecodeError:
             logging.error(f"Invalid JSON from browser: {data[:100]}")
 
-    async def _debounced_list_dir(self, path: str, offset: int):
+    async def _debounced_list_dir(
+        self, path: str, offset: int, column_index: Optional[int], append: bool
+    ):
         """Debounce list_dir requests (100ms)."""
-        self._pending_request = {"path": path, "offset": offset}
+        self._pending_request = {
+            "path": path,
+            "offset": offset,
+            "column_index": column_index,
+            "append": append,
+        }
 
         # Cancel previous debounce task
         if self._debounce_task and not self._debounce_task.done():
@@ -221,6 +233,12 @@ class FSViewerServer:
         if self._pending_request:
             path = self._pending_request["path"]
             offset = self._pending_request["offset"]
+            # Store metadata to attach to response
+            self._request_metadata = {
+                "path": path,
+                "column_index": self._pending_request.get("column_index"),
+                "append": self._pending_request.get("append", False),
+            }
             self.send_to_worker(f"FS_LIST_DIR::{path}::{offset}")
             self._pending_request = None
 
@@ -251,6 +269,12 @@ class FSViewerServer:
             elif message.startswith("FS_LIST_RESPONSE::"):
                 json_str = message.split("::", 1)[1]
                 data = json.loads(json_str)
+                # Attach request metadata for column view support
+                if self._request_metadata:
+                    data["path"] = self._request_metadata.get("path")
+                    data["column_index"] = self._request_metadata.get("column_index")
+                    data["append"] = self._request_metadata.get("append", False)
+                    self._request_metadata = None
                 await self._broadcast({
                     "type": "list_response",
                     "data": data,

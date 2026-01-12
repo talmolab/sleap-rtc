@@ -141,11 +141,47 @@
             border-radius: 4px;
         }
 
+        /* View toggle */
+        .view-toggle {
+            display: flex;
+            gap: 4px;
+        }
+
+        .view-toggle-btn {
+            padding: 6px 10px;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            cursor: pointer;
+            color: var(--text-secondary);
+            transition: all 0.15s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .view-toggle-btn:hover {
+            background: var(--bg-hover);
+            color: var(--text-primary);
+        }
+
+        .view-toggle-btn.active {
+            background: var(--accent-glow);
+            border-color: var(--accent-primary);
+            color: var(--accent-secondary);
+        }
+
+        .view-toggle-btn svg {
+            width: 16px;
+            height: 16px;
+        }
+
         /* Main layout */
         .main-container {
             display: grid;
             grid-template-columns: 320px 1fr;
-            min-height: calc(100vh - 60px);
+            height: calc(100vh - 60px);
+            overflow: hidden;
         }
 
         /* Sidebar */
@@ -154,6 +190,7 @@
             border-right: 1px solid var(--border-color);
             display: flex;
             flex-direction: column;
+            overflow-y: auto;
         }
 
         .sidebar-header {
@@ -221,6 +258,8 @@
             display: flex;
             flex-direction: column;
             background: var(--bg-primary);
+            overflow: hidden;
+            height: 100%;
         }
 
         /* Breadcrumb */
@@ -540,6 +579,211 @@
             background: var(--bg-hover);
             color: var(--text-primary);
         }
+
+        /* Context menu */
+        .context-menu {
+            position: fixed;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 4px 0;
+            min-width: 180px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+            z-index: 1000;
+            display: none;
+        }
+
+        .context-menu.show {
+            display: block;
+        }
+
+        .context-menu-item {
+            padding: 8px 12px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.875rem;
+            color: var(--text-primary);
+            transition: background 0.1s ease;
+        }
+
+        .context-menu-item:hover {
+            background: var(--bg-hover);
+        }
+
+        .context-menu-item svg {
+            width: 16px;
+            height: 16px;
+            opacity: 0.7;
+        }
+
+        .context-menu-divider {
+            height: 1px;
+            background: var(--border-color);
+            margin: 4px 0;
+        }
+
+        /* Column view */
+        .column-container {
+            display: flex;
+            flex: 1;
+            overflow-x: auto;
+            overflow-y: hidden;
+            background: var(--bg-primary);
+        }
+
+        .column-wrapper {
+            display: flex;
+            flex-shrink: 0;
+        }
+
+        .column {
+            width: 220px;
+            min-width: 120px;
+            max-width: 400px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            background: var(--bg-secondary);
+        }
+
+        .column-resize-handle {
+            width: 4px;
+            cursor: col-resize;
+            background: var(--border-color);
+            transition: background 0.15s ease;
+            flex-shrink: 0;
+        }
+
+        .column-resize-handle:hover,
+        .column-resize-handle.dragging {
+            background: var(--accent-primary);
+        }
+
+        .column-header {
+            padding: 8px 12px;
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            border-bottom: 1px solid var(--border-color);
+            background: var(--bg-tertiary);
+            position: sticky;
+            top: 0;
+            z-index: 1;
+        }
+
+        .column-items {
+            flex: 1;
+            overflow-y: auto;
+        }
+
+        .column-item {
+            padding: 8px 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            cursor: pointer;
+            font-size: 0.8125rem;
+            transition: background 0.1s ease;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .column-item:last-child {
+            border-bottom: none;
+        }
+
+        .column-item:hover {
+            background: var(--bg-hover);
+        }
+
+        .column-item.selected {
+            background: var(--accent-glow);
+        }
+
+        .column-item-icon {
+            width: 16px;
+            height: 16px;
+            flex-shrink: 0;
+        }
+
+        .column-item-name {
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .column-item-chevron {
+            margin-left: auto;
+            opacity: 0.4;
+            flex-shrink: 0;
+        }
+
+        .column-item-chevron svg {
+            width: 12px;
+            height: 12px;
+        }
+
+        .column-load-more {
+            padding: 8px 12px;
+            text-align: center;
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            cursor: pointer;
+            border-top: 1px solid var(--border-color);
+        }
+
+        .column-load-more:hover {
+            background: var(--bg-hover);
+            color: var(--text-secondary);
+        }
+
+        /* File detail column */
+        .file-detail-column {
+            width: 280px;
+            min-width: 280px;
+            padding: 24px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 16px;
+            background: var(--bg-primary);
+            border-right: 1px solid var(--border-color);
+        }
+
+        .file-detail-icon {
+            width: 64px;
+            height: 64px;
+        }
+
+        .file-detail-name {
+            font-size: 1rem;
+            font-weight: 500;
+            text-align: center;
+            word-break: break-all;
+        }
+
+        .file-detail-meta {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            width: 100%;
+        }
+
+        .file-detail-row {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.8125rem;
+        }
+
+        .file-detail-label {
+            color: var(--text-muted);
+        }
+
+        .file-detail-value {
+            color: var(--text-secondary);
+            font-family: 'JetBrains Mono', monospace;
+        }
     </style>
 </head>
 <body>
@@ -550,6 +794,23 @@
             <div class="connection-badge connecting" id="connectionBadge">
                 <span id="connectionStatus">Connecting...</span>
             </div>
+        </div>
+        <div class="view-toggle">
+            <button class="view-toggle-btn active" id="iconViewBtn" onclick="setViewMode('icon')" title="Icon View">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="3" y="3" width="7" height="7" rx="1"/>
+                    <rect x="14" y="3" width="7" height="7" rx="1"/>
+                    <rect x="3" y="14" width="7" height="7" rx="1"/>
+                    <rect x="14" y="14" width="7" height="7" rx="1"/>
+                </svg>
+            </button>
+            <button class="view-toggle-btn" id="columnViewBtn" onclick="setViewMode('column')" title="Column View">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="3" y="3" width="5" height="18" rx="1"/>
+                    <rect x="10" y="3" width="5" height="18" rx="1"/>
+                    <rect x="17" y="3" width="5" height="18" rx="1"/>
+                </svg>
+            </button>
         </div>
         <div class="worker-info" id="workerInfo">
             Worker: -
@@ -589,7 +850,7 @@
             <div class="action-bar">
                 <div class="selected-path">
                     <span class="selected-label">Selected:</span>
-                    <div class="selected-value" id="selectedPath">No file selected</div>
+                    <div class="selected-value" id="selectedPath">No path selected</div>
                 </div>
                 <div class="action-buttons">
                     <button class="btn btn-secondary" onclick="clearSelection()">Clear</button>
@@ -608,6 +869,30 @@
         <span id="toastMessage">Path copied to clipboard</span>
     </div>
 
+    <!-- Context Menu -->
+    <div class="context-menu" id="contextMenu">
+        <div class="context-menu-item" onclick="contextMenuOpen()">
+            <svg viewBox="0 0 24 24" fill="currentColor">
+                <path d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/>
+            </svg>
+            <span>Open Folder</span>
+        </div>
+        <div class="context-menu-divider"></div>
+        <div class="context-menu-item" onclick="contextMenuCopyPath()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+            </svg>
+            <span>Copy Folder Path</span>
+        </div>
+        <div class="context-menu-item" onclick="contextMenuSelect()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="20 6 9 17 4 12"/>
+            </svg>
+            <span>Select Folder</span>
+        </div>
+    </div>
+
     <script>
         // State
         let ws = null;
@@ -618,6 +903,15 @@
         let currentEntries = [];
         let totalCount = 0;
         let hasMore = false;
+
+        // View mode state
+        let viewMode = localStorage.getItem('sleap-rtc-view-mode') || 'icon';
+
+        // Column view state
+        let columns = []; // Array of {path, entries, selectedIndex, hasMore, totalCount}
+
+        // Context menu state
+        let contextMenuPath = null;
 
         // Get token from URL
         function getToken() {
@@ -681,6 +975,187 @@
             </svg>`;
         }
 
+        function getColumnIcon(type, ext) {
+            if (type === 'directory') {
+                return `<svg class="column-item-icon" style="color: var(--folder-color)" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/>
+                </svg>`;
+            }
+            const color = getFileColor(ext);
+            return `<svg class="column-item-icon" style="color: var(--${color})" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                <polyline points="14 2 14 8 20 8"/>
+            </svg>`;
+        }
+
+        function getDetailIcon(type, ext) {
+            if (type === 'directory') {
+                return `<svg class="file-detail-icon" style="color: var(--folder-color)" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/>
+                </svg>`;
+            }
+            const color = getFileColor(ext);
+            return `<svg class="file-detail-icon" style="color: var(--${color})" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                <polyline points="14 2 14 8 20 8"/>
+            </svg>`;
+        }
+
+        // View mode functions
+        function setViewMode(mode) {
+            viewMode = mode;
+            localStorage.setItem('sleap-rtc-view-mode', mode);
+
+            // Update toggle buttons
+            document.getElementById('iconViewBtn').classList.toggle('active', mode === 'icon');
+            document.getElementById('columnViewBtn').classList.toggle('active', mode === 'column');
+
+            // Show/hide breadcrumb based on view mode
+            document.getElementById('breadcrumb').style.display = mode === 'icon' ? 'flex' : 'none';
+
+            // Re-render current view
+            if (currentPath) {
+                if (mode === 'icon') {
+                    renderFileGrid();
+                    renderBreadcrumb();
+                } else {
+                    // Reset columns and load from current path
+                    columns = [];
+                    requestColumnDir(currentPath, 0);
+                }
+            }
+        }
+
+        function initViewMode() {
+            document.getElementById('iconViewBtn').classList.toggle('active', viewMode === 'icon');
+            document.getElementById('columnViewBtn').classList.toggle('active', viewMode === 'column');
+            // Hide breadcrumb initially if in column mode
+            document.getElementById('breadcrumb').style.display = viewMode === 'icon' ? 'flex' : 'none';
+        }
+
+        // Context menu functions
+        function showContextMenu(e, path) {
+            e.preventDefault();
+            contextMenuPath = path;
+
+            const menu = document.getElementById('contextMenu');
+            menu.style.left = e.clientX + 'px';
+            menu.style.top = e.clientY + 'px';
+            menu.classList.add('show');
+        }
+
+        function hideContextMenu() {
+            document.getElementById('contextMenu').classList.remove('show');
+            contextMenuPath = null;
+        }
+
+        function contextMenuOpen() {
+            if (contextMenuPath) {
+                navigateTo(contextMenuPath);
+            }
+            hideContextMenu();
+        }
+
+        function contextMenuCopyPath() {
+            if (contextMenuPath) {
+                navigator.clipboard.writeText(contextMenuPath).then(() => {
+                    showToast('Folder path copied to clipboard');
+                }).catch(err => {
+                    console.error('Failed to copy:', err);
+                    showToast('Failed to copy path');
+                });
+            }
+            hideContextMenu();
+        }
+
+        function contextMenuSelect() {
+            if (contextMenuPath) {
+                selectedFile = contextMenuPath;
+                if (viewMode === 'icon') {
+                    renderFileGrid();
+                } else {
+                    renderColumnView();
+                }
+                updateSelectedPath();
+            }
+            hideContextMenu();
+        }
+
+        // Close context menu on click outside
+        document.addEventListener('click', (e) => {
+            if (!e.target.closest('.context-menu')) {
+                hideContextMenu();
+            }
+        });
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                hideContextMenu();
+            }
+        });
+
+        // Column resize functions
+        let resizingColumnIndex = null;
+        let resizeStartX = 0;
+        let resizeStartWidth = 0;
+
+        function startColumnResize(e, colIndex) {
+            e.preventDefault();
+            resizingColumnIndex = colIndex;
+            resizeStartX = e.clientX;
+            resizeStartWidth = columns[colIndex].width || 220;
+
+            // Add dragging class
+            e.target.classList.add('dragging');
+
+            // Add global listeners
+            document.addEventListener('mousemove', handleColumnResize);
+            document.addEventListener('mouseup', stopColumnResize);
+
+            // Prevent text selection while dragging
+            document.body.style.userSelect = 'none';
+            document.body.style.cursor = 'col-resize';
+        }
+
+        function handleColumnResize(e) {
+            if (resizingColumnIndex === null) return;
+
+            const delta = e.clientX - resizeStartX;
+            let newWidth = resizeStartWidth + delta;
+
+            // Clamp to min/max
+            newWidth = Math.max(120, Math.min(400, newWidth));
+
+            // Update column width
+            columns[resizingColumnIndex].width = newWidth;
+
+            // Update DOM directly for smooth resize
+            const column = document.querySelector(`.column[data-col-index="${resizingColumnIndex}"]`);
+            if (column) {
+                column.style.width = newWidth + 'px';
+            }
+        }
+
+        function stopColumnResize(e) {
+            if (resizingColumnIndex !== null) {
+                // Remove dragging class
+                const handle = document.querySelector(`.column-resize-handle[data-col-index="${resizingColumnIndex}"]`);
+                if (handle) {
+                    handle.classList.remove('dragging');
+                }
+            }
+
+            resizingColumnIndex = null;
+
+            // Remove global listeners
+            document.removeEventListener('mousemove', handleColumnResize);
+            document.removeEventListener('mouseup', stopColumnResize);
+
+            // Restore cursor
+            document.body.style.userSelect = '';
+            document.body.style.cursor = '';
+        }
+
         // WebSocket connection
         function connectWebSocket() {
             const token = getToken();
@@ -734,10 +1209,46 @@
                     break;
 
                 case 'list_response':
-                    currentEntries = msg.data.entries || [];
-                    totalCount = msg.data.total_count || 0;
-                    hasMore = msg.data.has_more || false;
-                    renderFileGrid();
+                    const entries = msg.data.entries || [];
+                    const total = msg.data.total_count || 0;
+                    const more = msg.data.has_more || false;
+                    const path = msg.data.path || currentPath;
+                    const colIndex = msg.data.column_index;
+                    const append = msg.data.append;
+
+                    if (viewMode === 'column' && colIndex !== undefined) {
+                        // Column view response
+                        if (append && columns[colIndex]) {
+                            // Append to existing column
+                            columns[colIndex].entries = columns[colIndex].entries.concat(entries);
+                            columns[colIndex].hasMore = more;
+                            columns[colIndex].totalCount = total;
+                        } else {
+                            // New column or replace
+                            columns[colIndex] = {
+                                path: path,
+                                entries: entries,
+                                selectedIndex: null,
+                                hasMore: more,
+                                totalCount: total
+                            };
+                            // Trim any columns after this one
+                            columns = columns.slice(0, colIndex + 1);
+                        }
+                        currentPath = path;
+                        renderColumnView();
+                        renderMountPoints();
+                    } else {
+                        // Icon view response
+                        if (append) {
+                            currentEntries = currentEntries.concat(entries);
+                        } else {
+                            currentEntries = entries;
+                        }
+                        totalCount = total;
+                        hasMore = more;
+                        renderFileGrid();
+                    }
                     break;
 
                 case 'error':
@@ -838,11 +1349,13 @@
                 const itemPath = currentPath + '/' + entry.name;
                 const isSelected = selectedFile === itemPath;
                 const ext = getExtension(entry.name);
+                const contextMenuAttr = entry.type === 'directory' ? `oncontextmenu="showContextMenu(event, '${itemPath}')"` : '';
 
                 return `
                     <div class="grid-item ${isSelected ? 'selected' : ''}"
                          onclick="${entry.type === 'directory' ? `navigateTo('${itemPath}')` : `selectFile('${itemPath}')`}"
-                         ondblclick="${entry.type === 'directory' ? `navigateTo('${itemPath}')` : `copyPath()`}">
+                         ondblclick="${entry.type === 'directory' ? `navigateTo('${itemPath}')` : `copyPath()`}"
+                         ${contextMenuAttr}>
                         ${getGridIcon(entry.type, ext)}
                         <div class="grid-item-name">${entry.name}</div>
                         <div class="grid-item-meta">${entry.type === 'directory' ? 'Folder' : formatSize(entry.size || 0)}</div>
@@ -873,18 +1386,182 @@
             `;
         }
 
+        // Render column view
+        function renderColumnView() {
+            const container = document.getElementById('fileGrid');
+
+            if (columns.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <svg class="empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+                        </svg>
+                        <div class="empty-title">Select a Mount Point</div>
+                        <div class="empty-desc">Choose a mount point from the sidebar to browse files.</div>
+                    </div>
+                `;
+                return;
+            }
+
+            let columnsHtml = columns.map((col, colIndex) => {
+                const pathParts = col.path.split('/').filter(p => p);
+                const columnName = pathParts[pathParts.length - 1] || 'Root';
+                const columnWidth = col.width || 220;
+
+                const itemsHtml = col.entries.map((entry, entryIndex) => {
+                    const itemPath = col.path + '/' + entry.name;
+                    const isSelected = col.selectedIndex === entryIndex;
+                    const ext = getExtension(entry.name);
+                    const contextMenuAttr = entry.type === 'directory' ? `oncontextmenu="showContextMenu(event, '${itemPath}')"` : '';
+
+                    return `
+                        <div class="column-item ${isSelected ? 'selected' : ''}"
+                             onclick="columnItemClick(${colIndex}, ${entryIndex}, '${itemPath}', '${entry.type}')"
+                             ${contextMenuAttr}>
+                            ${getColumnIcon(entry.type, ext)}
+                            <span class="column-item-name">${entry.name}</span>
+                            ${entry.type === 'directory' ? `
+                                <span class="column-item-chevron">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <polyline points="9 18 15 12 9 6"/>
+                                    </svg>
+                                </span>
+                            ` : ''}
+                        </div>
+                    `;
+                }).join('');
+
+                const loadMoreHtml = col.hasMore ? `
+                    <div class="column-load-more" onclick="loadMoreColumn(${colIndex})">
+                        Load more (${col.entries.length} of ${col.totalCount})
+                    </div>
+                ` : '';
+
+                return `
+                    <div class="column-wrapper">
+                        <div class="column" data-col-index="${colIndex}" style="width: ${columnWidth}px;">
+                            <div class="column-header">${columnName}</div>
+                            <div class="column-items">
+                                ${itemsHtml}
+                            </div>
+                            ${loadMoreHtml}
+                        </div>
+                        <div class="column-resize-handle" data-col-index="${colIndex}" onmousedown="startColumnResize(event, ${colIndex})"></div>
+                    </div>
+                `;
+            }).join('');
+
+            // Add file detail column if a file is selected
+            const lastCol = columns[columns.length - 1];
+            if (lastCol && lastCol.selectedIndex !== null) {
+                const selectedEntry = lastCol.entries[lastCol.selectedIndex];
+                if (selectedEntry && selectedEntry.type !== 'directory') {
+                    const ext = getExtension(selectedEntry.name);
+                    const itemPath = lastCol.path + '/' + selectedEntry.name;
+                    columnsHtml += `
+                        <div class="file-detail-column">
+                            ${getDetailIcon(selectedEntry.type, ext)}
+                            <div class="file-detail-name">${selectedEntry.name}</div>
+                            <div class="file-detail-meta">
+                                <div class="file-detail-row">
+                                    <span class="file-detail-label">Size</span>
+                                    <span class="file-detail-value">${formatSize(selectedEntry.size || 0)}</span>
+                                </div>
+                                <div class="file-detail-row">
+                                    <span class="file-detail-label">Modified</span>
+                                    <span class="file-detail-value">${selectedEntry.modified ? formatDate(selectedEntry.modified) : '—'}</span>
+                                </div>
+                                <div class="file-detail-row">
+                                    <span class="file-detail-label">Type</span>
+                                    <span class="file-detail-value">${ext.toUpperCase() || 'File'}</span>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                }
+            }
+
+            container.innerHTML = `<div class="column-container">${columnsHtml}</div>`;
+
+            // Scroll to the right to show newest column
+            const columnContainer = container.querySelector('.column-container');
+            if (columnContainer) {
+                columnContainer.scrollLeft = columnContainer.scrollWidth;
+            }
+        }
+
+        function formatDate(timestamp) {
+            if (!timestamp) return '—';
+            const date = new Date(timestamp * 1000);
+            const now = new Date();
+            const isToday = date.toDateString() === now.toDateString();
+            if (isToday) {
+                return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            }
+            return date.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
+        }
+
+        function columnItemClick(colIndex, entryIndex, itemPath, itemType) {
+            // Update selection in this column
+            columns[colIndex].selectedIndex = entryIndex;
+
+            // Remove any columns after this one
+            columns = columns.slice(0, colIndex + 1);
+
+            if (itemType === 'directory') {
+                // Add a new column for this directory
+                selectedFile = null;
+                requestColumnDir(itemPath, colIndex + 1);
+            } else {
+                // Select this file
+                selectedFile = itemPath;
+                renderColumnView();
+                updateSelectedPath();
+            }
+        }
+
+        function requestColumnDir(path, columnIndex) {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                    type: 'list_dir',
+                    path: path,
+                    offset: 0,
+                    column_index: columnIndex
+                }));
+            }
+        }
+
+        function loadMoreColumn(colIndex) {
+            const col = columns[colIndex];
+            if (col && ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                    type: 'list_dir',
+                    path: col.path,
+                    offset: col.entries.length,
+                    column_index: colIndex,
+                    append: true
+                }));
+            }
+        }
+
         // Event handlers
         function selectMount(path) {
             currentPath = path;
             selectedFile = null;
             currentEntries = [];
+            columns = [];
 
             renderMountPoints();
-            renderBreadcrumb();
             updateSelectedPath();
 
-            // Request directory listing
-            requestListDir(path);
+            if (viewMode === 'column') {
+                // Show loading in column container
+                document.getElementById('fileGrid').innerHTML = '<div class="loading"><div class="spinner"></div>Loading...</div>';
+                requestColumnDir(path, 0);
+            } else {
+                renderBreadcrumb();
+                requestListDir(path);
+            }
         }
 
         function navigateTo(path) {
@@ -892,15 +1569,21 @@
             selectedFile = null;
             currentEntries = [];
 
-            renderBreadcrumb();
             renderMountPoints();
             updateSelectedPath();
 
             // Show loading
             document.getElementById('fileGrid').innerHTML = '<div class="loading"><div class="spinner"></div>Loading...</div>';
 
-            // Request directory listing
-            requestListDir(path);
+            if (viewMode === 'column') {
+                // In column view, navigateTo is called from context menu "Open Folder"
+                // Reset columns and start fresh from this path
+                columns = [];
+                requestColumnDir(path, 0);
+            } else {
+                renderBreadcrumb();
+                requestListDir(path);
+            }
         }
 
         function selectFile(path) {
@@ -911,7 +1594,13 @@
 
         function clearSelection() {
             selectedFile = null;
-            renderFileGrid();
+            if (viewMode === 'column') {
+                // Clear selection in all columns
+                columns.forEach(col => col.selectedIndex = null);
+                renderColumnView();
+            } else {
+                renderFileGrid();
+            }
             updateSelectedPath();
         }
 
@@ -923,7 +1612,7 @@
                 pathDisplay.textContent = selectedFile;
                 copyBtn.disabled = false;
             } else {
-                pathDisplay.textContent = 'No file selected';
+                pathDisplay.textContent = 'No path selected';
                 copyBtn.disabled = true;
             }
         }
@@ -949,21 +1638,23 @@
             }, 3000);
         }
 
-        function requestListDir(path, offset = 0) {
+        function requestListDir(path, offset = 0, append = false) {
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({
                     type: 'list_dir',
                     path: path,
-                    offset: offset
+                    offset: offset,
+                    append: append
                 }));
             }
         }
 
         function loadMore() {
-            requestListDir(currentPath, currentEntries.length);
+            requestListDir(currentPath, currentEntries.length, true);
         }
 
         // Initialize
+        initViewMode();
         connectWebSocket();
     </script>
 </body>
