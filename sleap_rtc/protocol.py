@@ -162,14 +162,16 @@ send(FILE_EXISTS, filename)
 ```
 """
 
-# Worker I/O Paths Message Types
-MSG_JOB_ID = "JOB_ID"
-MSG_INPUT_FILE = "INPUT_FILE"
-MSG_FILE_EXISTS = "FILE_EXISTS"
-MSG_FILE_NOT_FOUND = "FILE_NOT_FOUND"
-MSG_JOB_OUTPUT_PATH = "JOB_OUTPUT_PATH"
+# Worker I/O Paths Message Types (COMMENTED OUT - reserved for future use)
+# These constants were part of the Worker I/O Paths feature which has been removed.
+# They are kept here for reference in case they're needed for debugging or future implementation.
+# MSG_JOB_ID = "JOB_ID"
+# MSG_INPUT_FILE = "INPUT_FILE"
+# MSG_FILE_EXISTS = "FILE_EXISTS"
+# MSG_FILE_NOT_FOUND = "FILE_NOT_FOUND"
+# MSG_JOB_OUTPUT_PATH = "JOB_OUTPUT_PATH"
 
-# RTC Transfer Message Types (Original Protocol)
+# RTC Transfer Message Types
 MSG_FILE_META = "FILE_META"
 MSG_CHUNK = "CHUNK"
 MSG_FILE_COMPLETE = "FILE_COMPLETE"
@@ -180,6 +182,87 @@ MSG_READY = "READY"
 MSG_TRAINING_COMPLETE = "TRAINING_COMPLETE"
 MSG_INFERENCE_COMPLETE = "INFERENCE_COMPLETE"
 MSG_ERROR = "ERROR"
+
+# =============================================================================
+# Filesystem Browser Message Types
+# =============================================================================
+#
+# These messages enable Clients to browse and resolve file paths on Worker
+# filesystems. All operations are read-only and restricted to configured mounts.
+#
+# Message Flows:
+#
+# 1. Get Worker Info (for browser status display):
+#    Client → Worker: FS_GET_INFO
+#    Worker → Client: FS_INFO_RESPONSE::{json}
+#    Response: {"worker_id": "...", "working_dir": "...", "mounts": [...]}
+#
+# 2. Get Available Mounts:
+#    Client → Worker: FS_GET_MOUNTS
+#    Worker → Client: FS_MOUNTS_RESPONSE::{json}
+#    Response: [{"path": "/mnt/data", "label": "Lab Data"}, ...]
+#
+# 3. Resolve File Path (fuzzy/wildcard matching):
+#    Client → Worker: FS_RESOLVE::{pattern}::{file_size}::{max_depth}
+#    Worker → Client: FS_RESOLVE_RESPONSE::{json}
+#    Response: {"candidates": [...], "truncated": false, "timeout": false}
+#
+# 4. List Directory Contents:
+#    Client → Worker: FS_LIST_DIR::{path}::{offset}
+#    Worker → Client: FS_LIST_RESPONSE::{json}
+#    Response: {"path": "...", "entries": [...], "total_count": N, "has_more": bool}
+#
+# 5. Error Response:
+#    Worker → Client: FS_ERROR::{error_code}::{message}
+#    Error codes: ACCESS_DENIED, PATTERN_TOO_BROAD, PATH_NOT_FOUND
+#
+
+# Filesystem info messages
+MSG_FS_GET_INFO = "FS_GET_INFO"
+MSG_FS_INFO_RESPONSE = "FS_INFO_RESPONSE"
+
+# Mount discovery messages
+MSG_FS_GET_MOUNTS = "FS_GET_MOUNTS"
+MSG_FS_MOUNTS_RESPONSE = "FS_MOUNTS_RESPONSE"
+
+# Path resolution messages (fuzzy/wildcard matching)
+MSG_FS_RESOLVE = "FS_RESOLVE"
+MSG_FS_RESOLVE_RESPONSE = "FS_RESOLVE_RESPONSE"
+
+# Directory listing messages
+MSG_FS_LIST_DIR = "FS_LIST_DIR"
+MSG_FS_LIST_RESPONSE = "FS_LIST_RESPONSE"
+
+# Filesystem error message
+MSG_FS_ERROR = "FS_ERROR"
+
+# Filesystem error codes
+FS_ERROR_ACCESS_DENIED = "ACCESS_DENIED"
+FS_ERROR_PATTERN_TOO_BROAD = "PATTERN_TOO_BROAD"
+FS_ERROR_PATH_NOT_FOUND = "PATH_NOT_FOUND"
+FS_ERROR_INVALID_REQUEST = "INVALID_REQUEST"
+
+# =============================================================================
+# Worker Path Messages
+# =============================================================================
+#
+# These messages enable Clients to tell Workers to use a resolved path directly
+# (without file transfer over RTC).
+#
+# Message Flow:
+#
+# 1. Client resolves path using FS_RESOLVE or uses --worker-path flag
+# 2. Client → Worker: USE_WORKER_PATH::{resolved_path}
+# 3. Worker validates the path exists and is accessible within mounts
+# 4. Worker → Client: WORKER_PATH_OK::{resolved_path}
+#    or: WORKER_PATH_ERROR::{error_message}
+# 5. Worker proceeds to process the file from that path
+#
+
+# Worker path messages
+MSG_USE_WORKER_PATH = "USE_WORKER_PATH"
+MSG_WORKER_PATH_OK = "WORKER_PATH_OK"
+MSG_WORKER_PATH_ERROR = "WORKER_PATH_ERROR"
 
 # Message separators
 MSG_SEPARATOR = "::"

@@ -47,42 +47,34 @@ def show_worker_help():
     help="Room token for authentication (required if --room-id is provided).",
 )
 @click.option(
-    "--input-path",
+    "--working-dir",
+    "-w",
     type=str,
     required=False,
-    help="Directory where worker reads input files from shared filesystem.",
+    help="Working directory for the worker. Overrides config file value.",
 )
-@click.option(
-    "--output-path",
-    type=str,
-    required=False,
-    help="Directory where worker writes job outputs to shared filesystem.",
-)
-@click.option(
-    "--filesystem",
-    type=str,
-    required=False,
-    default=None,
-    help="Human-readable label for the filesystem (e.g., 'vast', 'gdrive'). Displayed to clients.",
-)
-def worker(room_id, token, input_path, output_path, filesystem):
+def worker(room_id, token, working_dir):
     """Start the sleap-RTC worker node."""
     # Validate that both room_id and token are provided together
     if (room_id and not token) or (token and not room_id):
         logger.error("Both --room-id and --token must be provided together")
         sys.exit(1)
 
-    # Validate I/O path options
-    if (input_path and not output_path) or (output_path and not input_path):
-        logger.error("Both --input-path and --output-path must be provided together")
-        sys.exit(1)
+    # Validate working directory if provided
+    if working_dir:
+        working_dir_path = Path(working_dir)
+        if not working_dir_path.exists():
+            logger.error(f"Working directory does not exist: {working_dir}")
+            sys.exit(1)
+        if not working_dir_path.is_dir():
+            logger.error(f"Working directory is not a directory: {working_dir}")
+            sys.exit(1)
+        logger.info(f"Using working directory: {working_dir}")
 
     run_RTCworker(
         room_id=room_id,
         token=token,
-        input_path=input_path,
-        output_path=output_path,
-        filesystem=filesystem,
+        working_dir=working_dir,
     )
 
 

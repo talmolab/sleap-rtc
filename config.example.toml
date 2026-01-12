@@ -25,24 +25,27 @@ signaling_http = "http://staging-server.example.com:8001"
 signaling_websocket = "ws://ec2-52-9-213-137.us-west-1.compute.amazonaws.com:8080"
 signaling_http = "http://ec2-52-9-213-137.us-west-1.compute.amazonaws.com:8001"
 
-# ============================================================================
-# Worker I/O Configuration (Optional)
-# ============================================================================
-# Configure worker input/output paths for shared filesystem transfer.
-# When configured, clients will see these paths and can place files directly
-# in the input folder instead of transferring via WebRTC.
-#
-# If not configured, the worker will use RTC transfer (default).
+# =============================================================================
+# Worker Configuration
+# =============================================================================
 
 [worker.io]
-# Directory where worker reads input files
-# Clients will be told to place their training packages here
-input_path = "/mnt/shared/inputs"
+# Working directory for the worker (can be overridden with --working-dir CLI option)
+# working_dir = "/mnt/data"
 
-# Directory where worker writes job outputs
-# Job outputs will be written to: {output_path}/jobs/{job_id}/
-output_path = "/mnt/shared/outputs"
+# Mount points define directories that Clients can browse via the filesystem viewer.
+# Each mount has a path (absolute) and a label (human-readable name).
+# Only files within configured mounts are accessible to Clients.
 
-# Human-readable label for the filesystem (displayed to clients)
-# Examples: "vast", "gdrive", "nfs", "local"
-filesystem = "shared"
+[[worker.io.mounts]]
+path = "/mnt/shared/lab_data"
+label = "Lab Data"
+
+[[worker.io.mounts]]
+path = "/mnt/shared/projects"
+label = "Shared Projects"
+
+# Example: Add more mounts as needed
+# [[worker.io.mounts]]
+# path = "/mnt/archive"
+# label = "Archive"
