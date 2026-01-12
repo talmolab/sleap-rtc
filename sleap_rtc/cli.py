@@ -139,6 +139,19 @@ def worker(room_id, token, working_dir):
     default=None,
     help="Minimum GPU memory in MB required for training.",
 )
+@click.option(
+    "--worker-path",
+    type=str,
+    required=False,
+    default=None,
+    help="Path on worker filesystem to use directly (skips path resolution).",
+)
+@click.option(
+    "--non-interactive",
+    is_flag=True,
+    default=False,
+    help="Non-interactive mode: auto-select best match without prompting (for CI/scripts).",
+)
 def client_train(**kwargs):
     """Run remote training on a worker.
 
@@ -153,6 +166,11 @@ def client_train(**kwargs):
        - Auto-select: --auto-select
        - Direct worker: --worker-id PEER_ID
        - GPU filter: --min-gpu-memory MB
+
+    Path resolution options:
+
+    - --worker-path PATH: Use this path directly on the worker (skips resolution)
+    - --non-interactive: Auto-select best match without prompting (for CI/scripts)
     """
     # Extract connection options
     session_string = kwargs.pop("session_string", None)
@@ -161,6 +179,10 @@ def client_train(**kwargs):
     worker_id = kwargs.pop("worker_id", None)
     auto_select = kwargs.pop("auto_select", False)
     min_gpu_memory = kwargs.pop("min_gpu_memory", None)
+
+    # Extract path resolution options
+    worker_path = kwargs.pop("worker_path", None)
+    non_interactive = kwargs.pop("non_interactive", False)
 
     # Validation: Must provide either session string OR room credentials
     has_session = session_string is not None
@@ -219,10 +241,18 @@ def client_train(**kwargs):
             logger.info(f"Minimum GPU memory filter: {min_gpu_memory}MB")
             kwargs["min_gpu_memory"] = min_gpu_memory
 
+    # Log path resolution options
+    if worker_path:
+        logger.info(f"Using explicit worker path: {worker_path}")
+    if non_interactive:
+        logger.info("Non-interactive mode: will auto-select best match")
+
     return run_RTCclient(
         session_string=session_string,
         pkg_path=kwargs.pop("pkg_path"),
         zmq_ports=kwargs.pop("zmq_ports"),
+        worker_path=worker_path,
+        non_interactive=non_interactive,
         **kwargs,
     )
 

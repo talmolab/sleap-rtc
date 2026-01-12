@@ -13,6 +13,8 @@ def run_RTCclient(
     worker_id: str = None,
     auto_select: bool = False,
     min_gpu_memory: int = None,
+    worker_path: str = None,
+    non_interactive: bool = False,
     **kwargs,
 ):
     """Standalone function to run the RTC client with CLI arguments.
@@ -26,6 +28,8 @@ def run_RTCclient(
         worker_id: Specific worker peer-id to connect to (skips discovery)
         auto_select: Automatically select best worker by GPU memory
         min_gpu_memory: Minimum GPU memory in MB for worker filtering
+        worker_path: Explicit path on worker filesystem (skips resolution)
+        non_interactive: Auto-select best match without prompting (for CI/scripts)
         **kwargs: Additional arguments passed to run_client
     """
     # Create client instance (DNS will be loaded from config)
@@ -51,6 +55,9 @@ def run_RTCclient(
         "worker_id": worker_id,
         "auto_select": auto_select,
         "min_gpu_memory": min_gpu_memory,
+        # Path resolution parameters
+        "worker_path": worker_path,
+        "non_interactive": non_interactive,
     }
 
     # Add any additional kwargs
