@@ -23,16 +23,25 @@ from aiortc import RTCPeerConnection, RTCSessionDescription, RTCDataChannel, RTC
 from pathlib import Path
 from websockets.client import ClientConnection
 
-from sleap_rtc.config import (
-    get_config,
-    WorkerIOConfig,
-    WorkerIOConfigError,
-)
+from sleap_rtc.config import get_config, MountConfig
 from sleap_rtc.filesystem import safe_mkdir
 from sleap_rtc.protocol import (
-    MSG_JOB_ID,
-    MSG_INPUT_FILE,
     parse_message,
+    MSG_FS_GET_INFO,
+    MSG_FS_INFO_RESPONSE,
+    MSG_FS_GET_MOUNTS,
+    MSG_FS_MOUNTS_RESPONSE,
+    MSG_FS_RESOLVE,
+    MSG_FS_RESOLVE_RESPONSE,
+    MSG_FS_LIST_DIR,
+    MSG_FS_LIST_RESPONSE,
+    MSG_FS_ERROR,
+    MSG_SEPARATOR,
+    FS_ERROR_ACCESS_DENIED,
+    FS_ERROR_INVALID_REQUEST,
+    MSG_USE_WORKER_PATH,
+    MSG_WORKER_PATH_OK,
+    MSG_WORKER_PATH_ERROR,
 )
 from sleap_rtc.worker.capabilities import WorkerCapabilities
 from sleap_rtc.worker.job_executor import JobExecutor
@@ -62,9 +71,8 @@ class RTCWorkerClient:
         self,
         chunk_size=32 * 1024,
         gpu_id=0,
-        input_path=None,
-        output_path=None,
-        filesystem=None,
+        mounts: list = None,
+        working_dir: str = None,
     ):
         # Use /app/shared_data in production, current dir + shared_data in dev
         self.save_dir = "."
@@ -76,41 +84,15 @@ class RTCWorkerClient:
         self.websocket = None  # WebSocket connection will be set later
         self.package_type = "train"  # Default to training, can be "track" for inference
 
-        # Initialize Worker I/O configuration
-        self.io_config: Optional[WorkerIOConfig] = None
-        try:
-            self.io_config = WorkerIOConfig.load(
-                cli_input_path=input_path,
-                cli_output_path=output_path,
-                cli_filesystem=filesystem,
-            )
-            if self.io_config:
-                logging.info("=" * 60)
-                logging.info("WORKER I/O PATHS CONFIGURED")
-                logging.info(f"  Input:      {self.io_config.input_path}")
-                logging.info(f"  Output:     {self.io_config.output_path}")
-                logging.info(f"  Filesystem: {self.io_config.filesystem}")
-                logging.info("=" * 60)
-        except WorkerIOConfigError as e:
-            logging.error(f"Worker I/O configuration error: {e}")
-            logging.info("Falling back to RTC transfer")
-            self.io_config = None
+        # Filesystem browser configuration
+        self.mounts: list = mounts or []
+        self.working_dir: str = working_dir
 
-        # Log transfer mode
-        if self.io_config:
-            logging.info("Transfer mode: Worker I/O Paths")
-        else:
-            logging.info("Transfer mode: RTC Transfer (no shared filesystem)")
-
-        # Shared storage job tracking
-        self.current_job_id = None
-        self.current_input_path = None
-        self.current_output_path = None
+        logging.info("Transfer mode: RTC Transfer")
 
         # Worker state and capabilities (for v2.0 features)
         self.capabilities = WorkerCapabilities(
             gpu_id=gpu_id,
-            io_config=self.io_config,
         )
         self.job_executor = JobExecutor(
             worker=self,
@@ -118,7 +100,8 @@ class RTCWorkerClient:
         )
         self.file_manager = FileManager(
             chunk_size=chunk_size,
-            io_config=self.io_config,
+            mounts=self.mounts,
+            working_dir=self.working_dir,
         )
         self.job_coordinator = None  # Initialized in run_worker after authentication
         self.state_manager = None  # Initialized in run_worker after authentication
@@ -1180,10 +1163,6 @@ class RTCWorkerClient:
                 "supported_job_types": self.supported_job_types,
             }
 
-            # Include I/O paths if configured
-            if self.io_config:
-                properties["io_paths"] = self.io_config.to_dict()
-
             # Send register message with is_admin=True
             await self.websocket.send(
                 json.dumps(
@@ -1587,6 +1566,199 @@ class RTCWorkerClient:
             if channel.readyState == "open":
                 channel.send(b"KEEP_ALIVE")
 
+    # ===== Filesystem Browser Message Handling =====
+
+    def handle_fs_message(self, message: str) -> str:
+        """Handle filesystem browser messages from clients.
+
+        Routes FS_* protocol messages to appropriate FileManager methods
+        and returns response messages.
+
+        Args:
+            message: The incoming FS_* message string.
+
+        Returns:
+            Response message string to send back to client.
+        """
+        try:
+            # Parse message type and parameters
+            parts = message.split(MSG_SEPARATOR)
+            msg_type = parts[0] if parts else ""
+
+            if msg_type == MSG_FS_GET_INFO:
+                # Return worker info (id, working_dir, mounts)
+                worker_id = getattr(self, "peer_id", None) or "unknown"
+                info = self.file_manager.get_worker_info(worker_id=worker_id)
+                return f"{MSG_FS_INFO_RESPONSE}{MSG_SEPARATOR}{json.dumps(info)}"
+
+            elif msg_type == MSG_FS_GET_MOUNTS:
+                # Return available mounts
+                mounts = self.file_manager.get_mounts()
+                return f"{MSG_FS_MOUNTS_RESPONSE}{MSG_SEPARATOR}{json.dumps(mounts)}"
+
+            elif msg_type == MSG_FS_RESOLVE:
+                # Fuzzy/wildcard path resolution
+                # Format: FS_RESOLVE::pattern::file_size::max_depth
+                pattern = parts[1] if len(parts) > 1 else ""
+                file_size = int(parts[2]) if len(parts) > 2 and parts[2] else None
+                max_depth = int(parts[3]) if len(parts) > 3 and parts[3] else None
+
+                if not pattern:
+                    return f"{MSG_FS_ERROR}{MSG_SEPARATOR}{FS_ERROR_INVALID_REQUEST}{MSG_SEPARATOR}Pattern is required"
+
+                result = self.file_manager.resolve_path(
+                    pattern=pattern,
+                    file_size=file_size,
+                    max_depth=max_depth,
+                )
+
+                # Check for errors in result
+                if "error_code" in result:
+                    return f"{MSG_FS_ERROR}{MSG_SEPARATOR}{result['error_code']}{MSG_SEPARATOR}{result.get('error', 'Unknown error')}"
+
+                return f"{MSG_FS_RESOLVE_RESPONSE}{MSG_SEPARATOR}{json.dumps(result)}"
+
+            elif msg_type == MSG_FS_LIST_DIR:
+                # Directory listing
+                # Format: FS_LIST_DIR::path::offset
+                path = parts[1] if len(parts) > 1 else ""
+                offset = int(parts[2]) if len(parts) > 2 and parts[2] else 0
+
+                if not path:
+                    return f"{MSG_FS_ERROR}{MSG_SEPARATOR}{FS_ERROR_INVALID_REQUEST}{MSG_SEPARATOR}Path is required"
+
+                result = self.file_manager.list_directory(path=path, offset=offset)
+
+                # Check for errors in result
+                if "error_code" in result:
+                    return f"{MSG_FS_ERROR}{MSG_SEPARATOR}{result['error_code']}{MSG_SEPARATOR}{result.get('error', 'Unknown error')}"
+
+                return f"{MSG_FS_LIST_RESPONSE}{MSG_SEPARATOR}{json.dumps(result)}"
+
+            else:
+                return f"{MSG_FS_ERROR}{MSG_SEPARATOR}{FS_ERROR_INVALID_REQUEST}{MSG_SEPARATOR}Unknown FS message type: {msg_type}"
+
+        except Exception as e:
+            logging.error(f"Error handling FS message: {e}")
+            return f"{MSG_FS_ERROR}{MSG_SEPARATOR}{FS_ERROR_INVALID_REQUEST}{MSG_SEPARATOR}{str(e)}"
+
+    def _is_fs_message(self, message: str) -> bool:
+        """Check if a message is a filesystem browser message.
+
+        Args:
+            message: The message to check.
+
+        Returns:
+            True if message is an FS_* message.
+        """
+        if not isinstance(message, str):
+            return False
+        return message.startswith("FS_")
+
+    def handle_worker_path_message(self, message: str) -> str:
+        """Handle USE_WORKER_PATH message from client.
+
+        Validates the path exists and is within configured mounts, then
+        stores it for processing.
+
+        Args:
+            message: The USE_WORKER_PATH::path message.
+
+        Returns:
+            WORKER_PATH_OK or WORKER_PATH_ERROR response message.
+        """
+        try:
+            parts = message.split(MSG_SEPARATOR)
+            if len(parts) < 2 or not parts[1]:
+                return f"{MSG_WORKER_PATH_ERROR}{MSG_SEPARATOR}Path is required"
+
+            worker_path = parts[1]
+
+            # Validate path is within allowed mounts
+            if not self.file_manager._is_path_allowed(Path(worker_path)):
+                return f"{MSG_WORKER_PATH_ERROR}{MSG_SEPARATOR}Path not within configured mounts"
+
+            # Check file exists
+            path_obj = Path(worker_path)
+            if not path_obj.exists():
+                return f"{MSG_WORKER_PATH_ERROR}{MSG_SEPARATOR}File not found: {worker_path}"
+
+            # Store the path for processing
+            self.worker_input_path = worker_path
+            logging.info(f"Worker will use input path: {worker_path}")
+
+            return f"{MSG_WORKER_PATH_OK}{MSG_SEPARATOR}{worker_path}"
+
+        except Exception as e:
+            logging.error(f"Error handling worker path message: {e}")
+            return f"{MSG_WORKER_PATH_ERROR}{MSG_SEPARATOR}{str(e)}"
+
+    async def _process_worker_input_path(self, channel):
+        """Process a job from a worker input path (no file transfer).
+
+        This method is called when USE_WORKER_PATH was used to specify
+        the input file directly on the Worker filesystem.
+
+        Args:
+            channel: The data channel for communication with the Client.
+        """
+        input_path = self.worker_input_path
+        logging.info(f"Processing job from worker input path: {input_path}")
+
+        # Check if it's a zip file that needs extraction
+        if input_path.endswith(".zip"):
+            logging.info(f"Extracting zip file: {input_path}")
+            self.unzipped_dir = await self.file_manager.unzip_results(input_path)
+            logging.info(f"Unzipped to: {self.unzipped_dir}")
+        else:
+            # Use the parent directory as unzipped_dir
+            self.unzipped_dir = str(Path(input_path).parent)
+            logging.info(f"Using directory: {self.unzipped_dir}")
+
+        # Store original file name for reference
+        self.original_file_name = Path(input_path).name
+
+        # Route to appropriate workflow based on package type
+        if self.package_type == "track":
+            # Inference workflow
+            track_script_path = os.path.join(self.unzipped_dir, "track-script.sh")
+
+            if Path(track_script_path).exists():
+                self.job_executor.unzipped_dir = self.unzipped_dir
+                self.job_executor.output_dir = self.output_dir
+                await self.job_executor.run_track_workflow(channel, track_script_path)
+            else:
+                logging.error(
+                    f"No track script found in {self.unzipped_dir}. Skipping inference."
+                )
+        else:
+            # Training workflow (default)
+            train_script_path = os.path.join(self.unzipped_dir, "train-script.sh")
+
+            if Path(train_script_path).exists():
+                try:
+                    logging.info("self.gui is: " + str(self.gui))
+                    logging.info("self.output_dir is: " + str(self.output_dir))
+
+                    # Configure job executor
+                    self.job_executor.unzipped_dir = self.unzipped_dir
+                    self.job_executor.output_dir = self.output_dir
+
+                    await self.job_executor.run_train_workflow(
+                        channel,
+                        train_script_path,
+                        self.peer_id,
+                    )
+                except Exception as e:
+                    logging.error(f"Error running train workflow: {e}")
+            else:
+                logging.info(
+                    f"No training script found in {self.unzipped_dir}. Skipping training."
+                )
+
+        # Clear worker_input_path for next job
+        self.worker_input_path = None
+
     # Websockets are only necessary here for setting up exchange of SDP & ICE candidates to each other.
     # Listen for incoming data channel messages on channel established by the client.
     def on_datachannel(self, channel: RTCDataChannel):
@@ -1645,45 +1817,24 @@ class RTCWorkerClient:
             logging.info(f"Worker received: {message}")
 
             if isinstance(message, str):
-                # Parse message type and arguments
-                msg_type, msg_args = parse_message(message)
-
-                # Handle shared storage job messages
-                if msg_type == MSG_JOB_ID:
-                    self.current_job_id = msg_args[0] if msg_args else None
-                    logging.info(
-                        f"Received shared storage job ID: {self.current_job_id}"
-                    )
-                    return
-
-                elif msg_type == MSG_INPUT_FILE:
-                    # Worker I/O Paths mode: receive filename from client
-                    filename = msg_args[0] if msg_args else ""
-                    logging.info(f"Received INPUT_FILE: {filename}")
-
-                    if not self.current_job_id:
-                        logging.error("Received INPUT_FILE before JOB_ID")
-                        return
-
-                    # Validate and resolve the input file
-                    validated_path = self.file_manager.validate_input_file(
-                        filename, self.current_job_id, channel
-                    )
-                    if validated_path:
-                        self.current_input_path = validated_path
-                        self.output_dir = self.file_manager.output_dir
-                        logging.info(f"Input file ready: {validated_path}")
-
-                        # Process the job immediately
-                        try:
-                            await self.job_executor.process_io_paths_job(channel)
-                        except Exception as e:
-                            logging.error(f"Error processing I/O paths job: {e}")
-                            channel.send(f"JOB_FAILED::{self.current_job_id}::{str(e)}")
-                    return
-
                 if message == b"KEEP_ALIVE":
                     logging.info("Keep alive message received.")
+                    return
+
+                # Handle filesystem browser messages (FS_*)
+                if self._is_fs_message(message):
+                    logging.info(f"Handling filesystem message: {message[:50]}...")
+                    response = self.handle_fs_message(message)
+                    if channel.readyState == "open":
+                        channel.send(response)
+                    return
+
+                # Handle worker path message (USE_WORKER_PATH)
+                if message.startswith(MSG_USE_WORKER_PATH):
+                    logging.info(f"Handling worker path message: {message}")
+                    response = self.handle_worker_path_message(message)
+                    if channel.readyState == "open":
+                        channel.send(response)
                     return
 
                 # Detect package type (track or train)
@@ -1817,6 +1968,14 @@ class RTCWorkerClient:
                     _, self.output_dir = message.split(
                         "OUTPUT_DIR::", 1
                     )  # normally, "models"
+
+                    # Check if we have a worker_input_path (from USE_WORKER_PATH)
+                    # If so, start processing immediately without waiting for file transfer
+                    if hasattr(self, "worker_input_path") and self.worker_input_path:
+                        logging.info(
+                            f"Using worker input path: {self.worker_input_path}"
+                        )
+                        await self._process_worker_input_path(channel)
 
                 elif "FILE_META::" in message:
                     logging.info(f"File metadata received: {message}")
@@ -2102,8 +2261,6 @@ class RTCWorkerClient:
                                     "max_concurrent_jobs": self.max_concurrent_jobs,
                                     "supported_models": self.supported_models,
                                     "supported_job_types": self.supported_job_types,
-                                    # Include I/O paths if configured
-                                    **({"io_paths": self.io_config.to_dict()} if self.io_config else {}),
                                 },
                             },
                         }
