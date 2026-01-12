@@ -1,0 +1,970 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SLEAP-RTC File Browser</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Outfit:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-primary: #0a0a0f;
+            --bg-secondary: #12121a;
+            --bg-tertiary: #1a1a24;
+            --bg-hover: #22222e;
+            --border-color: #2a2a3a;
+            --border-highlight: #3d3d52;
+            --text-primary: #e8e8f0;
+            --text-secondary: #9090a8;
+            --text-muted: #606078;
+            --accent-primary: #6366f1;
+            --accent-secondary: #818cf8;
+            --accent-glow: rgba(99, 102, 241, 0.15);
+            --success: #22c55e;
+            --success-glow: rgba(34, 197, 94, 0.15);
+            --warning: #f59e0b;
+            --error: #ef4444;
+            --folder-color: #fbbf24;
+            --file-slp: #a78bfa;
+            --file-video: #38bdf8;
+            --file-model: #f472b6;
+            --file-default: #9090a8;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Outfit', sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            line-height: 1.5;
+        }
+
+        /* Header */
+        .header {
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border-color);
+            padding: 1rem 1.5rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .logo {
+            font-weight: 600;
+            font-size: 1.25rem;
+            background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .connection-badge {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.375rem 0.75rem;
+            border-radius: 9999px;
+            font-size: 0.8rem;
+            font-weight: 500;
+        }
+
+        .connection-badge.connected {
+            background: var(--success-glow);
+            border: 1px solid rgba(34, 197, 94, 0.3);
+        }
+
+        .connection-badge.connected::before {
+            content: '';
+            width: 8px;
+            height: 8px;
+            background: var(--success);
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+
+        .connection-badge.disconnected {
+            background: rgba(239, 68, 68, 0.15);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+            color: var(--error);
+        }
+
+        .connection-badge.disconnected::before {
+            content: '';
+            width: 8px;
+            height: 8px;
+            background: var(--error);
+            border-radius: 50%;
+        }
+
+        .connection-badge.connecting {
+            background: rgba(245, 158, 11, 0.15);
+            border: 1px solid rgba(245, 158, 11, 0.3);
+            color: var(--warning);
+        }
+
+        .connection-badge.connecting::before {
+            content: '';
+            width: 8px;
+            height: 8px;
+            background: var(--warning);
+            border-radius: 50%;
+            animation: pulse 1s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .worker-info {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            padding: 0.25rem 0.5rem;
+            background: var(--bg-tertiary);
+            border-radius: 4px;
+        }
+
+        /* Main layout */
+        .main-container {
+            display: grid;
+            grid-template-columns: 320px 1fr;
+            min-height: calc(100vh - 60px);
+        }
+
+        /* Sidebar */
+        .sidebar {
+            background: var(--bg-secondary);
+            border-right: 1px solid var(--border-color);
+            display: flex;
+            flex-direction: column;
+        }
+
+        .sidebar-header {
+            padding: 1rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .sidebar-title {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: var(--text-muted);
+            margin-bottom: 0.75rem;
+        }
+
+        .mount-points {
+            display: flex;
+            flex-direction: column;
+            gap: 0.25rem;
+        }
+
+        .mount-point {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.5rem 0.75rem;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.15s ease;
+            font-size: 0.875rem;
+        }
+
+        .mount-point:hover {
+            background: var(--bg-hover);
+        }
+
+        .mount-point.active {
+            background: var(--accent-glow);
+            border: 1px solid rgba(99, 102, 241, 0.3);
+        }
+
+        .mount-icon {
+            width: 18px;
+            height: 18px;
+            opacity: 0.7;
+        }
+
+        .mount-name {
+            font-weight: 500;
+        }
+
+        .mount-path {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.7rem;
+            color: var(--text-muted);
+            margin-left: auto;
+            max-width: 120px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        /* Content panel */
+        .content-panel {
+            display: flex;
+            flex-direction: column;
+            background: var(--bg-primary);
+        }
+
+        /* Breadcrumb */
+        .breadcrumb {
+            display: flex;
+            align-items: center;
+            gap: 0.25rem;
+            padding: 1rem 1.5rem;
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border-color);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.8rem;
+            overflow-x: auto;
+        }
+
+        .breadcrumb-item {
+            color: var(--text-secondary);
+            cursor: pointer;
+            transition: color 0.15s ease;
+            white-space: nowrap;
+        }
+
+        .breadcrumb-item:hover {
+            color: var(--accent-secondary);
+        }
+
+        .breadcrumb-item.current {
+            color: var(--text-primary);
+            font-weight: 500;
+        }
+
+        .breadcrumb-sep {
+            color: var(--text-muted);
+        }
+
+        /* File grid */
+        .file-grid {
+            flex: 1;
+            padding: 1.5rem;
+            overflow-y: auto;
+        }
+
+        .grid-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+        }
+
+        .grid-title {
+            font-size: 1.125rem;
+            font-weight: 500;
+        }
+
+        .grid-count {
+            color: var(--text-secondary);
+            font-size: 0.875rem;
+        }
+
+        .grid-container {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+            gap: 1rem;
+        }
+
+        .grid-item {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 1.25rem 1rem;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .grid-item:hover {
+            background: var(--bg-tertiary);
+            border-color: var(--border-highlight);
+            transform: translateY(-2px);
+        }
+
+        .grid-item.selected {
+            background: var(--accent-glow);
+            border-color: var(--accent-primary);
+        }
+
+        .grid-item-icon {
+            width: 48px;
+            height: 48px;
+            margin-bottom: 0.75rem;
+        }
+
+        .grid-item-name {
+            font-size: 0.875rem;
+            font-weight: 500;
+            text-align: center;
+            word-break: break-all;
+            margin-bottom: 0.25rem;
+        }
+
+        .grid-item-meta {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+        }
+
+        /* Action bar */
+        .action-bar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 1rem 1.5rem;
+            background: var(--bg-secondary);
+            border-top: 1px solid var(--border-color);
+        }
+
+        .selected-path {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            flex: 1;
+            min-width: 0;
+        }
+
+        .selected-label {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            flex-shrink: 0;
+        }
+
+        .selected-value {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.8rem;
+            padding: 0.5rem 0.75rem;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .action-buttons {
+            display: flex;
+            gap: 0.75rem;
+        }
+
+        .btn {
+            padding: 0.625rem 1.25rem;
+            border: none;
+            border-radius: 8px;
+            font-family: 'Outfit', sans-serif;
+            font-size: 0.875rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+
+        .btn-secondary {
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+        }
+
+        .btn-secondary:hover {
+            background: var(--bg-hover);
+            border-color: var(--border-highlight);
+        }
+
+        .btn-primary {
+            background: var(--accent-primary);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: var(--accent-secondary);
+        }
+
+        .btn-primary:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        /* Loading states */
+        .loading {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 2rem;
+            color: var(--text-muted);
+        }
+
+        .spinner {
+            width: 24px;
+            height: 24px;
+            border: 2px solid var(--border-color);
+            border-top-color: var(--accent-primary);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-right: 0.75rem;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* Empty state */
+        .empty-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 4rem 2rem;
+            text-align: center;
+        }
+
+        .empty-icon {
+            width: 64px;
+            height: 64px;
+            color: var(--text-muted);
+            margin-bottom: 1rem;
+            opacity: 0.5;
+        }
+
+        .empty-title {
+            font-size: 1.125rem;
+            font-weight: 500;
+            margin-bottom: 0.5rem;
+        }
+
+        .empty-desc {
+            color: var(--text-secondary);
+            font-size: 0.875rem;
+        }
+
+        /* Error state */
+        .error-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 4rem 2rem;
+            text-align: center;
+        }
+
+        .error-icon {
+            width: 64px;
+            height: 64px;
+            color: var(--error);
+            margin-bottom: 1rem;
+        }
+
+        .error-title {
+            font-size: 1.125rem;
+            font-weight: 500;
+            color: var(--error);
+            margin-bottom: 0.5rem;
+        }
+
+        .error-desc {
+            color: var(--text-secondary);
+            font-size: 0.875rem;
+        }
+
+        /* Toast notification */
+        .toast {
+            position: fixed;
+            bottom: 2rem;
+            left: 50%;
+            transform: translateX(-50%) translateY(100px);
+            background: var(--bg-secondary);
+            border: 1px solid var(--success);
+            border-radius: 8px;
+            padding: 0.75rem 1.25rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+            opacity: 0;
+            transition: all 0.3s ease;
+            z-index: 2000;
+        }
+
+        .toast.show {
+            transform: translateX(-50%) translateY(0);
+            opacity: 1;
+        }
+
+        .toast-icon {
+            width: 20px;
+            height: 20px;
+            color: var(--success);
+        }
+
+        /* Pagination indicator */
+        .pagination-info {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            margin-top: 1rem;
+            text-align: center;
+        }
+
+        .load-more-btn {
+            margin-top: 0.5rem;
+            padding: 0.5rem 1rem;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            color: var(--text-secondary);
+            font-size: 0.8rem;
+            cursor: pointer;
+        }
+
+        .load-more-btn:hover {
+            background: var(--bg-hover);
+            color: var(--text-primary);
+        }
+    </style>
+</head>
+<body>
+    <!-- Header -->
+    <header class="header">
+        <div class="header-left">
+            <div class="logo">SLEAP-RTC File Browser</div>
+            <div class="connection-badge connecting" id="connectionBadge">
+                <span id="connectionStatus">Connecting...</span>
+            </div>
+        </div>
+        <div class="worker-info" id="workerInfo">
+            Worker: -
+        </div>
+    </header>
+
+    <div class="main-container">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <div class="sidebar-title">Mount Points</div>
+                <div class="mount-points" id="mountPoints">
+                    <div class="loading"><div class="spinner"></div>Loading...</div>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Content Panel -->
+        <main class="content-panel">
+            <!-- Breadcrumb -->
+            <nav class="breadcrumb" id="breadcrumb">
+                <span class="breadcrumb-item current">Select a mount point</span>
+            </nav>
+
+            <!-- File Grid -->
+            <div class="file-grid" id="fileGrid">
+                <div class="empty-state">
+                    <svg class="empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+                    </svg>
+                    <div class="empty-title">Select a Mount Point</div>
+                    <div class="empty-desc">Choose a mount point from the sidebar to browse files.</div>
+                </div>
+            </div>
+
+            <!-- Action Bar -->
+            <div class="action-bar">
+                <div class="selected-path">
+                    <span class="selected-label">Selected:</span>
+                    <div class="selected-value" id="selectedPath">No file selected</div>
+                </div>
+                <div class="action-buttons">
+                    <button class="btn btn-secondary" onclick="clearSelection()">Clear</button>
+                    <button class="btn btn-primary" id="copyPathBtn" disabled onclick="copyPath()">Copy Path</button>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Toast -->
+    <div class="toast" id="toast">
+        <svg class="toast-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+            <polyline points="22 4 12 14.01 9 11.01"/>
+        </svg>
+        <span id="toastMessage">Path copied to clipboard</span>
+    </div>
+
+    <script>
+        // State
+        let ws = null;
+        let currentPath = '';
+        let selectedFile = null;
+        let mounts = [];
+        let workerInfo = null;
+        let currentEntries = [];
+        let totalCount = 0;
+        let hasMore = false;
+
+        // Get token from URL
+        function getToken() {
+            const params = new URLSearchParams(window.location.search);
+            return params.get('token');
+        }
+
+        // Utility functions
+        function formatSize(bytes) {
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+            if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+            return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+        }
+
+        function getFileColor(ext) {
+            switch(ext) {
+                case 'slp': return 'file-slp';
+                case 'mp4': case 'avi': case 'mov': return 'file-video';
+                case 'h5': case 'keras': case 'pt': case 'onnx': return 'file-model';
+                default: return 'file-default';
+            }
+        }
+
+        function getExtension(filename) {
+            const parts = filename.split('.');
+            return parts.length > 1 ? parts[parts.length - 1].toLowerCase() : '';
+        }
+
+        function getGridIcon(type, ext) {
+            if (type === 'directory') {
+                return `<svg class="grid-item-icon" style="color: var(--folder-color)" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/>
+                </svg>`;
+            }
+
+            const color = getFileColor(ext);
+            if (ext === 'slp') {
+                return `<svg class="grid-item-icon" style="color: var(--file-slp)" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                    <polyline points="14 2 14 8 20 8"/>
+                    <circle cx="12" cy="14" r="3"/>
+                </svg>`;
+            }
+            if (ext === 'mp4' || ext === 'avi' || ext === 'mov') {
+                return `<svg class="grid-item-icon" style="color: var(--file-video)" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <rect x="2" y="4" width="20" height="16" rx="2"/>
+                    <polygon points="10 9 16 12 10 15"/>
+                </svg>`;
+            }
+            if (['h5', 'keras', 'pt', 'onnx'].includes(ext)) {
+                return `<svg class="grid-item-icon" style="color: var(--file-model)" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <path d="M12 2L2 7l10 5 10-5-10-5z"/>
+                    <path d="M2 17l10 5 10-5"/>
+                    <path d="M2 12l10 5 10-5"/>
+                </svg>`;
+            }
+            return `<svg class="grid-item-icon" style="color: var(--file-default)" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                <polyline points="14 2 14 8 20 8"/>
+            </svg>`;
+        }
+
+        // WebSocket connection
+        function connectWebSocket() {
+            const token = getToken();
+            if (!token) {
+                showError('Missing authentication token');
+                return;
+            }
+
+            const wsUrl = `ws://localhost:${window.location.port}/ws?token=${token}`;
+            ws = new WebSocket(wsUrl);
+
+            ws.onopen = () => {
+                updateConnectionStatus('connected', 'Connected');
+            };
+
+            ws.onclose = () => {
+                updateConnectionStatus('disconnected', 'Disconnected');
+                // Try to reconnect after 3 seconds
+                setTimeout(connectWebSocket, 3000);
+            };
+
+            ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
+                updateConnectionStatus('disconnected', 'Connection Error');
+            };
+
+            ws.onmessage = (event) => {
+                handleMessage(JSON.parse(event.data));
+            };
+        }
+
+        function updateConnectionStatus(status, text) {
+            const badge = document.getElementById('connectionBadge');
+            const statusText = document.getElementById('connectionStatus');
+
+            badge.className = 'connection-badge ' + status;
+            statusText.textContent = text;
+        }
+
+        function handleMessage(msg) {
+            switch (msg.type) {
+                case 'worker_info':
+                    workerInfo = msg.data;
+                    document.getElementById('workerInfo').textContent =
+                        `Worker: ${workerInfo.worker_id}`;
+                    break;
+
+                case 'mounts':
+                    mounts = msg.data;
+                    renderMountPoints();
+                    break;
+
+                case 'list_response':
+                    currentEntries = msg.data.entries || [];
+                    totalCount = msg.data.total_count || 0;
+                    hasMore = msg.data.has_more || false;
+                    renderFileGrid();
+                    break;
+
+                case 'error':
+                    showError(`${msg.code}: ${msg.message}`);
+                    break;
+
+                case 'connection_lost':
+                    updateConnectionStatus('disconnected', 'Worker Disconnected');
+                    showError('Worker connection lost');
+                    break;
+            }
+        }
+
+        function showError(message) {
+            const container = document.getElementById('fileGrid');
+            container.innerHTML = `
+                <div class="error-state">
+                    <svg class="error-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                        <circle cx="12" cy="12" r="10"/>
+                        <line x1="12" y1="8" x2="12" y2="12"/>
+                        <line x1="12" y1="16" x2="12.01" y2="16"/>
+                    </svg>
+                    <div class="error-title">Error</div>
+                    <div class="error-desc">${message}</div>
+                </div>
+            `;
+        }
+
+        // Render mount points
+        function renderMountPoints() {
+            const container = document.getElementById('mountPoints');
+
+            if (mounts.length === 0) {
+                container.innerHTML = '<div class="empty-state"><div class="empty-desc">No mount points configured</div></div>';
+                return;
+            }
+
+            container.innerHTML = mounts.map(mount => {
+                const isActive = currentPath.startsWith(mount.path);
+                return `
+                    <div class="mount-point ${isActive ? 'active' : ''}" onclick="selectMount('${mount.path}')">
+                        <svg class="mount-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <ellipse cx="12" cy="5" rx="9" ry="3"/>
+                            <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/>
+                            <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>
+                        </svg>
+                        <span class="mount-name">${mount.label}</span>
+                        <span class="mount-path">${mount.path}</span>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        // Render breadcrumb
+        function renderBreadcrumb() {
+            const container = document.getElementById('breadcrumb');
+
+            if (!currentPath) {
+                container.innerHTML = '<span class="breadcrumb-item current">Select a mount point</span>';
+                return;
+            }
+
+            const parts = currentPath.split('/').filter(p => p);
+            let html = '';
+            let accPath = '';
+
+            parts.forEach((part, i) => {
+                accPath += '/' + part;
+                const isLast = i === parts.length - 1;
+                if (i > 0) html += '<span class="breadcrumb-sep">/</span>';
+                html += `<span class="breadcrumb-item ${isLast ? 'current' : ''}" onclick="navigateTo('${accPath}')">${part}</span>`;
+            });
+
+            container.innerHTML = html;
+        }
+
+        // Render file grid
+        function renderFileGrid() {
+            const container = document.getElementById('fileGrid');
+
+            if (currentEntries.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <svg class="empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+                        </svg>
+                        <div class="empty-title">Empty Directory</div>
+                        <div class="empty-desc">This folder contains no files or subdirectories.</div>
+                    </div>
+                `;
+                return;
+            }
+
+            const dirCount = currentEntries.filter(e => e.type === 'directory').length;
+            const fileCount = currentEntries.length - dirCount;
+
+            const gridItems = currentEntries.map(entry => {
+                const itemPath = currentPath + '/' + entry.name;
+                const isSelected = selectedFile === itemPath;
+                const ext = getExtension(entry.name);
+
+                return `
+                    <div class="grid-item ${isSelected ? 'selected' : ''}"
+                         onclick="${entry.type === 'directory' ? `navigateTo('${itemPath}')` : `selectFile('${itemPath}')`}"
+                         ondblclick="${entry.type === 'directory' ? `navigateTo('${itemPath}')` : `copyPath()`}">
+                        ${getGridIcon(entry.type, ext)}
+                        <div class="grid-item-name">${entry.name}</div>
+                        <div class="grid-item-meta">${entry.type === 'directory' ? 'Folder' : formatSize(entry.size || 0)}</div>
+                    </div>
+                `;
+            }).join('');
+
+            let paginationHtml = '';
+            if (hasMore) {
+                paginationHtml = `
+                    <div class="pagination-info">
+                        Showing ${currentEntries.length} of ${totalCount} items
+                        <br>
+                        <button class="load-more-btn" onclick="loadMore()">Load More</button>
+                    </div>
+                `;
+            }
+
+            container.innerHTML = `
+                <div class="grid-header">
+                    <div class="grid-title">Contents</div>
+                    <div class="grid-count">${dirCount} folders, ${fileCount} files</div>
+                </div>
+                <div class="grid-container">
+                    ${gridItems}
+                </div>
+                ${paginationHtml}
+            `;
+        }
+
+        // Event handlers
+        function selectMount(path) {
+            currentPath = path;
+            selectedFile = null;
+            currentEntries = [];
+
+            renderMountPoints();
+            renderBreadcrumb();
+            updateSelectedPath();
+
+            // Request directory listing
+            requestListDir(path);
+        }
+
+        function navigateTo(path) {
+            currentPath = path;
+            selectedFile = null;
+            currentEntries = [];
+
+            renderBreadcrumb();
+            renderMountPoints();
+            updateSelectedPath();
+
+            // Show loading
+            document.getElementById('fileGrid').innerHTML = '<div class="loading"><div class="spinner"></div>Loading...</div>';
+
+            // Request directory listing
+            requestListDir(path);
+        }
+
+        function selectFile(path) {
+            selectedFile = path;
+            renderFileGrid();
+            updateSelectedPath();
+        }
+
+        function clearSelection() {
+            selectedFile = null;
+            renderFileGrid();
+            updateSelectedPath();
+        }
+
+        function updateSelectedPath() {
+            const pathDisplay = document.getElementById('selectedPath');
+            const copyBtn = document.getElementById('copyPathBtn');
+
+            if (selectedFile) {
+                pathDisplay.textContent = selectedFile;
+                copyBtn.disabled = false;
+            } else {
+                pathDisplay.textContent = 'No file selected';
+                copyBtn.disabled = true;
+            }
+        }
+
+        function copyPath() {
+            if (!selectedFile) return;
+
+            navigator.clipboard.writeText(selectedFile).then(() => {
+                showToast('Path copied to clipboard');
+            }).catch(err => {
+                console.error('Failed to copy:', err);
+                showToast('Failed to copy path');
+            });
+        }
+
+        function showToast(message) {
+            const toast = document.getElementById('toast');
+            document.getElementById('toastMessage').textContent = message;
+            toast.classList.add('show');
+
+            setTimeout(() => {
+                toast.classList.remove('show');
+            }, 3000);
+        }
+
+        function requestListDir(path, offset = 0) {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                    type: 'list_dir',
+                    path: path,
+                    offset: offset
+                }));
+            }
+        }
+
+        function loadMore() {
+            requestListDir(currentPath, currentEntries.length);
+        }
+
+        // Initialize
+        connectWebSocket();
+    </script>
+</body>
+</html>

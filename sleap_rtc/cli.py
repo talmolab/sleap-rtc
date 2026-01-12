@@ -420,5 +420,77 @@ def client_deprecated(ctx, **kwargs):
     ctx.invoke(client_train, **kwargs)
 
 
+@cli.command(name="browse")
+@click.option(
+    "--room",
+    "-r",
+    type=str,
+    required=True,
+    help="Room ID to connect to (required).",
+)
+@click.option(
+    "--token",
+    "-t",
+    type=str,
+    required=True,
+    help="Room token for authentication (required).",
+)
+@click.option(
+    "--port",
+    "-p",
+    type=int,
+    default=8765,
+    help="Local port for the file browser server (default: 8765).",
+)
+@click.option(
+    "--no-browser",
+    is_flag=True,
+    default=False,
+    help="Don't auto-open browser (just print URL).",
+)
+def browse(room, token, port, no_browser):
+    """Browse a Worker's filesystem via web UI.
+
+    This command connects to a Worker in the specified room and starts
+    a local web server that provides a browser-based file explorer.
+
+    The browser UI allows you to:
+    - Browse mount points and directories on the Worker
+    - View file information (name, size, type)
+    - Copy file paths for use with --worker-path
+
+    Examples:
+
+        # Connect to a Worker and open browser
+        sleap-rtc browse --room my-room --token secret123
+
+        # Use a different port
+        sleap-rtc browse --room my-room --token secret123 --port 9000
+
+        # Print URL without opening browser (for remote access)
+        sleap-rtc browse --room my-room --token secret123 --no-browser
+    """
+    import asyncio
+    from sleap_rtc.rtc_browse import run_browse_client
+
+    logger.info(f"Starting filesystem browser for room: {room}")
+    logger.info(f"Local server will run on port: {port}")
+
+    try:
+        asyncio.run(
+            run_browse_client(
+                room_id=room,
+                token=token,
+                port=port,
+                open_browser=not no_browser,
+            )
+        )
+    except KeyboardInterrupt:
+        logger.info("Browse session ended by user")
+    except Exception as e:
+        logger.error(f"Browse error: {e}")
+        sys.exit(1)
+
+
 if __name__ == "__main__":
     cli()
