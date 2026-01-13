@@ -28,13 +28,23 @@ from sleap_rtc.exceptions import (
 )
 from sleap_rtc.filesystem import safe_mkdir
 from sleap_rtc.protocol import (
-    MSG_JOB_ID,
-    MSG_INPUT_FILE,
-    MSG_FILE_EXISTS,
-    MSG_FILE_NOT_FOUND,
-    MSG_JOB_OUTPUT_PATH,
-    format_message,
     parse_message,
+    MSG_FS_RESOLVE,
+    MSG_FS_RESOLVE_RESPONSE,
+    MSG_FS_GET_MOUNTS,
+    MSG_FS_MOUNTS_RESPONSE,
+    MSG_FS_ERROR,
+    MSG_SEPARATOR,
+    MSG_USE_WORKER_PATH,
+    MSG_WORKER_PATH_OK,
+    MSG_WORKER_PATH_ERROR,
+)
+from sleap_rtc.client.file_selector import (
+    select_file_from_candidates,
+    MountSelector,
+    NoMatchMenu,
+    prompt_wildcard_pattern,
+    prompt_manual_path,
 )
 
 # Setup logging.
@@ -72,18 +82,15 @@ class RTCClient:
         # Other variables.
         self.received_files = {}
         self.target_worker = None
-        self.target_worker_io_paths = None  # I/O paths of selected worker (if configured)
         self.reconnecting = False
         self.current_job_id = None  # For tracking active job submissions
-        self.file_validation_queue = (
-            asyncio.Queue()
-        )  # Queue for INPUT_FILE validation responses
 
         # Response queues for coordinating websocket messages
         # (Only handle_connection() calls recv(), other functions wait on these queues)
         self.registration_queue = asyncio.Queue()  # For registered_auth responses
         self.peer_list_queue = asyncio.Queue()  # For peer_list responses
         self.job_response_queues = {}  # job_id -> asyncio.Queue for job responses
+        self.fs_response_queue = asyncio.Queue()  # For FS_* responses via data channel
 
     def parse_session_string(self, session_string: str):
         prefix = "sleap-session:"
@@ -397,6 +404,301 @@ class RTCClient:
             if self.data_channel.readyState == "open":
                 self.data_channel.send(b"KEEP_ALIVE")
 
+    # ===== Filesystem Path Resolution =====
+
+    async def _send_fs_get_mounts(self, timeout: float = 10.0) -> list:
+        """Send FS_GET_MOUNTS message to Worker and wait for response.
+
+        Args:
+            timeout: Timeout in seconds for response.
+
+        Returns:
+            List of mount dictionaries with 'label' and 'path' keys.
+        """
+        if self.data_channel.readyState != "open":
+            return []
+
+        # Clear any stale responses
+        while not self.fs_response_queue.empty():
+            try:
+                self.fs_response_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+
+        # Send request
+        logging.info("Sending FS_GET_MOUNTS")
+        self.data_channel.send(MSG_FS_GET_MOUNTS)
+
+        # Wait for response
+        try:
+            response = await asyncio.wait_for(
+                self.fs_response_queue.get(), timeout=timeout
+            )
+            if response.startswith(MSG_FS_MOUNTS_RESPONSE):
+                json_str = response.split(MSG_SEPARATOR, 1)[1]
+                return json.loads(json_str)
+            return []
+        except asyncio.TimeoutError:
+            logging.warning("Timeout waiting for FS_GET_MOUNTS response")
+            return []
+        except Exception as e:
+            logging.error(f"Error getting mounts: {e}")
+            return []
+
+    async def _send_fs_resolve(
+        self,
+        pattern: str,
+        file_size: int = None,
+        max_depth: int = None,
+        mount_label: str = None,
+        timeout: float = 15.0,
+    ) -> dict:
+        """Send FS_RESOLVE message to Worker and wait for response.
+
+        Args:
+            pattern: Filename or wildcard pattern to search for.
+            file_size: Optional file size for ranking matches.
+            max_depth: Optional max directory depth to search.
+            mount_label: Optional mount label to filter search (or "all").
+            timeout: Timeout in seconds for response.
+
+        Returns:
+            Response dictionary with candidates, or error info.
+        """
+        if self.data_channel.readyState != "open":
+            return {"error": "Data channel not open", "candidates": []}
+
+        # Build message: FS_RESOLVE::pattern::file_size::max_depth::mount_label
+        parts = [MSG_FS_RESOLVE, pattern]
+        parts.append(str(file_size) if file_size else "")
+        parts.append(str(max_depth) if max_depth else "")
+        parts.append(mount_label if mount_label else "")
+        message = MSG_SEPARATOR.join(parts)
+
+        # Clear any stale responses
+        while not self.fs_response_queue.empty():
+            try:
+                self.fs_response_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+
+        # Send request
+        logging.info(f"Sending FS_RESOLVE: {pattern}")
+        self.data_channel.send(message)
+
+        # Wait for response
+        try:
+            response = await asyncio.wait_for(
+                self.fs_response_queue.get(), timeout=timeout
+            )
+
+            # Parse response
+            if response.startswith(MSG_FS_RESOLVE_RESPONSE):
+                json_str = response.split(MSG_SEPARATOR, 1)[1]
+                return json.loads(json_str)
+
+            elif response.startswith(MSG_FS_ERROR):
+                parts = response.split(MSG_SEPARATOR)
+                return {
+                    "error_code": parts[1] if len(parts) > 1 else "UNKNOWN",
+                    "error": parts[2] if len(parts) > 2 else "Unknown error",
+                    "candidates": [],
+                }
+
+            else:
+                return {"error": f"Unexpected response: {response[:50]}", "candidates": []}
+
+        except asyncio.TimeoutError:
+            logging.warning("FS_RESOLVE timed out")
+            return {"error": "Resolution timed out", "timeout": True, "candidates": []}
+
+    async def resolve_file_path(
+        self,
+        local_path: str,
+        non_interactive: bool = False,
+        mount_label: str = None,
+    ) -> Optional[str]:
+        """Resolve a local file path to a Worker filesystem path.
+
+        This method:
+        1. Fetches available mounts from Worker
+        2. Shows mount selector (unless mount_label provided or non_interactive)
+        3. Extracts the filename from the local path
+        4. Gets local file size if the file exists
+        5. Sends FS_RESOLVE to Worker with selected mount
+        6. If exact match found, returns it immediately
+        7. If multiple matches, shows arrow selector
+        8. If no matches, shows options menu
+
+        Args:
+            local_path: Local path to the file (may not exist locally).
+            non_interactive: If True, auto-select first candidate and default to all mounts.
+            mount_label: Specific mount label to search (skips mount selector).
+
+        Returns:
+            Resolved Worker path, or None if cancelled/failed.
+        """
+        if not local_path:
+            return None
+
+        # Extract filename from path
+        local_path_obj = Path(local_path)
+        filename = local_path_obj.name
+
+        # Get local file size if file exists
+        file_size = None
+        if local_path_obj.exists():
+            file_size = local_path_obj.stat().st_size
+
+        # Check if pattern contains wildcards
+        has_wildcards = any(c in filename for c in "*?[")
+
+        # Fetch mounts from worker and show selector if needed
+        selected_mount = mount_label
+        if not selected_mount:
+            if non_interactive:
+                # Non-interactive mode defaults to "all"
+                selected_mount = "all"
+            else:
+                # Fetch available mounts
+                mounts = await self._send_fs_get_mounts()
+                if not mounts:
+                    print("\nError: No filesystems configured on worker.")
+                    print("Configure mounts in sleap-rtc.toml under [[worker.io.mounts]]")
+                    return None
+
+                # Show mount selector
+                selector = MountSelector(mounts)
+                selected_mount = selector.run()
+                if selected_mount is None or selector.cancelled:
+                    logging.info("Mount selection cancelled")
+                    return None
+
+        # Send resolution request with selected mount
+        result = await self._send_fs_resolve(
+            pattern=filename,
+            file_size=file_size,
+            mount_label=selected_mount,
+        )
+
+        # Handle errors
+        if "error_code" in result:
+            logging.error(f"Resolution error: {result.get('error')}")
+            if result.get("error_code") == "PATTERN_TOO_BROAD":
+                print(f"\nPattern too broad: {result.get('error')}")
+            return None
+
+        if "error" in result and not result.get("candidates"):
+            logging.error(f"Resolution failed: {result.get('error')}")
+            return None
+
+        candidates = result.get("candidates", [])
+
+        # Case 1: Exact match found
+        if candidates and not has_wildcards:
+            # Check if first candidate is exact match
+            first = candidates[0]
+            if first.get("match_type") == "exact" and first.get("name") == filename:
+                # If file size matches or no local size, use this path
+                if file_size is None or first.get("size") == file_size:
+                    logging.info(f"Exact match found: {first.get('path')}")
+                    if non_interactive or len(candidates) == 1:
+                        print(f"\nUsing exact match: {first.get('path')}")
+                        return first.get("path")
+
+        # Case 2: Multiple candidates - show selector
+        if candidates:
+            selected = select_file_from_candidates(
+                candidates,
+                title=f"Select file (searching for: {filename}):",
+                non_interactive=non_interactive,
+            )
+            return selected
+
+        # Case 3: No matches - show options menu
+        menu = NoMatchMenu(filename)
+        action = menu.run()
+
+        if action == "cancel":
+            return None
+
+        elif action == "manual":
+            return prompt_manual_path()
+
+        elif action == "wildcard":
+            pattern = prompt_wildcard_pattern(filename)
+            if pattern:
+                # Retry with wildcard pattern (use same mount selection)
+                result = await self._send_fs_resolve(
+                    pattern=pattern, file_size=file_size, mount_label=selected_mount
+                )
+                candidates = result.get("candidates", [])
+                if candidates:
+                    return select_file_from_candidates(
+                        candidates,
+                        title=f"Select file (pattern: {pattern}):",
+                        non_interactive=non_interactive,
+                    )
+                else:
+                    print(f"\nNo matches found for pattern: {pattern}")
+                    return None
+            return None
+
+        elif action == "browse":
+            print("\nTo browse the Worker's filesystem, run in a separate terminal:")
+            print(f"  sleap-rtc browse --room <room_id> --token <token>")
+            print("\nCopy the path and use --worker-path to specify it directly.")
+            return None
+
+        return None
+
+    async def _send_use_worker_path(
+        self, worker_path: str, timeout: float = 15.0
+    ) -> dict:
+        """Send USE_WORKER_PATH message and wait for Worker response.
+
+        Args:
+            worker_path: The resolved path on the Worker filesystem.
+            timeout: Timeout in seconds for response.
+
+        Returns:
+            dict with "success": True and "path" on success,
+            or "success": False and "error" on failure.
+        """
+        if not self.data_channel or self.data_channel.readyState != "open":
+            return {"success": False, "error": "Data channel not open"}
+
+        # Build message
+        message = f"{MSG_USE_WORKER_PATH}{MSG_SEPARATOR}{worker_path}"
+
+        # Send request
+        logging.info(f"Sending USE_WORKER_PATH: {worker_path}")
+        self.data_channel.send(message)
+
+        # Wait for response
+        try:
+            response = await asyncio.wait_for(
+                self.fs_response_queue.get(), timeout=timeout
+            )
+
+            # Parse response
+            if response.startswith(MSG_WORKER_PATH_OK):
+                parts = response.split(MSG_SEPARATOR)
+                path = parts[1] if len(parts) > 1 else worker_path
+                return {"success": True, "path": path}
+
+            elif response.startswith(MSG_WORKER_PATH_ERROR):
+                parts = response.split(MSG_SEPARATOR)
+                error = parts[1] if len(parts) > 1 else "Unknown error"
+                return {"success": False, "error": error}
+
+            else:
+                return {"success": False, "error": f"Unexpected response: {response[:50]}"}
+
+        except asyncio.TimeoutError:
+            logging.warning("USE_WORKER_PATH timed out")
+            return {"success": False, "error": "Worker path validation timed out"}
+
     async def send_client_file(self, file_path: str = None, output_dir: str = ""):
         """Handles direct, one-way file transfer from client to be sent to worker peer.
 
@@ -463,95 +765,6 @@ class RTCClient:
 
         return
 
-    async def send_file_via_io_paths(
-        self, file_path: str = None, output_dir: str = ""
-    ) -> bool:
-        """Send file via Worker I/O Paths (worker reads from its input directory).
-
-        This method sends just the filename to the worker. The worker validates
-        that the file exists in its configured input_path directory and responds
-        with FILE_EXISTS or FILE_NOT_FOUND.
-
-        Args:
-            file_path: Path to the local file (only filename is extracted and sent).
-            output_dir: Output directory name (where worker saves results).
-
-        Returns:
-            True if file exists on worker and job can proceed, False otherwise.
-        """
-        try:
-            # Validate data channel
-            if self.data_channel.readyState != "open":
-                logging.warning(
-                    f"Data channel not open (state: {self.data_channel.readyState}). "
-                    f"Cannot use I/O paths transfer."
-                )
-                return False
-
-            # Validate file path
-            if not file_path:
-                logging.error("No file path provided")
-                return False
-
-            # Extract just the filename
-            filename = Path(file_path).name
-            logging.info(f"Using Worker I/O Paths transfer for: {filename}")
-
-            # Generate unique job ID
-            job_id = f"job_{uuid.uuid4().hex[:8]}"
-            self.current_job_id = job_id
-            logging.info(f"Job ID: {job_id}")
-
-            # Send package type indicator
-            self.data_channel.send("PACKAGE_TYPE::train")
-
-            # Send output directory hint (where models will be saved locally)
-            output_dir = "models"
-            if self.config_info_list:
-                output_dir = self.config_info_list[0].config.outputs.runs_folder
-            self.data_channel.send(f"OUTPUT_DIR::{output_dir}")
-
-            # Send job ID
-            self.data_channel.send(format_message(MSG_JOB_ID, job_id))
-
-            # Send INPUT_FILE message with just the filename
-            self.data_channel.send(format_message(MSG_INPUT_FILE, filename))
-            logging.info(f"Sent INPUT_FILE::{filename} to worker")
-
-            # Wait for FILE_EXISTS or FILE_NOT_FOUND response
-            try:
-                response = await asyncio.wait_for(
-                    self.file_validation_queue.get(), timeout=30.0
-                )
-
-                msg_type, msg_args = parse_message(response)
-
-                if msg_type == MSG_FILE_EXISTS:
-                    logging.info(f"Worker confirmed file exists: {msg_args[0] if msg_args else filename}")
-                    return True
-
-                elif msg_type == MSG_FILE_NOT_FOUND:
-                    reason = msg_args[1] if len(msg_args) > 1 else "Unknown reason"
-                    logging.error(f"File not found on worker: {msg_args[0] if msg_args else filename}")
-                    logging.error(f"Reason: {reason}")
-                    # Show the user where to place the file
-                    if self.target_worker_io_paths:
-                        input_path = self.target_worker_io_paths.get("input", "N/A")
-                        logging.error(f"Please place your file at: {input_path}/{filename}")
-                    return False
-
-                else:
-                    logging.warning(f"Unexpected response: {response}")
-                    return False
-
-            except asyncio.TimeoutError:
-                logging.error("Timeout waiting for worker file validation response")
-                return False
-
-        except Exception as e:
-            logging.error(f"Unexpected error in I/O paths transfer: {e}")
-            return False
-
     async def on_channel_open(self):
         """Event handler function for when the datachannel is open.
 
@@ -564,26 +777,57 @@ class RTCClient:
         asyncio.create_task(self.keep_ice_alive())
         logging.info(f"{self.data_channel.label} is open")
 
-        # Determine transfer method based on worker I/O paths
-        transfer_success = False
+        # Determine the worker path to use
+        resolved_path = None
 
-        # Worker I/O Paths transfer (worker has input/output paths configured)
-        if self.target_worker_io_paths:
-            logging.info("Worker has I/O paths configured, using I/O paths transfer...")
-            transfer_success = await self.send_file_via_io_paths(
-                self.file_path, self.output_dir
+        if self.worker_path:
+            # Use explicitly provided worker path (--worker-path flag)
+            logging.info(f"Using explicit worker path: {self.worker_path}")
+            resolved_path = self.worker_path
+        elif self.file_path:
+            # Try to resolve the local file path on the Worker
+            logging.info(f"Resolving file path: {self.file_path}")
+            resolved_path = await self.resolve_file_path(
+                self.file_path,
+                non_interactive=self.non_interactive,
+                mount_label=self.mount_label,
             )
-            if not transfer_success:
-                # Don't fall back to RTC - user needs to place file in correct location
-                logging.error(
-                    "I/O paths transfer failed. Please ensure file is placed in worker's input directory."
-                )
+
+        if resolved_path:
+            # Send worker path to Worker and wait for validation
+            logging.info(f"Requesting Worker to use path: {resolved_path}")
+            result = await self._send_use_worker_path(resolved_path)
+
+            if result.get("success"):
+                logging.info(f"Worker accepted path: {result.get('path')}")
+                # Send package type and output directory
+                self.data_channel.send("PACKAGE_TYPE::train")
+
+                output_dir = "models"
+                if self.config_info_list:
+                    output_dir = self.config_info_list[0].config.outputs.runs_folder
+                self.data_channel.send(f"OUTPUT_DIR::{output_dir}")
+
+                # Start ZMQ control socket if GUI
+                if self.gui:
+                    self.start_zmq_control()
+                    asyncio.create_task(self.start_zmq_listener(self.data_channel))
+                    logging.info(f"{self.data_channel.label} ZMQ control socket started")
+                return
+            else:
+                logging.error(f"Worker rejected path: {result.get('error')}")
+                print(f"\nError: Worker could not use path: {result.get('error')}")
+                # No fallback to RTC transfer per user requirement
                 return
 
-        # Fall back to RTC transfer if I/O paths not configured
-        if not transfer_success:
-            logging.info("Using RTC transfer")
-            await self.send_client_file(self.file_path, self.output_dir)
+        # No resolved path - try RTC transfer as fallback only if no path resolution was attempted
+        if self.file_path and not self.worker_path:
+            # Path resolution failed or was cancelled
+            logging.info("Path resolution failed, aborting")
+            print("\nPath resolution failed. Use --worker-path to specify the path directly.")
+        else:
+            logging.info("No file path provided")
+        return
 
     async def on_message(self, message):
         """Event handler function for when a message is received on the datachannel from Worker.
@@ -599,24 +843,21 @@ class RTCClient:
 
         # Handle string and bytes messages differently.
         if isinstance(message, str):
-            # Parse message type
-            msg_type, msg_args = parse_message(message)
-
-            # Handle Worker I/O Paths file validation responses
-            if msg_type in (MSG_FILE_EXISTS, MSG_FILE_NOT_FOUND):
-                # Put response in queue for send_file_via_io_paths to handle
-                await self.file_validation_queue.put(message)
-                return
-
-            # Handle JOB_OUTPUT_PATH message
-            if msg_type == MSG_JOB_OUTPUT_PATH:
-                output_path = msg_args[0] if msg_args else "unknown"
-                logging.info(f"Job outputs will be written to: {output_path}")
-                return
-
             # if message == b"KEEP_ALIVE":
             #     logging.info("Keep alive message received.")
             #     return
+
+            # Handle filesystem browser responses (FS_*)
+            if message.startswith("FS_"):
+                logging.info(f"Received FS response: {message[:50]}...")
+                await self.fs_response_queue.put(message)
+                return
+
+            # Handle worker path responses (WORKER_PATH_OK, WORKER_PATH_ERROR)
+            if message.startswith("WORKER_PATH_"):
+                logging.info(f"Received worker path response: {message[:50]}...")
+                await self.fs_response_queue.put(message)
+                return
 
             if message == "END_OF_FILE":
                 # File transfer complete, save to disk.
@@ -1043,21 +1284,9 @@ class RTCClient:
         peer_id = selected["peer_id"]
         metadata = selected.get("metadata", {}).get("properties", {})
         gpu_memory = metadata.get("gpu_memory_mb", "unknown")
-        io_paths = metadata.get("io_paths", None)
-
-        # Store I/O paths for use in on_channel_open
-        self.target_worker_io_paths = io_paths
 
         logging.info(f"Auto-selected worker {peer_id} (GPU memory: {gpu_memory}MB)")
-
-        # Log I/O paths if configured
-        if io_paths:
-            logging.info(f"Worker I/O paths:")
-            logging.info(f"  Filesystem: {io_paths.get('filesystem', 'shared')}")
-            logging.info(f"  Input:      {io_paths.get('input', 'N/A')}")
-            logging.info(f"  Output:     {io_paths.get('output', 'N/A')}")
-        else:
-            logging.info("Worker transfer mode: RTC (no shared filesystem)")
+        logging.info("Worker transfer mode: RTC")
 
         return peer_id
 
@@ -1082,24 +1311,13 @@ class RTCClient:
                 gpu_memory = metadata.get("gpu_memory_mb", 0)
                 cuda_version = metadata.get("cuda_version", "Unknown")
                 hostname = metadata.get("hostname", "Unknown")
-                io_paths = metadata.get("io_paths", None)
 
                 print(f"\n  {i}. {peer_id}")
                 print(f"     GPU Model:    {gpu_model}")
                 print(f"     GPU Memory:   {gpu_memory} MB")
                 print(f"     CUDA Version: {cuda_version}")
                 print(f"     Hostname:     {hostname}")
-
-                # Display I/O paths if configured
-                if io_paths:
-                    filesystem = io_paths.get("filesystem", "shared")
-                    input_path = io_paths.get("input", "N/A")
-                    output_path = io_paths.get("output", "N/A")
-                    print(f"     Filesystem:   {filesystem}")
-                    print(f"     Input:        {input_path}  <- Place your files here")
-                    print(f"     Output:       {output_path}")
-                else:
-                    print(f"     Transfer:     RTC (no shared filesystem)")
+                print(f"     Transfer:     RTC")
 
             print("\n" + "=" * 80)
             print(
@@ -1129,9 +1347,6 @@ class RTCClient:
                 idx = int(choice) - 1
                 if 0 <= idx < len(workers):
                     selected_worker = workers[idx]["peer_id"]
-                    # Store I/O paths for use in on_channel_open
-                    metadata = workers[idx].get("metadata", {}).get("properties", {})
-                    self.target_worker_io_paths = metadata.get("io_paths", None)
                     print(f"\nSelected: {selected_worker}")
                     return selected_worker
                 else:
@@ -1414,6 +1629,9 @@ class RTCClient:
         worker_id: str = None,
         auto_select: bool = False,
         min_gpu_memory: int = None,
+        worker_path: str = None,
+        non_interactive: bool = False,
+        mount_label: str = None,
     ):
         """Sends initial SDP offer to worker peer and establishes both connection & datachannel to be used by both parties.
 
@@ -1428,6 +1646,9 @@ class RTCClient:
             worker_id: Specific worker peer-id to connect to (skips discovery)
             auto_select: Automatically select best worker by GPU memory
             min_gpu_memory: Minimum GPU memory in MB for worker filtering
+            worker_path: Explicit path on worker filesystem (skips resolution)
+            non_interactive: Auto-select best match without prompting (for CI/scripts)
+            mount_label: Specific mount label to search (skips mount selection)
         Returns:
             None
         """
@@ -1437,6 +1658,10 @@ class RTCClient:
             self.output_dir = output_dir
             self.zmq_ports = zmq_ports
             self.config_info_list = config_info_list  # only passed if not CLI
+            # Path resolution options
+            self.worker_path = worker_path
+            self.non_interactive = non_interactive
+            self.mount_label = mount_label
 
             # Initialize reconnect attempts.
             logging.info("Setting up RTC data channel reconnect attempts...")

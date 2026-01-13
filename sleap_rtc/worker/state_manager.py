@@ -144,10 +144,6 @@ class StateManager:
                 "supported_job_types": self.capabilities.supported_job_types,
             }
 
-            # Include I/O paths if configured
-            if self.capabilities.io_config:
-                properties["io_paths"] = self.capabilities.io_config.to_dict()
-
             # Build registration message
             registration_msg = {
                 "type": "register",

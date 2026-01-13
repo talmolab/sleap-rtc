@@ -219,3 +219,6 @@ openspec/
 __MACOSX/
 *.training_job.zip
 labels.v9291.slp.training_job/
+
+# Design docs (local planning)
+docs/plans/

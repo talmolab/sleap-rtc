@@ -47,42 +47,34 @@ def show_worker_help():
     help="Room token for authentication (required if --room-id is provided).",
 )
 @click.option(
-    "--input-path",
+    "--working-dir",
+    "-w",
     type=str,
     required=False,
-    help="Directory where worker reads input files from shared filesystem.",
+    help="Working directory for the worker. Overrides config file value.",
 )
-@click.option(
-    "--output-path",
-    type=str,
-    required=False,
-    help="Directory where worker writes job outputs to shared filesystem.",
-)
-@click.option(
-    "--filesystem",
-    type=str,
-    required=False,
-    default=None,
-    help="Human-readable label for the filesystem (e.g., 'vast', 'gdrive'). Displayed to clients.",
-)
-def worker(room_id, token, input_path, output_path, filesystem):
+def worker(room_id, token, working_dir):
     """Start the sleap-RTC worker node."""
     # Validate that both room_id and token are provided together
     if (room_id and not token) or (token and not room_id):
         logger.error("Both --room-id and --token must be provided together")
         sys.exit(1)
 
-    # Validate I/O path options
-    if (input_path and not output_path) or (output_path and not input_path):
-        logger.error("Both --input-path and --output-path must be provided together")
-        sys.exit(1)
+    # Validate working directory if provided
+    if working_dir:
+        working_dir_path = Path(working_dir)
+        if not working_dir_path.exists():
+            logger.error(f"Working directory does not exist: {working_dir}")
+            sys.exit(1)
+        if not working_dir_path.is_dir():
+            logger.error(f"Working directory is not a directory: {working_dir}")
+            sys.exit(1)
+        logger.info(f"Using working directory: {working_dir}")
 
     run_RTCworker(
         room_id=room_id,
         token=token,
-        input_path=input_path,
-        output_path=output_path,
-        filesystem=filesystem,
+        working_dir=working_dir,
     )
 
 
@@ -147,6 +139,26 @@ def worker(room_id, token, input_path, output_path, filesystem):
     default=None,
     help="Minimum GPU memory in MB required for training.",
 )
+@click.option(
+    "--worker-path",
+    type=str,
+    required=False,
+    default=None,
+    help="Path on worker filesystem to use directly (skips path resolution).",
+)
+@click.option(
+    "--non-interactive",
+    is_flag=True,
+    default=False,
+    help="Non-interactive mode: auto-select best match without prompting (for CI/scripts).",
+)
+@click.option(
+    "--mount",
+    type=str,
+    required=False,
+    default=None,
+    help="Mount label to search (skips mount selection prompt). Use 'all' to search all mounts.",
+)
 def client_train(**kwargs):
     """Run remote training on a worker.
 
@@ -161,6 +173,12 @@ def client_train(**kwargs):
        - Auto-select: --auto-select
        - Direct worker: --worker-id PEER_ID
        - GPU filter: --min-gpu-memory MB
+
+    Path resolution options:
+
+    - --worker-path PATH: Use this path directly on the worker (skips resolution)
+    - --non-interactive: Auto-select best match without prompting (for CI/scripts)
+    - --mount LABEL: Search only this mount (skips mount selection)
     """
     # Extract connection options
     session_string = kwargs.pop("session_string", None)
@@ -169,6 +187,11 @@ def client_train(**kwargs):
     worker_id = kwargs.pop("worker_id", None)
     auto_select = kwargs.pop("auto_select", False)
     min_gpu_memory = kwargs.pop("min_gpu_memory", None)
+
+    # Extract path resolution options
+    worker_path = kwargs.pop("worker_path", None)
+    non_interactive = kwargs.pop("non_interactive", False)
+    mount_label = kwargs.pop("mount", None)
 
     # Validation: Must provide either session string OR room credentials
     has_session = session_string is not None
@@ -227,10 +250,21 @@ def client_train(**kwargs):
             logger.info(f"Minimum GPU memory filter: {min_gpu_memory}MB")
             kwargs["min_gpu_memory"] = min_gpu_memory
 
+    # Log path resolution options
+    if worker_path:
+        logger.info(f"Using explicit worker path: {worker_path}")
+    if non_interactive:
+        logger.info("Non-interactive mode: will auto-select best match")
+    if mount_label:
+        logger.info(f"Using mount filter: {mount_label}")
+
     return run_RTCclient(
         session_string=session_string,
         pkg_path=kwargs.pop("pkg_path"),
         zmq_ports=kwargs.pop("zmq_ports"),
+        worker_path=worker_path,
+        non_interactive=non_interactive,
+        mount_label=mount_label,
         **kwargs,
     )
 
@@ -396,6 +430,78 @@ def client_deprecated(ctx, **kwargs):
         "Warning: 'sleap-rtc client' is deprecated. Use 'sleap-rtc client-train' instead."
     )
     ctx.invoke(client_train, **kwargs)
+
+
+@cli.command(name="browse")
+@click.option(
+    "--room",
+    "-r",
+    type=str,
+    required=True,
+    help="Room ID to connect to (required).",
+)
+@click.option(
+    "--token",
+    "-t",
+    type=str,
+    required=True,
+    help="Room token for authentication (required).",
+)
+@click.option(
+    "--port",
+    "-p",
+    type=int,
+    default=8765,
+    help="Local port for the file browser server (default: 8765).",
+)
+@click.option(
+    "--no-browser",
+    is_flag=True,
+    default=False,
+    help="Don't auto-open browser (just print URL).",
+)
+def browse(room, token, port, no_browser):
+    """Browse a Worker's filesystem via web UI.
+
+    This command connects to a Worker in the specified room and starts
+    a local web server that provides a browser-based file explorer.
+
+    The browser UI allows you to:
+    - Browse mount points and directories on the Worker
+    - View file information (name, size, type)
+    - Copy file paths for use with --worker-path
+
+    Examples:
+
+        # Connect to a Worker and open browser
+        sleap-rtc browse --room my-room --token secret123
+
+        # Use a different port
+        sleap-rtc browse --room my-room --token secret123 --port 9000
+
+        # Print URL without opening browser (for remote access)
+        sleap-rtc browse --room my-room --token secret123 --no-browser
+    """
+    import asyncio
+    from sleap_rtc.rtc_browse import run_browse_client
+
+    logger.info(f"Starting filesystem browser for room: {room}")
+    logger.info(f"Local server will run on port: {port}")
+
+    try:
+        asyncio.run(
+            run_browse_client(
+                room_id=room,
+                token=token,
+                port=port,
+                open_browser=not no_browser,
+            )
+        )
+    except KeyboardInterrupt:
+        logger.info("Browse session ended by user")
+    except Exception as e:
+        logger.error(f"Browse error: {e}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

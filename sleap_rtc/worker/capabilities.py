@@ -5,10 +5,7 @@ and resource utilization reporting for SLEAP-RTC workers.
 """
 
 import logging
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
-
-if TYPE_CHECKING:
-    from sleap_rtc.config import WorkerIOConfig
+from typing import Any, Dict, List, Optional
 
 
 class WorkerCapabilities:
@@ -25,7 +22,6 @@ class WorkerCapabilities:
         supported_models: List of supported model types.
         supported_job_types: List of supported job types.
         status: Current worker status ("available", "busy", "reserved").
-        io_config: Worker I/O configuration (input/output paths).
     """
 
     def __init__(
@@ -33,7 +29,6 @@ class WorkerCapabilities:
         gpu_id: int = 0,
         supported_models: Optional[List[str]] = None,
         supported_job_types: Optional[List[str]] = None,
-        io_config: Optional["WorkerIOConfig"] = None,
     ):
         """Initialize worker capabilities.
 
@@ -43,7 +38,6 @@ class WorkerCapabilities:
                 ["base", "centroid", "topdown"].
             supported_job_types: List of supported job types. Defaults to
                 ["training", "inference"].
-            io_config: Optional Worker I/O configuration for shared filesystem.
         """
         self.gpu_id = gpu_id
         self.gpu_memory_mb = self._detect_gpu_memory()
@@ -52,7 +46,6 @@ class WorkerCapabilities:
         self.supported_models = supported_models or ["base", "centroid", "topdown"]
         self.supported_job_types = supported_job_types or ["training", "inference"]
         self.status = "available"  # Managed by StateManager, but read here
-        self.io_config = io_config
 
     def _detect_gpu_memory(self) -> int:
         """Detect GPU memory in MB.
@@ -211,16 +204,10 @@ class WorkerCapabilities:
         Returns:
             Dictionary with worker capabilities for signaling server metadata.
         """
-        metadata = {
+        return {
             "gpu_memory_mb": self.gpu_memory_mb,
             "gpu_model": self.gpu_model,
             "cuda_version": self.cuda_version,
             "supported_models": self.supported_models,
             "supported_job_types": self.supported_job_types,
         }
-
-        # Add I/O paths if configured
-        if self.io_config:
-            metadata["io_paths"] = self.io_config.to_dict()
-
-        return metadata
