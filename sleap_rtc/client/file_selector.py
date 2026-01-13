@@ -448,6 +448,175 @@ class MountSelector:
                 return None
 
 
+class WorkerSelector:
+    """Interactive worker selection using arrow keys (async-native).
+
+    Uses prompt_toolkit's run_async() for native async support, avoiding
+    the thread workaround needed for sync contexts.
+
+    Usage:
+        selector = WorkerSelector(workers)
+        selected = await selector.run()
+        if selected:
+            print(f"Selected: {selected['peer_id']}")
+    """
+
+    def __init__(
+        self,
+        workers: List[dict],
+        title: str = "Select worker to connect:",
+        allow_cancel: bool = True,
+    ):
+        """Initialize selector.
+
+        Args:
+            workers: List of worker dicts with 'peer_id' and 'properties' keys.
+            title: Title to display above the selection list.
+            allow_cancel: Whether to allow canceling selection with Escape.
+        """
+        self.workers = workers
+        self.title = title
+        self.allow_cancel = allow_cancel
+        self.selected_index = 0
+        self.cancelled = False
+
+    def _format_worker(self, worker: dict, selected: bool = False) -> str:
+        """Format worker for display."""
+        prefix = "> " if selected else "  "
+        peer_id = worker.get("peer_id", "unknown")
+        props = worker.get("properties", {})
+        platform = props.get("platform", "unknown")
+        status = props.get("status", "available")
+        return f"{prefix}{peer_id}  ({platform}, {status})"
+
+    async def run(self) -> Optional[dict]:
+        """Run the selector and return the selected worker.
+
+        Returns:
+            Selected worker dict, or None if cancelled/no selection.
+        """
+        if not self.workers:
+            return None
+
+        if _is_interactive_terminal():
+            return await self._run_interactive()
+        else:
+            return self._run_numbered()
+
+    async def _run_interactive(self) -> Optional[dict]:
+        """Run interactive arrow-key selection using prompt_toolkit async API."""
+        try:
+            from prompt_toolkit import Application
+            from prompt_toolkit.key_binding import KeyBindings
+            from prompt_toolkit.layout import Layout
+            from prompt_toolkit.layout.containers import Window
+            from prompt_toolkit.layout.controls import FormattedTextControl
+            from prompt_toolkit.formatted_text import FormattedText
+        except ImportError:
+            return self._run_numbered()
+
+        kb = KeyBindings()
+        result = [None]
+
+        @kb.add("up")
+        @kb.add("k")
+        def move_up(event):
+            self.selected_index = (self.selected_index - 1) % len(self.workers)
+
+        @kb.add("down")
+        @kb.add("j")
+        def move_down(event):
+            self.selected_index = (self.selected_index + 1) % len(self.workers)
+
+        @kb.add("enter")
+        def confirm(event):
+            result[0] = self.workers[self.selected_index]
+            event.app.exit()
+
+        @kb.add("escape")
+        @kb.add("q")
+        def cancel(event):
+            if self.allow_cancel:
+                self.cancelled = True
+                event.app.exit()
+
+        @kb.add("c-c")
+        def ctrl_c(event):
+            self.cancelled = True
+            event.app.exit()
+
+        def get_formatted_text():
+            lines = []
+            lines.append(("bold", f"\n{self.title}\n\n"))
+
+            for i, worker in enumerate(self.workers):
+                selected = i == self.selected_index
+                line = self._format_worker(worker, selected=selected)
+
+                if selected:
+                    lines.append(("bold fg:cyan", line + "\n"))
+                else:
+                    lines.append(("", line + "\n"))
+
+            lines.append(("dim", "\n[↑/↓] Navigate  [Enter] Confirm  [Esc] Cancel\n"))
+            return FormattedText(lines)
+
+        layout = Layout(Window(content=FormattedTextControl(get_formatted_text)))
+        app = Application(
+            layout=layout,
+            key_bindings=kb,
+            full_screen=False,
+            mouse_support=False,
+        )
+
+        try:
+            # Use native async API - no thread workaround needed
+            await app.run_async()
+        except Exception as e:
+            import logging
+            logging.debug(f"Interactive worker selection failed: {e}")
+            return self._run_numbered()
+
+        return result[0]
+
+    def _run_numbered(self) -> Optional[dict]:
+        """Run numbered selection for dumb terminals."""
+        print(f"\n{self.title}\n")
+
+        for i, worker in enumerate(self.workers, 1):
+            peer_id = worker.get("peer_id", "unknown")
+            props = worker.get("properties", {})
+            platform = props.get("platform", "unknown")
+            status = props.get("status", "available")
+            print(f"  {i}. {peer_id}  ({platform}, {status})")
+
+        print()
+        if self.allow_cancel:
+            print("Enter number to select, or 'c' to cancel")
+        else:
+            print("Enter number to select")
+
+        while True:
+            try:
+                choice = input("\nSelection: ").strip().lower()
+
+                if choice == "c" and self.allow_cancel:
+                    self.cancelled = True
+                    return None
+
+                idx = int(choice) - 1
+                if 0 <= idx < len(self.workers):
+                    return self.workers[idx]
+                else:
+                    print(f"Please enter a number between 1 and {len(self.workers)}")
+
+            except ValueError:
+                print("Invalid input. Please enter a number.")
+            except (EOFError, KeyboardInterrupt):
+                self.cancelled = True
+                return None
+
+
 class NoMatchMenu:
     """Menu displayed when no matches are found.
 

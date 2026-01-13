@@ -88,8 +88,17 @@ class BrowseClient:
                     print("\nNo workers found in the room. Make sure a Worker is running.")
                     return
 
-                # Select first available worker
-                worker_id = workers[0]["peer_id"]
+                # Interactive worker selection
+                from sleap_rtc.client.file_selector import WorkerSelector
+
+                selector = WorkerSelector(workers)
+                selected_worker = await selector.run()
+
+                if selected_worker is None or selector.cancelled:
+                    print("\nWorker selection cancelled.")
+                    return
+
+                worker_id = selected_worker["peer_id"]
                 logging.info(f"Connecting to worker: {worker_id}")
 
                 # Establish WebRTC connection
