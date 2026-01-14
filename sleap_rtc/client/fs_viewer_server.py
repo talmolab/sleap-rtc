@@ -18,8 +18,9 @@ from aiohttp import web, WSMsgType
 DEFAULT_PORT = 8765
 MAX_PORT_TRIES = 10
 
-# Path to the HTML viewer file
+# Path to the HTML viewer files
 VIEWER_HTML_PATH = Path(__file__).parent / "static" / "fs_viewer.html"
+RESOLVE_HTML_PATH = Path(__file__).parent / "static" / "fs_resolve.html"
 
 
 class FSViewerServer:
@@ -67,6 +68,9 @@ class FSViewerServer:
         # Track request metadata for column view support
         self._request_metadata: Optional[Dict[str, Any]] = None
 
+        # Video resolution data
+        self.pending_video_check_data: Optional[Dict[str, Any]] = None
+
     async def start(self, port: int = DEFAULT_PORT, open_browser: bool = True) -> str:
         """Start the server.
 
@@ -80,6 +84,7 @@ class FSViewerServer:
         # Create aiohttp application
         self.app = web.Application()
         self.app.router.add_get("/", self._handle_index)
+        self.app.router.add_get("/resolve", self._handle_resolve)
         self.app.router.add_get("/ws", self._handle_websocket)
 
         # Try to bind to a port
@@ -134,6 +139,19 @@ class FSViewerServer:
 
         # Read and return HTML
         html = VIEWER_HTML_PATH.read_text()
+        return web.Response(text=html, content_type="text/html")
+
+    async def _handle_resolve(self, request: web.Request) -> web.Response:
+        """Handle GET /resolve - serve the video resolution UI."""
+        # Check if resolve HTML exists
+        if not RESOLVE_HTML_PATH.exists():
+            return web.Response(
+                text="Resolution UI HTML not found. Please reinstall sleap-rtc.",
+                status=500,
+            )
+
+        # Read and return HTML
+        html = RESOLVE_HTML_PATH.read_text()
         return web.Response(text=html, content_type="text/html")
 
     async def _handle_websocket(self, request: web.Request) -> web.WebSocketResponse:
@@ -201,6 +219,37 @@ class FSViewerServer:
                 pattern = msg.get("pattern", "")
                 file_size = msg.get("file_size")
                 self.send_to_worker(f"FS_RESOLVE::{pattern}::{file_size or ''}")
+
+            elif msg_type == "scan_dir":
+                # Directory scanning for missing video filenames
+                directory = msg.get("directory", "")
+                filenames = msg.get("filenames", [])
+                request_payload = json.dumps({
+                    "directory": directory,
+                    "filenames": filenames
+                })
+                self.send_to_worker(f"FS_SCAN_DIR::{request_payload}")
+
+            elif msg_type == "write_slp":
+                # Write SLP file with corrected video paths
+                slp_path = msg.get("slp_path", "")
+                output_dir = msg.get("output_dir", "")
+                filename_map = msg.get("filename_map", {})
+                request_payload = json.dumps({
+                    "slp_path": slp_path,
+                    "output_dir": output_dir,
+                    "filename_map": filename_map
+                })
+                self.send_to_worker(f"FS_WRITE_SLP::{request_payload}")
+
+            elif msg_type == "get_video_check":
+                # Request video check data (for resolution UI initial load)
+                # The UI can request the pending video check data
+                if hasattr(self, 'pending_video_check_data') and self.pending_video_check_data:
+                    await self._broadcast({
+                        "type": "video_check_response",
+                        "data": self.pending_video_check_data,
+                    })
 
             else:
                 logging.warning(f"Unknown browser message type: {msg_type}")
@@ -298,6 +347,43 @@ class FSViewerServer:
                     "message": error_msg,
                 })
 
+            elif message.startswith("FS_CHECK_VIDEOS_RESPONSE::"):
+                # Store and broadcast video accessibility check results
+                json_str = message.split("::", 1)[1]
+                data = json.loads(json_str)
+                self.pending_video_check_data = data
+                await self._broadcast({
+                    "type": "video_check_response",
+                    "data": data,
+                })
+
+            elif message.startswith("FS_SCAN_DIR_RESPONSE::"):
+                # Broadcast directory scan results
+                json_str = message.split("::", 1)[1]
+                data = json.loads(json_str)
+                await self._broadcast({
+                    "type": "scan_dir_response",
+                    "data": data,
+                })
+
+            elif message.startswith("FS_WRITE_SLP_OK::"):
+                # Broadcast successful SLP write
+                json_str = message.split("::", 1)[1]
+                data = json.loads(json_str)
+                await self._broadcast({
+                    "type": "write_slp_ok",
+                    "data": data,
+                })
+
+            elif message.startswith("FS_WRITE_SLP_ERROR::"):
+                # Broadcast SLP write error
+                json_str = message.split("::", 1)[1]
+                data = json.loads(json_str)
+                await self._broadcast({
+                    "type": "write_slp_error",
+                    "data": data,
+                })
+
             # Call optional callback
             if self.on_worker_response:
                 self.on_worker_response(message)
@@ -322,6 +408,14 @@ class FSViewerServer:
             "type": "connection_lost",
             "message": "Worker disconnected",
         })
+
+    def set_video_check_data(self, data: Dict[str, Any]):
+        """Set the pending video check data for the resolution UI.
+
+        Args:
+            data: Video accessibility check result from Worker.
+        """
+        self.pending_video_check_data = data
 
 
 async def run_viewer_server(
