@@ -42,6 +42,12 @@ from sleap_rtc.protocol import (
     MSG_USE_WORKER_PATH,
     MSG_WORKER_PATH_OK,
     MSG_WORKER_PATH_ERROR,
+    MSG_FS_CHECK_VIDEOS_RESPONSE,
+    MSG_FS_SCAN_DIR,
+    MSG_FS_SCAN_DIR_RESPONSE,
+    MSG_FS_WRITE_SLP,
+    MSG_FS_WRITE_SLP_OK,
+    MSG_FS_WRITE_SLP_ERROR,
 )
 from sleap_rtc.worker.capabilities import WorkerCapabilities
 from sleap_rtc.worker.job_executor import JobExecutor
@@ -1637,6 +1643,75 @@ class RTCWorkerClient:
 
                 return f"{MSG_FS_LIST_RESPONSE}{MSG_SEPARATOR}{json.dumps(result)}"
 
+            elif msg_type == MSG_FS_SCAN_DIR:
+                # Scan directory for specific filenames (SLP Viewer style)
+                # Format: FS_SCAN_DIR::{json}
+                # JSON: {"directory": "...", "filenames": ["video1.mp4", "video2.mp4"]}
+                if len(parts) < 2:
+                    return f"{MSG_FS_ERROR}{MSG_SEPARATOR}{FS_ERROR_INVALID_REQUEST}{MSG_SEPARATOR}JSON payload is required"
+
+                try:
+                    payload = json.loads(parts[1])
+                except json.JSONDecodeError as e:
+                    return f"{MSG_FS_ERROR}{MSG_SEPARATOR}{FS_ERROR_INVALID_REQUEST}{MSG_SEPARATOR}Invalid JSON: {e}"
+
+                directory = payload.get("directory", "")
+                filenames = payload.get("filenames", [])
+
+                if not directory:
+                    return f"{MSG_FS_ERROR}{MSG_SEPARATOR}{FS_ERROR_INVALID_REQUEST}{MSG_SEPARATOR}Directory is required"
+
+                if not filenames or not isinstance(filenames, list):
+                    return f"{MSG_FS_ERROR}{MSG_SEPARATOR}{FS_ERROR_INVALID_REQUEST}{MSG_SEPARATOR}Filenames list is required"
+
+                result = self.file_manager.scan_directory_for_filenames(
+                    directory=directory,
+                    filenames=filenames,
+                )
+
+                # Check for errors in result
+                if "error_code" in result:
+                    return f"{MSG_FS_ERROR}{MSG_SEPARATOR}{result['error_code']}{MSG_SEPARATOR}{result.get('error', 'Unknown error')}"
+
+                return f"{MSG_FS_SCAN_DIR_RESPONSE}{MSG_SEPARATOR}{json.dumps(result)}"
+
+            elif msg_type == MSG_FS_WRITE_SLP:
+                # Write SLP file with updated video paths
+                # Format: FS_WRITE_SLP::{json}
+                # JSON: {"slp_path": "...", "output_dir": "...", "filename_map": {...}}
+                if len(parts) < 2:
+                    return f"{MSG_FS_WRITE_SLP_ERROR}{MSG_SEPARATOR}{json.dumps({'error': 'JSON payload is required'})}"
+
+                try:
+                    payload = json.loads(parts[1])
+                except json.JSONDecodeError as e:
+                    return f"{MSG_FS_WRITE_SLP_ERROR}{MSG_SEPARATOR}{json.dumps({'error': f'Invalid JSON: {e}'})}"
+
+                slp_path = payload.get("slp_path", "")
+                output_dir = payload.get("output_dir", "")
+                filename_map = payload.get("filename_map", {})
+
+                if not slp_path:
+                    return f"{MSG_FS_WRITE_SLP_ERROR}{MSG_SEPARATOR}{json.dumps({'error': 'slp_path is required'})}"
+
+                if not output_dir:
+                    return f"{MSG_FS_WRITE_SLP_ERROR}{MSG_SEPARATOR}{json.dumps({'error': 'output_dir is required'})}"
+
+                if not filename_map or not isinstance(filename_map, dict):
+                    return f"{MSG_FS_WRITE_SLP_ERROR}{MSG_SEPARATOR}{json.dumps({'error': 'filename_map dict is required'})}"
+
+                result = self.file_manager.write_slp_with_new_paths(
+                    slp_path=slp_path,
+                    output_dir=output_dir,
+                    filename_map=filename_map,
+                )
+
+                # Check for errors in result
+                if "error" in result:
+                    return f"{MSG_FS_WRITE_SLP_ERROR}{MSG_SEPARATOR}{json.dumps(result)}"
+
+                return f"{MSG_FS_WRITE_SLP_OK}{MSG_SEPARATOR}{json.dumps(result)}"
+
             else:
                 return f"{MSG_FS_ERROR}{MSG_SEPARATOR}{FS_ERROR_INVALID_REQUEST}{MSG_SEPARATOR}Unknown FS message type: {msg_type}"
 
@@ -1694,6 +1769,46 @@ class RTCWorkerClient:
         except Exception as e:
             logging.error(f"Error handling worker path message: {e}")
             return f"{MSG_WORKER_PATH_ERROR}{MSG_SEPARATOR}{str(e)}"
+
+    def _check_slp_videos_if_needed(self) -> str | None:
+        """Check video accessibility if the worker input path is an SLP file.
+
+        Called after WORKER_PATH_OK is sent. If the input file is an SLP and
+        has missing video references, returns a FS_CHECK_VIDEOS_RESPONSE message.
+
+        Returns:
+            FS_CHECK_VIDEOS_RESPONSE message if there are missing videos,
+            or None if no check is needed or all videos are accessible.
+        """
+        if not self.worker_input_path:
+            return None
+
+        # Check if it's an SLP file
+        path = Path(self.worker_input_path)
+        if path.suffix.lower() not in (".slp", ".pkg.slp"):
+            # Also check for .pkg.slp extension
+            if not path.name.lower().endswith(".pkg.slp"):
+                return None
+
+        # Check video accessibility
+        result = self.file_manager.check_video_accessibility(self.worker_input_path)
+
+        # Only send response if there are missing videos
+        if result.get("missing"):
+            import json
+
+            logging.info(
+                f"SLP has {len(result['missing'])} missing video(s), "
+                f"{result.get('accessible', 0)} accessible, "
+                f"{result.get('embedded', 0)} embedded"
+            )
+            return f"{MSG_FS_CHECK_VIDEOS_RESPONSE}{MSG_SEPARATOR}{json.dumps(result)}"
+
+        # All videos accessible (or error occurred)
+        if result.get("error"):
+            logging.warning(f"Error checking video accessibility: {result['error']}")
+
+        return None
 
     async def _process_worker_input_path(self, channel):
         """Process a job from a worker input path (no file transfer).
@@ -1837,6 +1952,12 @@ class RTCWorkerClient:
                     response = self.handle_worker_path_message(message)
                     if channel.readyState == "open":
                         channel.send(response)
+
+                        # If path was accepted and it's an SLP file, check video accessibility
+                        if response.startswith(MSG_WORKER_PATH_OK):
+                            video_check = self._check_slp_videos_if_needed()
+                            if video_check is not None:
+                                channel.send(video_check)
                     return
 
                 # Detect package type (track or train)

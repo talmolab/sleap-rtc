@@ -15,6 +15,17 @@ from typing import List, Optional
 
 from aiortc import RTCDataChannel
 
+# Import sleap_io for SLP file operations (lazy import to avoid startup cost)
+try:
+    import sleap_io as sio
+    from sleap_io.io.video_reading import HDF5Video
+
+    SLEAP_IO_AVAILABLE = True
+except ImportError:
+    SLEAP_IO_AVAILABLE = False
+    sio = None
+    HDF5Video = None
+
 
 class FileManager:
     """Manages file transfer, compression, and filesystem browsing for worker nodes.
@@ -585,4 +596,291 @@ class FileManager:
             "entries": entries,
             "total_count": total_count,
             "has_more": has_more,
+        }
+
+    # =========================================================================
+    # SLP Video Resolution Methods
+    # =========================================================================
+
+    def _is_video_embedded(self, video) -> bool:
+        """Check if a video has embedded images (frames stored in SLP file).
+
+        Args:
+            video: A sleap_io Video object.
+
+        Returns:
+            True if the video has embedded images and doesn't need an external file.
+        """
+        # Priority 1: Live backend attribute (if backend is open)
+        if HDF5Video is not None and isinstance(video.backend, HDF5Video):
+            return video.backend.has_embedded_images
+
+        # Priority 2: backend_metadata from SLP file (when open_videos=False)
+        return video.backend_metadata.get("has_embedded_images", False)
+
+    def check_video_accessibility(self, slp_path: str) -> dict:
+        """Check if video paths in an SLP file are accessible on this filesystem.
+
+        Loads the SLP file and checks if each video's filename exists on the
+        Worker filesystem. Embedded videos (frames stored in the SLP) are skipped.
+
+        Args:
+            slp_path: Path to the SLP file to check.
+
+        Returns:
+            Dictionary with:
+                - slp_path: The input SLP path
+                - total_videos: Total number of video references in the SLP
+                - missing: List of dicts with 'filename' and 'original_path' for
+                  videos that don't exist on the Worker filesystem
+                - accessible: Count of videos that are accessible
+                - embedded: Count of videos with embedded frames (skipped)
+                - error: Error message if loading failed (optional)
+        """
+        if not SLEAP_IO_AVAILABLE:
+            return {
+                "slp_path": slp_path,
+                "total_videos": 0,
+                "missing": [],
+                "accessible": 0,
+                "embedded": 0,
+                "error": "sleap-io is not available on this Worker",
+            }
+
+        # Check SLP file exists
+        slp_file = Path(slp_path)
+        if not slp_file.exists():
+            return {
+                "slp_path": slp_path,
+                "total_videos": 0,
+                "missing": [],
+                "accessible": 0,
+                "embedded": 0,
+                "error": f"SLP file not found: {slp_path}",
+            }
+
+        try:
+            # Load SLP without opening video backends
+            labels = sio.load_file(slp_path, open_videos=False)
+        except Exception as e:
+            return {
+                "slp_path": slp_path,
+                "total_videos": 0,
+                "missing": [],
+                "accessible": 0,
+                "embedded": 0,
+                "error": f"Failed to load SLP file: {e}",
+            }
+
+        missing = []
+        accessible = 0
+        embedded = 0
+
+        for video in labels.videos:
+            # Skip embedded videos (frames stored in SLP file)
+            if self._is_video_embedded(video):
+                embedded += 1
+                continue
+
+            # Get the video filename/path
+            video_path = video.filename
+            if isinstance(video_path, list):
+                # Image sequence - check first image
+                video_path = video_path[0] if video_path else ""
+
+            if not video_path:
+                continue
+
+            # Check if the video file exists
+            if Path(video_path).exists():
+                accessible += 1
+            else:
+                # Extract just the filename for display
+                filename = Path(video_path).name
+                missing.append({
+                    "filename": filename,
+                    "original_path": video_path,
+                })
+
+        return {
+            "slp_path": slp_path,
+            "total_videos": len(labels.videos),
+            "missing": missing,
+            "accessible": accessible,
+            "embedded": embedded,
+        }
+
+    def scan_directory_for_filenames(
+        self, directory: str, filenames: list[str]
+    ) -> dict:
+        """Scan a directory for specific filenames (SLP Viewer style resolution).
+
+        This method checks if the given filenames exist in the specified directory.
+        Used for batch resolution of video paths when the user selects a video file
+        and the system scans that directory for other missing videos.
+
+        Args:
+            directory: Path to the directory to scan.
+            filenames: List of filenames to look for (without path).
+
+        Returns:
+            Dictionary with:
+                - directory: The scanned directory path
+                - found: Dict mapping filename → full path (or None if not found)
+                - error: Error message if directory is invalid (optional)
+                - error_code: Error code if applicable (optional)
+        """
+        dir_path = Path(directory)
+
+        # Security check: directory must be within allowed mounts
+        if not self._is_path_allowed(dir_path):
+            return {
+                "directory": directory,
+                "found": {},
+                "error": "Access denied: directory is outside configured mounts",
+                "error_code": "ACCESS_DENIED",
+            }
+
+        # Check directory exists
+        if not dir_path.exists():
+            return {
+                "directory": directory,
+                "found": {},
+                "error": f"Directory not found: {directory}",
+                "error_code": "PATH_NOT_FOUND",
+            }
+
+        if not dir_path.is_dir():
+            return {
+                "directory": directory,
+                "found": {},
+                "error": f"Path is not a directory: {directory}",
+                "error_code": "PATH_NOT_FOUND",
+            }
+
+        # Scan for each filename
+        found = {}
+        for filename in filenames:
+            # Prevent path traversal in filenames
+            if os.sep in filename or (os.altsep and os.altsep in filename):
+                found[filename] = None
+                continue
+            if ".." in filename:
+                found[filename] = None
+                continue
+
+            candidate = dir_path / filename
+            if candidate.exists() and candidate.is_file():
+                found[filename] = str(candidate)
+            else:
+                found[filename] = None
+
+        return {
+            "directory": str(dir_path),
+            "found": found,
+        }
+
+    def write_slp_with_new_paths(
+        self, slp_path: str, output_dir: str, filename_map: dict
+    ) -> dict:
+        """Write a new SLP file with updated video paths.
+
+        Loads the SLP file, applies the filename_map to replace video paths,
+        and saves a new SLP file with a timestamped name.
+
+        Args:
+            slp_path: Path to the original SLP file.
+            output_dir: Directory to write the new SLP file to.
+            filename_map: Dict mapping original paths to new resolved paths.
+                          Example: {"/old/path/video.mp4": "/new/path/video.mp4"}
+
+        Returns:
+            Dictionary with:
+                - output_path: Path to the newly written SLP file
+                - videos_updated: Number of video paths that were updated
+                - error: Error message if writing failed (optional)
+        """
+        if not SLEAP_IO_AVAILABLE:
+            return {
+                "error": "sleap-io is not available on this Worker",
+            }
+
+        # Validate SLP file exists
+        slp_file = Path(slp_path)
+        if not slp_file.exists():
+            return {
+                "error": f"SLP file not found: {slp_path}",
+            }
+
+        # Validate output_dir is within allowed mounts
+        output_path_obj = Path(output_dir)
+        if not self._is_path_allowed(output_path_obj):
+            return {
+                "error": "Output directory is outside configured mounts",
+                "error_code": "ACCESS_DENIED",
+            }
+
+        # Check output_dir exists and is a directory
+        if not output_path_obj.exists():
+            return {
+                "error": f"Output directory not found: {output_dir}",
+            }
+
+        if not output_path_obj.is_dir():
+            return {
+                "error": f"Output path is not a directory: {output_dir}",
+            }
+
+        try:
+            # Load SLP without opening video backends
+            labels = sio.load_file(slp_path, open_videos=False)
+        except Exception as e:
+            return {
+                "error": f"Failed to load SLP file: {e}",
+            }
+
+        # Count how many videos will be updated
+        videos_updated = 0
+        for video in labels.videos:
+            video_path = video.filename
+            if isinstance(video_path, list):
+                # Image sequence - check first image
+                video_path = video_path[0] if video_path else ""
+
+            if video_path in filename_map:
+                videos_updated += 1
+
+        # Apply filename replacements
+        try:
+            labels.replace_filenames(filename_map=filename_map)
+        except Exception as e:
+            return {
+                "error": f"Failed to replace filenames: {e}",
+            }
+
+        # Generate output filename: resolved_YYYYMMDD_<original>.slp
+        from datetime import datetime
+
+        date_str = datetime.now().strftime("%Y%m%d")
+        original_name = slp_file.stem
+        # Handle .pkg.slp extension
+        if original_name.endswith(".pkg"):
+            original_name = original_name[:-4]
+            output_filename = f"resolved_{date_str}_{original_name}.pkg.slp"
+        else:
+            output_filename = f"resolved_{date_str}_{original_name}.slp"
+
+        output_full_path = output_path_obj / output_filename
+
+        # Save the updated SLP file
+        try:
+            labels.save(str(output_full_path))
+        except Exception as e:
+            return {
+                "error": f"Failed to save SLP file: {e}",
+            }
+
+        return {
+            "output_path": str(output_full_path),
+            "videos_updated": videos_updated,
         }
