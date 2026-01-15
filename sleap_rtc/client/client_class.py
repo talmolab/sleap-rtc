@@ -825,6 +825,33 @@ class RTCClient:
                 try:
                     await asyncio.wait_for(resolution_complete.wait(), timeout=600.0)
                     print(f"\nResolution complete. Using: {resolved_slp_path}")
+
+                    # If a new SLP file was created, tell the Worker to use it
+                    if resolved_slp_path != slp_path:
+                        logging.info(f"Updating Worker path to resolved SLP: {resolved_slp_path}")
+                        self.data_channel.send(f"{MSG_USE_WORKER_PATH}{MSG_SEPARATOR}{resolved_slp_path}")
+
+                        # Wait for Worker to acknowledge the new path
+                        try:
+                            response = await asyncio.wait_for(
+                                self.fs_response_queue.get(),
+                                timeout=10.0,
+                            )
+                            if response.startswith(f"{MSG_WORKER_PATH_OK}{MSG_SEPARATOR}"):
+                                logging.info("Worker accepted resolved SLP path")
+                            elif response.startswith(f"{MSG_WORKER_PATH_ERROR}{MSG_SEPARATOR}"):
+                                error = response.split(MSG_SEPARATOR, 1)[1] if MSG_SEPARATOR in response else "Unknown error"
+                                logging.error(f"Worker rejected resolved path: {error}")
+                                print(f"\nWarning: Worker rejected resolved path: {error}")
+                                print("Continuing with original SLP path.")
+                                resolved_slp_path = slp_path
+                            else:
+                                # Not the expected response, put it back
+                                await self.fs_response_queue.put(response)
+                        except asyncio.TimeoutError:
+                            logging.warning("Timeout waiting for Worker to accept resolved path")
+                            print("\nWarning: Worker did not respond to path update.")
+
                 except asyncio.TimeoutError:
                     print("\nResolution timed out. Using original SLP path.")
                 finally:
