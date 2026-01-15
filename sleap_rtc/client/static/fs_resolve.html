@@ -44,7 +44,8 @@
             font-family: 'Outfit', sans-serif;
             background: var(--bg-primary);
             color: var(--text-primary);
-            min-height: 100vh;
+            height: 100vh;
+            overflow: hidden;
             line-height: 1.5;
             display: flex;
             flex-direction: column;
@@ -1528,8 +1529,9 @@
         function requestOutputDirList(path) {
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({
-                    type: 'list',
-                    path: path
+                    type: 'list_dir',
+                    path: path,
+                    offset: 0
                 }));
             }
         }

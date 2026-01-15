@@ -42,7 +42,8 @@
             font-family: 'Outfit', sans-serif;
             background: var(--bg-primary);
             color: var(--text-primary);
-            min-height: 100vh;
+            height: 100vh;
+            overflow: hidden;
             line-height: 1.5;
         }
 
@@ -628,21 +629,30 @@
         .column-container {
             display: flex;
             flex: 1;
+            height: 100%;
             overflow-x: auto;
             overflow-y: hidden;
             background: var(--bg-primary);
         }
 
+        /* When column view is active, remove padding from file-grid */
+        .file-grid:has(.column-container) {
+            padding: 0;
+            overflow: hidden;
+        }
+
         .column-wrapper {
             display: flex;
             flex-shrink: 0;
+            height: 100%;
         }
 
         .column {
             width: 220px;
             min-width: 120px;
             max-width: 400px;
-            overflow-y: auto;
+            height: 100%;
+            overflow: hidden;
             display: flex;
             flex-direction: column;
             background: var(--bg-secondary);
