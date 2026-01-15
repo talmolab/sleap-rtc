@@ -925,7 +925,14 @@ class FileManager:
 
         # Extract prefixes (everything before the common suffix)
         if common_suffix_len > 0 and common_suffix_len < len(old_parts):
+            # Normal case: both paths have parts before the common suffix
             old_prefix = str(Path(*old_parts[:-common_suffix_len]))
+            new_prefix = str(Path(*new_parts[:-common_suffix_len]))
+        elif common_suffix_len >= len(old_parts) and common_suffix_len < len(new_parts):
+            # Special case: old path is entirely contained in new path (relative -> absolute)
+            # e.g., old="project/video.mp4", new="/root/vast/project/video.mp4"
+            # The old prefix is empty, new prefix is the extra leading parts
+            old_prefix = ""
             new_prefix = str(Path(*new_parts[:-common_suffix_len]))
         else:
             # No common suffix found, return full paths as prefixes
@@ -982,20 +989,25 @@ class FileManager:
 
         for missing_path in other_missing:
             # Check if this path shares the same old prefix
-            if missing_path.startswith(old_prefix):
-                # Apply the prefix transformation
+            if old_prefix == "":
+                # Special case: old paths are relative, new paths are absolute
+                # Prepend the new prefix to the missing path
+                candidate = str(Path(new_prefix) / missing_path)
+            elif missing_path.startswith(old_prefix):
+                # Normal case: replace the old prefix with new prefix
                 candidate = missing_path.replace(old_prefix, new_prefix, 1)
-
-                # Check if the transformed path exists on the Worker filesystem
-                if Path(candidate).exists():
-                    would_resolve.append({
-                        "original": missing_path,
-                        "resolved": candidate,
-                    })
-                else:
-                    would_not_resolve.append(missing_path)
             else:
                 # Different prefix - can't resolve with this transformation
+                would_not_resolve.append(missing_path)
+                continue
+
+            # Check if the transformed path exists on the Worker filesystem
+            if Path(candidate).exists():
+                would_resolve.append({
+                    "original": missing_path,
+                    "resolved": candidate,
+                })
+            else:
                 would_not_resolve.append(missing_path)
 
         return {
