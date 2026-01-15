@@ -15,6 +15,17 @@ from typing import List, Optional
 
 from aiortc import RTCDataChannel
 
+# Import sleap_io for SLP file operations (lazy import to avoid startup cost)
+try:
+    import sleap_io as sio
+    from sleap_io.io.video_reading import HDF5Video
+
+    SLEAP_IO_AVAILABLE = True
+except ImportError:
+    SLEAP_IO_AVAILABLE = False
+    sio = None
+    HDF5Video = None
+
 
 class FileManager:
     """Manages file transfer, compression, and filesystem browsing for worker nodes.
@@ -585,4 +596,433 @@ class FileManager:
             "entries": entries,
             "total_count": total_count,
             "has_more": has_more,
+        }
+
+    # =========================================================================
+    # SLP Video Resolution Methods
+    # =========================================================================
+
+    def _is_video_embedded(self, video) -> bool:
+        """Check if a video has embedded images (frames stored in SLP file).
+
+        Args:
+            video: A sleap_io Video object.
+
+        Returns:
+            True if the video has embedded images and doesn't need an external file.
+        """
+        # Priority 1: Live backend attribute (if backend is open)
+        if HDF5Video is not None and isinstance(video.backend, HDF5Video):
+            return video.backend.has_embedded_images
+
+        # Priority 2: backend_metadata from SLP file (when open_videos=False)
+        return video.backend_metadata.get("has_embedded_images", False)
+
+    def check_video_accessibility(self, slp_path: str) -> dict:
+        """Check if video paths in an SLP file are accessible on this filesystem.
+
+        Loads the SLP file and checks if each video's filename exists on the
+        Worker filesystem. Embedded videos (frames stored in the SLP) are skipped.
+
+        Args:
+            slp_path: Path to the SLP file to check.
+
+        Returns:
+            Dictionary with:
+                - slp_path: The input SLP path
+                - total_videos: Total number of video references in the SLP
+                - missing: List of dicts with 'filename' and 'original_path' for
+                  videos that don't exist on the Worker filesystem
+                - accessible: Count of videos that are accessible
+                - embedded: Count of videos with embedded frames (skipped)
+                - error: Error message if loading failed (optional)
+        """
+        if not SLEAP_IO_AVAILABLE:
+            return {
+                "slp_path": slp_path,
+                "total_videos": 0,
+                "missing": [],
+                "accessible": 0,
+                "embedded": 0,
+                "error": "sleap-io is not available on this Worker",
+            }
+
+        # Check SLP file exists
+        slp_file = Path(slp_path)
+        if not slp_file.exists():
+            return {
+                "slp_path": slp_path,
+                "total_videos": 0,
+                "missing": [],
+                "accessible": 0,
+                "embedded": 0,
+                "error": f"SLP file not found: {slp_path}",
+            }
+
+        try:
+            # Load SLP without opening video backends
+            labels = sio.load_file(slp_path, open_videos=False)
+        except Exception as e:
+            return {
+                "slp_path": slp_path,
+                "total_videos": 0,
+                "missing": [],
+                "accessible": 0,
+                "embedded": 0,
+                "error": f"Failed to load SLP file: {e}",
+            }
+
+        missing = []
+        accessible = 0
+        embedded = 0
+
+        for video in labels.videos:
+            # Skip embedded videos (frames stored in SLP file)
+            if self._is_video_embedded(video):
+                embedded += 1
+                continue
+
+            # Get the video filename/path
+            video_path = video.filename
+            if isinstance(video_path, list):
+                # Image sequence - check first image
+                video_path = video_path[0] if video_path else ""
+
+            if not video_path:
+                continue
+
+            # Check if the video file exists
+            if Path(video_path).exists():
+                accessible += 1
+            else:
+                # Extract just the filename for display
+                filename = Path(video_path).name
+                missing.append({
+                    "filename": filename,
+                    "original_path": video_path,
+                })
+
+        return {
+            "slp_path": slp_path,
+            "total_videos": len(labels.videos),
+            "missing": missing,
+            "accessible": accessible,
+            "embedded": embedded,
+        }
+
+    def scan_directory_for_filenames(
+        self, directory: str, filenames: list[str]
+    ) -> dict:
+        """Scan a directory for specific filenames (SLP Viewer style resolution).
+
+        This method checks if the given filenames exist in the specified directory.
+        Used for batch resolution of video paths when the user selects a video file
+        and the system scans that directory for other missing videos.
+
+        Args:
+            directory: Path to the directory to scan.
+            filenames: List of filenames to look for (without path).
+
+        Returns:
+            Dictionary with:
+                - directory: The scanned directory path
+                - found: Dict mapping filename → full path (or None if not found)
+                - error: Error message if directory is invalid (optional)
+                - error_code: Error code if applicable (optional)
+        """
+        dir_path = Path(directory)
+
+        # Security check: directory must be within allowed mounts
+        if not self._is_path_allowed(dir_path):
+            return {
+                "directory": directory,
+                "found": {},
+                "error": "Access denied: directory is outside configured mounts",
+                "error_code": "ACCESS_DENIED",
+            }
+
+        # Check directory exists
+        if not dir_path.exists():
+            return {
+                "directory": directory,
+                "found": {},
+                "error": f"Directory not found: {directory}",
+                "error_code": "PATH_NOT_FOUND",
+            }
+
+        if not dir_path.is_dir():
+            return {
+                "directory": directory,
+                "found": {},
+                "error": f"Path is not a directory: {directory}",
+                "error_code": "PATH_NOT_FOUND",
+            }
+
+        # Scan for each filename
+        found = {}
+        for filename in filenames:
+            # Prevent path traversal in filenames
+            if os.sep in filename or (os.altsep and os.altsep in filename):
+                found[filename] = None
+                continue
+            if ".." in filename:
+                found[filename] = None
+                continue
+
+            candidate = dir_path / filename
+            if candidate.exists() and candidate.is_file():
+                found[filename] = str(candidate)
+            else:
+                found[filename] = None
+
+        return {
+            "directory": str(dir_path),
+            "found": found,
+        }
+
+    def write_slp_with_new_paths(
+        self,
+        slp_path: str,
+        output_dir: str,
+        filename_map: dict,
+        output_filename: str = "",
+    ) -> dict:
+        """Write a new SLP file with updated video paths.
+
+        Loads the SLP file, applies the filename_map to replace video paths,
+        and saves a new SLP file with a timestamped name.
+
+        Args:
+            slp_path: Path to the original SLP file.
+            output_dir: Directory to write the new SLP file to.
+            filename_map: Dict mapping original paths to new resolved paths.
+                          Example: {"/old/path/video.mp4": "/new/path/video.mp4"}
+            output_filename: Optional custom filename. If not provided, generates
+                             a default name with format: resolved_YYYYMMDD_<original>.slp
+
+        Returns:
+            Dictionary with:
+                - output_path: Path to the newly written SLP file
+                - videos_updated: Number of video paths that were updated
+                - error: Error message if writing failed (optional)
+        """
+        if not SLEAP_IO_AVAILABLE:
+            return {
+                "error": "sleap-io is not available on this Worker",
+            }
+
+        # Validate SLP file exists
+        slp_file = Path(slp_path)
+        if not slp_file.exists():
+            return {
+                "error": f"SLP file not found: {slp_path}",
+            }
+
+        # Validate output_dir is within allowed mounts
+        output_path_obj = Path(output_dir)
+        if not self._is_path_allowed(output_path_obj):
+            return {
+                "error": "Output directory is outside configured mounts",
+                "error_code": "ACCESS_DENIED",
+            }
+
+        # Check output_dir exists and is a directory
+        if not output_path_obj.exists():
+            return {
+                "error": f"Output directory not found: {output_dir}",
+            }
+
+        if not output_path_obj.is_dir():
+            return {
+                "error": f"Output path is not a directory: {output_dir}",
+            }
+
+        try:
+            # Load SLP without opening video backends
+            labels = sio.load_file(slp_path, open_videos=False)
+        except Exception as e:
+            return {
+                "error": f"Failed to load SLP file: {e}",
+            }
+
+        # Count how many videos will be updated
+        videos_updated = 0
+        for video in labels.videos:
+            video_path = video.filename
+            if isinstance(video_path, list):
+                # Image sequence - check first image
+                video_path = video_path[0] if video_path else ""
+
+            if video_path in filename_map:
+                videos_updated += 1
+
+        # Apply filename replacements
+        try:
+            labels.replace_filenames(filename_map=filename_map)
+        except Exception as e:
+            return {
+                "error": f"Failed to replace filenames: {e}",
+            }
+
+        # Use custom filename if provided, otherwise generate default
+        if output_filename:
+            final_filename = output_filename
+        else:
+            # Generate output filename: resolved_YYYYMMDD_<original>.slp
+            from datetime import datetime
+
+            date_str = datetime.now().strftime("%Y%m%d")
+            original_name = slp_file.stem
+            # Handle .pkg.slp extension
+            if original_name.endswith(".pkg"):
+                original_name = original_name[:-4]
+                final_filename = f"resolved_{date_str}_{original_name}.pkg.slp"
+            else:
+                final_filename = f"resolved_{date_str}_{original_name}.slp"
+
+        output_full_path = output_path_obj / final_filename
+
+        # Save the updated SLP file
+        try:
+            labels.save(str(output_full_path))
+        except Exception as e:
+            return {
+                "error": f"Failed to save SLP file: {e}",
+            }
+
+        return {
+            "output_path": str(output_full_path),
+            "videos_updated": videos_updated,
+        }
+
+    # =========================================================================
+    # Prefix-Based Video Path Resolution Methods
+    # =========================================================================
+
+    def find_changed_subpath(self, old_path: str, new_path: str) -> tuple:
+        """Find the differing prefix between two paths.
+
+        Compares paths from the END to find the common suffix, then returns
+        the differing initial portions (prefixes). This implements SLEAP's
+        approach to detecting path prefix changes for auto-resolution.
+
+        Args:
+            old_path: Original path from SLP file.
+            new_path: User-selected replacement path on Worker.
+
+        Returns:
+            Tuple of (old_prefix, new_prefix) where:
+                - old_prefix: The initial portion of old_path that differs
+                - new_prefix: The corresponding portion in new_path
+
+        Example:
+            >>> find_changed_subpath(
+            ...     "/Volumes/talmo/project/day1/vid.mp4",
+            ...     "/vast/project/day1/vid.mp4"
+            ... )
+            ("/Volumes/talmo", "/vast")
+        """
+        old_parts = Path(old_path).parts
+        new_parts = Path(new_path).parts
+
+        # Find where paths match from the end (common suffix)
+        common_suffix_len = 0
+        for i in range(1, min(len(old_parts), len(new_parts)) + 1):
+            if old_parts[-i] == new_parts[-i]:
+                common_suffix_len = i
+            else:
+                break
+
+        # Extract prefixes (everything before the common suffix)
+        if common_suffix_len > 0 and common_suffix_len < len(old_parts):
+            # Normal case: both paths have parts before the common suffix
+            old_prefix = str(Path(*old_parts[:-common_suffix_len]))
+            new_prefix = str(Path(*new_parts[:-common_suffix_len]))
+        elif common_suffix_len >= len(old_parts) and common_suffix_len < len(new_parts):
+            # Special case: old path is entirely contained in new path (relative -> absolute)
+            # e.g., old="project/video.mp4", new="/root/vast/project/video.mp4"
+            # The old prefix is empty, new prefix is the extra leading parts
+            old_prefix = ""
+            new_prefix = str(Path(*new_parts[:-common_suffix_len]))
+        else:
+            # No common suffix found, return full paths as prefixes
+            old_prefix = old_path
+            new_prefix = new_path
+
+        return old_prefix, new_prefix
+
+    def compute_prefix_resolution(
+        self,
+        original_path: str,
+        new_path: str,
+        other_missing: list,
+    ) -> dict:
+        """Compute which missing videos would resolve with a prefix replacement.
+
+        When a user manually locates one video, this method computes the prefix
+        change and checks which other missing videos would resolve by applying
+        the same prefix transformation.
+
+        Args:
+            original_path: The original path of the video the user selected.
+            new_path: The new path the user browsed to on the Worker.
+            other_missing: List of other missing video paths from the SLP.
+
+        Returns:
+            Dictionary with:
+                - old_prefix: The detected old prefix to replace
+                - new_prefix: The new prefix to use
+                - would_resolve: List of dicts with 'original' and 'resolved'
+                  paths for videos that would be resolved
+                - would_not_resolve: List of paths that wouldn't resolve
+                  (either different prefix or file doesn't exist)
+
+        Example:
+            >>> compute_prefix_resolution(
+            ...     "/Volumes/talmo/project/day1/vid1.mp4",
+            ...     "/vast/project/day1/vid1.mp4",
+            ...     ["/Volumes/talmo/project/day2/vid2.mp4"]
+            ... )
+            {
+                "old_prefix": "/Volumes/talmo",
+                "new_prefix": "/vast",
+                "would_resolve": [
+                    {"original": "/Volumes/.../vid2.mp4", "resolved": "/vast/.../vid2.mp4"}
+                ],
+                "would_not_resolve": []
+            }
+        """
+        old_prefix, new_prefix = self.find_changed_subpath(original_path, new_path)
+
+        would_resolve = []
+        would_not_resolve = []
+
+        for missing_path in other_missing:
+            # Check if this path shares the same old prefix
+            if old_prefix == "":
+                # Special case: old paths are relative, new paths are absolute
+                # Prepend the new prefix to the missing path
+                candidate = str(Path(new_prefix) / missing_path)
+            elif missing_path.startswith(old_prefix):
+                # Normal case: replace the old prefix with new prefix
+                candidate = missing_path.replace(old_prefix, new_prefix, 1)
+            else:
+                # Different prefix - can't resolve with this transformation
+                would_not_resolve.append(missing_path)
+                continue
+
+            # Check if the transformed path exists on the Worker filesystem
+            if Path(candidate).exists():
+                would_resolve.append({
+                    "original": missing_path,
+                    "resolved": candidate,
+                })
+            else:
+                would_not_resolve.append(missing_path)
+
+        return {
+            "old_prefix": old_prefix,
+            "new_prefix": new_prefix,
+            "would_resolve": would_resolve,
+            "would_not_resolve": would_not_resolve,
         }

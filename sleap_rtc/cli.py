@@ -504,5 +504,93 @@ def browse(room, token, port, no_browser):
         sys.exit(1)
 
 
+@cli.command(name="resolve-paths")
+@click.option(
+    "--room",
+    "-r",
+    type=str,
+    required=True,
+    help="Room ID to connect to (required).",
+)
+@click.option(
+    "--token",
+    "-t",
+    type=str,
+    required=True,
+    help="Room token for authentication (required).",
+)
+@click.option(
+    "--slp",
+    "-s",
+    type=str,
+    required=True,
+    help="Path to SLP file on Worker filesystem (required).",
+)
+@click.option(
+    "--port",
+    "-p",
+    type=int,
+    default=8765,
+    help="Local port for the resolution UI server (default: 8765).",
+)
+@click.option(
+    "--no-browser",
+    is_flag=True,
+    default=False,
+    help="Don't auto-open browser (just print URL).",
+)
+def resolve_paths(room, token, slp, port, no_browser):
+    """Resolve missing video paths in an SLP file on a Worker.
+
+    This command connects to a Worker and checks if the video paths in an SLP
+    file are accessible. If any videos are missing, it launches a web UI that
+    allows you to browse the Worker's filesystem and resolve the paths.
+
+    The resolution process:
+    1. Worker checks if videos in the SLP are accessible
+    2. If all accessible, prints success message
+    3. If videos are missing, launches resolution UI
+    4. In UI, you can browse and locate the correct video files
+    5. Auto-detection finds other videos in the same directory
+    6. Save creates a new SLP with corrected paths
+
+    Examples:
+
+        # Check video paths in an SLP file
+        sleap-rtc resolve-paths --room my-room --token secret123 --slp /mnt/data/project.slp
+
+        # Use a different port
+        sleap-rtc resolve-paths -r my-room -t secret123 -s /mnt/data/project.slp -p 9000
+
+        # Print URL without opening browser
+        sleap-rtc resolve-paths -r my-room -t secret123 -s /mnt/data/project.slp --no-browser
+    """
+    import asyncio
+    from sleap_rtc.rtc_resolve import run_resolve_client
+
+    logger.info(f"Starting video path resolution for: {slp}")
+    logger.info(f"Connecting to room: {room}")
+
+    try:
+        result = asyncio.run(
+            run_resolve_client(
+                room_id=room,
+                token=token,
+                slp_path=slp,
+                port=port,
+                open_browser=not no_browser,
+            )
+        )
+        if result:
+            logger.info(f"Resolution complete: {result}")
+        else:
+            logger.warning("Resolution cancelled or failed")
+    except KeyboardInterrupt:
+        logger.info("Resolution cancelled by user")
+    except Exception as e:
+        logger.error(f"Resolution error: {e}")
+        sys.exit(1)
+
+
 if __name__ == "__main__":
     cli()

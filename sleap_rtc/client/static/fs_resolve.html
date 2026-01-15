@@ -1,0 +1,1626 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SLEAP-RTC Video Path Resolution</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Outfit:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-primary: #0a0a0f;
+            --bg-secondary: #12121a;
+            --bg-tertiary: #1a1a24;
+            --bg-hover: #22222e;
+            --border-color: #2a2a3a;
+            --border-highlight: #3d3d52;
+            --text-primary: #e8e8f0;
+            --text-secondary: #9090a8;
+            --text-muted: #606078;
+            --accent-primary: #6366f1;
+            --accent-secondary: #818cf8;
+            --accent-glow: rgba(99, 102, 241, 0.15);
+            --success: #22c55e;
+            --success-glow: rgba(34, 197, 94, 0.15);
+            --warning: #f59e0b;
+            --warning-glow: rgba(245, 158, 11, 0.15);
+            --error: #ef4444;
+            --error-glow: rgba(239, 68, 68, 0.15);
+            --folder-color: #fbbf24;
+            --file-slp: #a78bfa;
+            --file-video: #38bdf8;
+            --file-model: #f472b6;
+            --file-default: #9090a8;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Outfit', sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            height: 100vh;
+            overflow: hidden;
+            line-height: 1.5;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* Header */
+        .header {
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border-color);
+            padding: 1rem 1.5rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-shrink: 0;
+        }
+
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .logo {
+            font-weight: 600;
+            font-size: 1.25rem;
+            background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .connection-badge {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.375rem 0.75rem;
+            border-radius: 9999px;
+            font-size: 0.8rem;
+            font-weight: 500;
+        }
+
+        .connection-badge.connected {
+            background: var(--success-glow);
+            border: 1px solid rgba(34, 197, 94, 0.3);
+        }
+
+        .connection-badge.connected::before {
+            content: '';
+            width: 8px;
+            height: 8px;
+            background: var(--success);
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+
+        .connection-badge.disconnected {
+            background: var(--error-glow);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+            color: var(--error);
+        }
+
+        .connection-badge.disconnected::before {
+            content: '';
+            width: 8px;
+            height: 8px;
+            background: var(--error);
+            border-radius: 50%;
+        }
+
+        .connection-badge.connecting {
+            background: var(--warning-glow);
+            border: 1px solid rgba(245, 158, 11, 0.3);
+            color: var(--warning);
+        }
+
+        .connection-badge.connecting::before {
+            content: '';
+            width: 8px;
+            height: 8px;
+            background: var(--warning);
+            border-radius: 50%;
+            animation: pulse 1s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .slp-info {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            padding: 0.25rem 0.5rem;
+            background: var(--bg-tertiary);
+            border-radius: 4px;
+            max-width: 400px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        /* Main content */
+        .main-content {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
+        }
+
+        /* Left panel - Video list */
+        .video-panel {
+            width: 350px;
+            min-width: 280px;
+            max-width: 500px;
+            background: var(--bg-secondary);
+            border-right: 1px solid var(--border-color);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .video-panel-header {
+            padding: 1rem;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .video-panel-title {
+            font-weight: 600;
+            font-size: 0.9rem;
+        }
+
+        .video-count {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            padding: 0.25rem 0.5rem;
+            background: var(--bg-tertiary);
+            border-radius: 4px;
+        }
+
+        .video-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: 0.5rem;
+        }
+
+        .video-item {
+            display: flex;
+            align-items: flex-start;
+            gap: 0.75rem;
+            padding: 0.75rem;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: background 0.15s ease;
+            margin-bottom: 0.25rem;
+        }
+
+        .video-item:hover {
+            background: var(--bg-hover);
+        }
+
+        .video-item.selected {
+            background: var(--accent-glow);
+            border: 1px solid rgba(99, 102, 241, 0.3);
+        }
+
+        .video-item.resolved {
+            opacity: 0.7;
+        }
+
+        .video-status {
+            flex-shrink: 0;
+            width: 24px;
+            height: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1rem;
+        }
+
+        .video-status.missing {
+            color: var(--error);
+        }
+
+        .video-status.resolved {
+            color: var(--success);
+        }
+
+        .video-status.auto-resolved {
+            color: var(--warning);
+        }
+
+        .video-info {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .video-filename {
+            font-weight: 500;
+            font-size: 0.85rem;
+            color: var(--text-primary);
+            word-break: break-word;
+        }
+
+        .video-original-path {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.7rem;
+            color: var(--text-muted);
+            margin-top: 0.25rem;
+            word-break: break-all;
+        }
+
+        .video-resolved-path {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.7rem;
+            color: var(--success);
+            margin-top: 0.25rem;
+            word-break: break-all;
+        }
+
+        .video-auto-badge {
+            display: inline-block;
+            font-size: 0.65rem;
+            padding: 0.125rem 0.375rem;
+            background: var(--warning-glow);
+            color: var(--warning);
+            border-radius: 4px;
+            margin-left: 0.5rem;
+        }
+
+        /* Resize handle */
+        .resize-handle {
+            width: 4px;
+            cursor: col-resize;
+            background: transparent;
+            transition: background 0.15s ease;
+        }
+
+        .resize-handle:hover {
+            background: var(--accent-primary);
+        }
+
+        /* Right panel - File browser */
+        .browser-panel {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .browser-header {
+            padding: 1rem;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .browser-title {
+            font-weight: 600;
+            font-size: 0.9rem;
+        }
+
+        .browser-hint {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+        }
+
+        /* Mount points sidebar */
+        .browser-content {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
+        }
+
+        .mount-sidebar {
+            width: 200px;
+            background: var(--bg-tertiary);
+            border-right: 1px solid var(--border-color);
+            overflow-y: auto;
+            padding: 0.5rem;
+        }
+
+        .mount-item {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.5rem 0.75rem;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: background 0.15s ease;
+            font-size: 0.85rem;
+        }
+
+        .mount-item:hover {
+            background: var(--bg-hover);
+        }
+
+        .mount-item.active {
+            background: var(--accent-glow);
+            border: 1px solid rgba(99, 102, 241, 0.3);
+        }
+
+        .mount-icon {
+            width: 16px;
+            height: 16px;
+            color: var(--folder-color);
+        }
+
+        /* File grid */
+        .file-browser {
+            flex: 1;
+            overflow-y: auto;
+            padding: 1rem;
+        }
+
+        .file-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+            gap: 0.75rem;
+        }
+
+        .file-item {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 0.75rem;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: background 0.15s ease;
+            text-align: center;
+        }
+
+        .file-item:hover {
+            background: var(--bg-hover);
+        }
+
+        .file-item.selected {
+            background: var(--accent-glow);
+            border: 1px solid rgba(99, 102, 241, 0.3);
+        }
+
+        .file-icon {
+            width: 40px;
+            height: 40px;
+            margin-bottom: 0.5rem;
+        }
+
+        .file-name {
+            font-size: 0.75rem;
+            word-break: break-word;
+            max-width: 100%;
+        }
+
+        .file-size {
+            font-size: 0.65rem;
+            color: var(--text-muted);
+            margin-top: 0.25rem;
+        }
+
+        /* Breadcrumb */
+        .breadcrumb {
+            display: flex;
+            align-items: center;
+            gap: 0.25rem;
+            padding: 0.75rem 1rem;
+            background: var(--bg-tertiary);
+            border-bottom: 1px solid var(--border-color);
+            font-size: 0.8rem;
+            overflow-x: auto;
+        }
+
+        .breadcrumb-item {
+            color: var(--text-secondary);
+            cursor: pointer;
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            transition: background 0.15s ease;
+            white-space: nowrap;
+        }
+
+        .breadcrumb-item:hover {
+            background: var(--bg-hover);
+            color: var(--text-primary);
+        }
+
+        .breadcrumb-item.current {
+            color: var(--text-primary);
+            font-weight: 500;
+        }
+
+        .breadcrumb-separator {
+            color: var(--text-muted);
+        }
+
+        /* Action bar */
+        .action-bar {
+            background: var(--bg-secondary);
+            border-top: 1px solid var(--border-color);
+            padding: 1rem 1.5rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-shrink: 0;
+        }
+
+        .action-bar-left {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .resolution-status {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+        }
+
+        .resolution-status .count {
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .resolution-status .resolved {
+            color: var(--success);
+        }
+
+        .resolution-status .missing {
+            color: var(--error);
+        }
+
+        .action-bar-right {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .btn {
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+            font-size: 0.85rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.15s ease;
+            border: none;
+            font-family: inherit;
+        }
+
+        .btn-secondary {
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+        }
+
+        .btn-secondary:hover {
+            background: var(--bg-hover);
+            border-color: var(--border-highlight);
+        }
+
+        .btn-primary {
+            background: var(--accent-primary);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: var(--accent-secondary);
+        }
+
+        .btn-primary:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        /* Loading state */
+        .loading {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 3rem;
+            color: var(--text-secondary);
+            gap: 1rem;
+        }
+
+        .spinner {
+            width: 32px;
+            height: 32px;
+            border: 3px solid var(--border-color);
+            border-top-color: var(--accent-primary);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* Empty state */
+        .empty-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 3rem;
+            color: var(--text-secondary);
+            text-align: center;
+        }
+
+        .empty-icon {
+            width: 64px;
+            height: 64px;
+            margin-bottom: 1rem;
+            opacity: 0.5;
+        }
+
+        .empty-title {
+            font-weight: 500;
+            font-size: 1rem;
+            color: var(--text-primary);
+            margin-bottom: 0.5rem;
+        }
+
+        .empty-desc {
+            font-size: 0.85rem;
+        }
+
+        /* Toast */
+        .toast {
+            position: fixed;
+            bottom: 5rem;
+            left: 50%;
+            transform: translateX(-50%) translateY(100px);
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            padding: 0.75rem 1.25rem;
+            border-radius: 8px;
+            font-size: 0.85rem;
+            opacity: 0;
+            transition: all 0.3s ease;
+            z-index: 1000;
+        }
+
+        .toast.show {
+            transform: translateX(-50%) translateY(0);
+            opacity: 1;
+        }
+
+        .toast.success {
+            border-color: rgba(34, 197, 94, 0.3);
+            background: var(--success-glow);
+        }
+
+        .toast.error {
+            border-color: rgba(239, 68, 68, 0.3);
+            background: var(--error-glow);
+        }
+
+        /* Modal */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.7);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+
+        .modal-overlay.show {
+            display: flex;
+        }
+
+        .modal {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 1.5rem;
+            max-width: 500px;
+            width: 90%;
+        }
+
+        .modal-title {
+            font-weight: 600;
+            font-size: 1.1rem;
+            margin-bottom: 0.75rem;
+        }
+
+        .modal-body {
+            font-size: 0.9rem;
+            color: var(--text-secondary);
+            margin-bottom: 1.5rem;
+        }
+
+        .modal-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 0.75rem;
+        }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: var(--bg-primary);
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: var(--border-color);
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--border-highlight);
+        }
+    </style>
+</head>
+<body>
+    <!-- Header -->
+    <header class="header">
+        <div class="header-left">
+            <div class="logo">SLEAP-RTC</div>
+            <div id="connectionBadge" class="connection-badge connecting">
+                <span id="connectionStatus">Connecting...</span>
+            </div>
+            <div id="slpInfo" class="slp-info">Loading SLP info...</div>
+        </div>
+    </header>
+
+    <!-- Main content -->
+    <main class="main-content">
+        <!-- Left panel - Video list -->
+        <aside class="video-panel" id="videoPanel">
+            <div class="video-panel-header">
+                <span class="video-panel-title">Missing Videos</span>
+                <span id="videoCount" class="video-count">0 / 0</span>
+            </div>
+            <div class="video-list" id="videoList">
+                <div class="loading">
+                    <div class="spinner"></div>
+                    Loading video data...
+                </div>
+            </div>
+        </aside>
+
+        <!-- Resize handle -->
+        <div class="resize-handle" id="resizeHandle"></div>
+
+        <!-- Right panel - File browser -->
+        <section class="browser-panel">
+            <div class="browser-header">
+                <span class="browser-title">Locate Video Files</span>
+                <span class="browser-hint">Select a video file to resolve paths. Other videos in the same directory will be auto-detected.</span>
+            </div>
+            <div class="browser-content">
+                <nav class="mount-sidebar" id="mountSidebar">
+                    <div class="loading">
+                        <div class="spinner"></div>
+                    </div>
+                </nav>
+                <div class="file-browser-wrapper" style="flex: 1; display: flex; flex-direction: column; overflow: hidden;">
+                    <div class="breadcrumb" id="breadcrumb"></div>
+                    <div class="file-browser" id="fileBrowser">
+                        <div class="empty-state">
+                            <svg class="empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+                            </svg>
+                            <div class="empty-title">Select a Mount Point</div>
+                            <div class="empty-desc">Choose a location from the sidebar to browse files.</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- Action bar -->
+    <footer class="action-bar">
+        <div class="action-bar-left">
+            <div class="resolution-status">
+                <span class="count resolved" id="resolvedCount">0</span> resolved,
+                <span class="count missing" id="missingCount">0</span> missing
+            </div>
+        </div>
+        <div class="action-bar-right">
+            <button class="btn btn-secondary" onclick="cancelResolution()">Cancel</button>
+            <button class="btn btn-primary" id="saveBtn" onclick="saveResolution()" disabled>Save Corrected SLP</button>
+        </div>
+    </footer>
+
+    <!-- Toast -->
+    <div class="toast" id="toast">
+        <span id="toastMessage"></span>
+    </div>
+
+    <!-- Confirmation Modal -->
+    <div class="modal-overlay" id="confirmModal">
+        <div class="modal">
+            <div class="modal-title" id="modalTitle">Confirm Save</div>
+            <div class="modal-body" id="modalBody">
+                Some videos are still missing. Save anyway?
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+                <button class="btn btn-primary" onclick="confirmSave()">Save Anyway</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Output Directory Modal -->
+    <div class="modal-overlay" id="outputDirModal">
+        <div class="modal" style="max-width: 800px; max-height: 80vh; display: flex; flex-direction: column;">
+            <div class="modal-title">Save Corrected SLP File</div>
+            <div class="modal-body" style="flex: 1; overflow: hidden; display: flex; flex-direction: column; gap: 1rem;">
+                <!-- Filename input -->
+                <div>
+                    <label style="font-size: 0.85rem; color: var(--text-secondary); display: block; margin-bottom: 0.5rem;">Output Filename:</label>
+                    <input type="text" id="outputFilename" style="width: 100%; padding: 0.5rem 0.75rem; background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: 6px; color: var(--text-primary); font-family: 'JetBrains Mono', monospace; font-size: 0.85rem;" />
+                </div>
+
+                <!-- Directory selection -->
+                <div style="flex: 1; display: flex; flex-direction: column; min-height: 0;">
+                    <label style="font-size: 0.85rem; color: var(--text-secondary); display: block; margin-bottom: 0.5rem;">Save to Directory:</label>
+                    <div style="flex: 1; display: flex; border: 1px solid var(--border-color); border-radius: 8px; overflow: hidden; min-height: 250px;">
+                        <!-- Mount sidebar -->
+                        <div id="outputMountSidebar" style="width: 150px; background: var(--bg-tertiary); border-right: 1px solid var(--border-color); overflow-y: auto; flex-shrink: 0;"></div>
+
+                        <!-- Directory browser -->
+                        <div style="flex: 1; display: flex; flex-direction: column; min-width: 0;">
+                            <!-- Breadcrumb -->
+                            <div id="outputBreadcrumb" style="padding: 0.5rem 0.75rem; background: var(--bg-secondary); border-bottom: 1px solid var(--border-color); font-family: 'JetBrains Mono', monospace; font-size: 0.75rem; white-space: nowrap; overflow-x: auto;"></div>
+                            <!-- File list -->
+                            <div id="outputFileBrowser" style="flex: 1; overflow-y: auto; padding: 0.5rem;"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Full output path preview -->
+                <div style="flex-shrink: 0; margin-top: 0.5rem;">
+                    <label style="font-size: 0.85rem; color: var(--text-secondary); display: block; margin-bottom: 0.25rem;">Full Output Path:</label>
+                    <div id="outputFullPath" style="font-family: 'JetBrains Mono', monospace; font-size: 0.8rem; padding: 0.5rem; background: var(--bg-tertiary); border-radius: 4px; word-break: break-all; color: var(--success);"></div>
+                </div>
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" onclick="closeOutputDirModal()">Cancel</button>
+                <button class="btn btn-primary" onclick="confirmOutputDir()">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Prefix Confirmation Modal -->
+    <div class="modal-overlay" id="prefixModal">
+        <div class="modal" style="max-width: 600px;">
+            <div class="modal-title">Apply Path Prefix to Other Videos?</div>
+            <div class="modal-body">
+                <div style="margin-bottom: 1rem;">
+                    <strong>Detected prefix change:</strong>
+                    <div style="font-family: 'JetBrains Mono', monospace; font-size: 0.75rem; margin-top: 0.5rem;">
+                        <div style="color: var(--error); word-break: break-all;" id="prefixOld"></div>
+                        <div style="margin: 0.25rem 0; color: var(--text-muted);">&#8595;</div>
+                        <div style="color: var(--success); word-break: break-all;" id="prefixNew"></div>
+                    </div>
+                </div>
+                <div id="prefixWouldResolve" style="margin-bottom: 1rem;"></div>
+                <div id="prefixWouldNotResolve"></div>
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" onclick="declinePrefixApply()">No, Skip</button>
+                <button class="btn btn-primary" onclick="confirmPrefixApply()">Yes, Apply</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // State
+        let ws = null;
+        let mounts = [];
+        let currentPath = '';
+        let currentEntries = [];
+        let selectedVideoIndex = null;
+        let selectedBrowserFile = null;
+
+        // Video resolution state
+        let slpPath = '';
+        let missingVideos = []; // [{filename, original_path, resolved_path, auto_resolved}]
+        let filenameMap = {}; // {original_path -> resolved_path}
+
+        // Pending output directory for save
+        let pendingOutputDir = '';
+        let pendingOutputFilename = '';
+        let outputDirEntries = [];  // Directory entries for output modal browser
+
+        // Prefix resolution state
+        let pendingPrefixProposal = null;
+
+        // Get token from URL
+        function getToken() {
+            const params = new URLSearchParams(window.location.search);
+            return params.get('token');
+        }
+
+        // Utility functions
+        function formatSize(bytes) {
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+            if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+            return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+        }
+
+        function getFileExtension(filename) {
+            const parts = filename.split('.');
+            return parts.length > 1 ? parts[parts.length - 1].toLowerCase() : '';
+        }
+
+        function getFilename(path) {
+            return path.split('/').pop() || path.split('\\').pop() || path;
+        }
+
+        function getDirectory(path) {
+            const parts = path.split('/');
+            parts.pop();
+            return parts.join('/') || '/';
+        }
+
+        function isVideoFile(filename) {
+            const ext = getFileExtension(filename);
+            return ['mp4', 'avi', 'mov', 'mkv', 'wmv', 'flv', 'webm'].includes(ext);
+        }
+
+        // WebSocket connection
+        function connectWebSocket() {
+            const token = getToken();
+            if (!token) {
+                showToast('Missing authentication token', 'error');
+                return;
+            }
+
+            const wsUrl = `ws://localhost:${window.location.port}/ws?token=${token}`;
+            ws = new WebSocket(wsUrl);
+
+            ws.onopen = () => {
+                updateConnectionStatus('connected', 'Connected');
+                // Request video check data
+                ws.send(JSON.stringify({ type: 'get_video_check' }));
+            };
+
+            ws.onclose = () => {
+                updateConnectionStatus('disconnected', 'Disconnected');
+                setTimeout(connectWebSocket, 3000);
+            };
+
+            ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
+                updateConnectionStatus('disconnected', 'Connection Error');
+            };
+
+            ws.onmessage = (event) => {
+                handleMessage(JSON.parse(event.data));
+            };
+        }
+
+        function updateConnectionStatus(status, text) {
+            const badge = document.getElementById('connectionBadge');
+            const statusText = document.getElementById('connectionStatus');
+            badge.className = 'connection-badge ' + status;
+            statusText.textContent = text;
+        }
+
+        function handleMessage(msg) {
+            switch (msg.type) {
+                case 'video_check_response':
+                    handleVideoCheckResponse(msg.data);
+                    break;
+
+                case 'mounts':
+                    mounts = msg.data;
+                    renderMountSidebar();
+                    break;
+
+                case 'list_response':
+                    currentEntries = msg.data.entries || [];
+                    renderFileBrowser();
+                    // Also update output directory browser if modal is open
+                    if (document.getElementById('outputDirModal').classList.contains('show')) {
+                        outputDirEntries = msg.data.entries || [];
+                        renderOutputFileBrowser();
+                    }
+                    break;
+
+                case 'scan_dir_response':
+                    handleScanDirResponse(msg.data);
+                    break;
+
+                case 'write_slp_ok':
+                    handleWriteSlpOk(msg.data);
+                    break;
+
+                case 'write_slp_error':
+                    handleWriteSlpError(msg.data);
+                    break;
+
+                case 'prefix_proposal':
+                    handlePrefixProposal(msg.data);
+                    break;
+
+                case 'prefix_applied':
+                    // Prefix was applied, auto-select next unresolved video
+                    const nextUnresolved = missingVideos.findIndex(v => v.resolved_path === null);
+                    if (nextUnresolved !== -1) {
+                        selectedVideoIndex = nextUnresolved;
+                        renderVideoList();
+                    }
+                    break;
+
+                case 'error':
+                    showToast(`Error: ${msg.message}`, 'error');
+                    break;
+
+                case 'connection_lost':
+                    updateConnectionStatus('disconnected', 'Worker Disconnected');
+                    showToast('Worker connection lost', 'error');
+                    break;
+            }
+        }
+
+        // Video check response handler
+        function handleVideoCheckResponse(data) {
+            slpPath = data.slp_path || '';
+            document.getElementById('slpInfo').textContent = slpPath ? getFilename(slpPath) : 'Unknown SLP';
+
+            // Initialize missing videos list
+            missingVideos = (data.missing || []).map(v => ({
+                filename: v.filename,
+                original_path: v.original_path,
+                resolved_path: null,
+                auto_resolved: false
+            }));
+
+            renderVideoList();
+            updateResolutionStatus();
+        }
+
+        // Render video list
+        function renderVideoList() {
+            const container = document.getElementById('videoList');
+
+            if (missingVideos.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <svg class="empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                            <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+                            <polyline points="22 4 12 14.01 9 11.01"/>
+                        </svg>
+                        <div class="empty-title">All Videos Accessible</div>
+                        <div class="empty-desc">No missing video paths to resolve.</div>
+                    </div>
+                `;
+                return;
+            }
+
+            container.innerHTML = missingVideos.map((video, index) => {
+                const isResolved = video.resolved_path !== null;
+                const isSelected = selectedVideoIndex === index;
+                const statusClass = isResolved ? (video.auto_resolved ? 'auto-resolved' : 'resolved') : 'missing';
+                const statusIcon = isResolved ? (video.auto_resolved ? '~' : '&#10003;') : '&#10007;';
+
+                return `
+                    <div class="video-item ${isSelected ? 'selected' : ''} ${isResolved ? 'resolved' : ''}"
+                         onclick="selectVideo(${index})">
+                        <div class="video-status ${statusClass}">${statusIcon}</div>
+                        <div class="video-info">
+                            <div class="video-filename">
+                                ${video.filename}
+                                ${video.auto_resolved ? '<span class="video-auto-badge">auto</span>' : ''}
+                            </div>
+                            <div class="video-original-path">${video.original_path}</div>
+                            ${video.resolved_path ? `<div class="video-resolved-path">${video.resolved_path}</div>` : ''}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+            // Update count
+            const resolved = missingVideos.filter(v => v.resolved_path !== null).length;
+            document.getElementById('videoCount').textContent = `${resolved} / ${missingVideos.length}`;
+        }
+
+        function selectVideo(index) {
+            selectedVideoIndex = index;
+            renderVideoList();
+        }
+
+        // Render mount sidebar
+        function renderMountSidebar() {
+            const container = document.getElementById('mountSidebar');
+
+            if (mounts.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state" style="padding: 1rem;">
+                        <div class="empty-desc">No mounts available</div>
+                    </div>
+                `;
+                return;
+            }
+
+            container.innerHTML = mounts.map(mount => {
+                const isActive = currentPath.startsWith(mount.path);
+                return `
+                    <div class="mount-item ${isActive ? 'active' : ''}" onclick="selectMount('${mount.path}')">
+                        <svg class="mount-icon" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/>
+                        </svg>
+                        <span>${mount.label || mount.path}</span>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function selectMount(path) {
+            currentPath = path;
+            selectedBrowserFile = null;
+            requestListDir(path);
+            renderMountSidebar();
+        }
+
+        // Request directory listing
+        function requestListDir(path) {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                document.getElementById('fileBrowser').innerHTML = '<div class="loading"><div class="spinner"></div>Loading...</div>';
+                ws.send(JSON.stringify({
+                    type: 'list_dir',
+                    path: path,
+                    offset: 0
+                }));
+            }
+        }
+
+        // Render file browser
+        function renderFileBrowser() {
+            renderBreadcrumb();
+
+            const container = document.getElementById('fileBrowser');
+
+            if (currentEntries.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <svg class="empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+                        </svg>
+                        <div class="empty-title">Empty Directory</div>
+                        <div class="empty-desc">This directory contains no files.</div>
+                    </div>
+                `;
+                return;
+            }
+
+            const items = currentEntries.map(entry => {
+                const itemPath = currentPath + '/' + entry.name;
+                const isSelected = selectedBrowserFile === itemPath;
+                const ext = getFileExtension(entry.name);
+                const isVideo = isVideoFile(entry.name);
+                const isDir = entry.type === 'directory';
+
+                let iconColor = 'var(--file-default)';
+                if (isDir) iconColor = 'var(--folder-color)';
+                else if (isVideo) iconColor = 'var(--file-video)';
+
+                const iconSvg = isDir
+                    ? `<svg class="file-icon" style="color: ${iconColor}" viewBox="0 0 24 24" fill="currentColor">
+                           <path d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/>
+                       </svg>`
+                    : `<svg class="file-icon" style="color: ${iconColor}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                           <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                           <polyline points="14 2 14 8 20 8"/>
+                           ${isVideo ? '<polygon points="10 9 16 12 10 15"/>' : ''}
+                       </svg>`;
+
+                return `
+                    <div class="file-item ${isSelected ? 'selected' : ''}"
+                         onclick="${isDir ? `navigateTo('${itemPath}')` : `selectBrowserFile('${itemPath}')`}"
+                         ondblclick="${isDir ? `navigateTo('${itemPath}')` : `resolveWithFile('${itemPath}')`}">
+                        ${iconSvg}
+                        <div class="file-name">${entry.name}</div>
+                        <div class="file-size">${isDir ? 'Folder' : formatSize(entry.size || 0)}</div>
+                    </div>
+                `;
+            }).join('');
+
+            container.innerHTML = `<div class="file-grid">${items}</div>`;
+        }
+
+        function renderBreadcrumb() {
+            const container = document.getElementById('breadcrumb');
+            if (!currentPath) {
+                container.innerHTML = '';
+                return;
+            }
+
+            const parts = currentPath.split('/').filter(p => p);
+            let pathAccum = '';
+
+            const crumbs = parts.map((part, i) => {
+                pathAccum += '/' + part;
+                const isLast = i === parts.length - 1;
+                const path = pathAccum;
+                return `
+                    <span class="breadcrumb-item ${isLast ? 'current' : ''}" onclick="navigateTo('${path}')">${part}</span>
+                    ${isLast ? '' : '<span class="breadcrumb-separator">/</span>'}
+                `;
+            }).join('');
+
+            container.innerHTML = crumbs;
+        }
+
+        function navigateTo(path) {
+            currentPath = path;
+            selectedBrowserFile = null;
+            requestListDir(path);
+            renderMountSidebar();
+        }
+
+        function selectBrowserFile(path) {
+            selectedBrowserFile = path;
+            renderFileBrowser();
+        }
+
+        // Resolve video with selected file
+        function resolveWithFile(filePath) {
+            if (selectedVideoIndex === null || selectedVideoIndex >= missingVideos.length) {
+                showToast('Select a missing video first', 'error');
+                return;
+            }
+
+            const video = missingVideos[selectedVideoIndex];
+            video.resolved_path = filePath;
+            video.auto_resolved = false;
+            filenameMap[video.original_path] = filePath;
+
+            // Collect other missing video paths for prefix resolution
+            const otherMissing = missingVideos
+                .filter(v => v.resolved_path === null)
+                .map(v => v.original_path);
+
+            // Request prefix-based resolution for other missing videos
+            if (otherMissing.length > 0 && ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                    type: 'resolve_with_prefix',
+                    original_path: video.original_path,
+                    new_path: filePath,
+                    other_missing: otherMissing
+                }));
+            }
+
+            renderVideoList();
+            updateResolutionStatus();
+
+            // If no other missing videos, auto-select next (there won't be one)
+            if (otherMissing.length === 0) {
+                const nextUnresolved = missingVideos.findIndex(v => v.resolved_path === null);
+                if (nextUnresolved !== -1) {
+                    selectedVideoIndex = nextUnresolved;
+                    renderVideoList();
+                }
+            }
+            // Otherwise, wait for prefix_proposal response before selecting next
+        }
+
+        // Handle directory scan response (legacy, kept for compatibility)
+        function handleScanDirResponse(data) {
+            const found = data.found || {};
+            let autoResolvedCount = 0;
+
+            for (const video of missingVideos) {
+                if (video.resolved_path === null && found[video.filename]) {
+                    video.resolved_path = found[video.filename];
+                    video.auto_resolved = true;
+                    filenameMap[video.original_path] = found[video.filename];
+                    autoResolvedCount++;
+                }
+            }
+
+            if (autoResolvedCount > 0) {
+                showToast(`Auto-resolved ${autoResolvedCount} video(s)`, 'success');
+                renderVideoList();
+                updateResolutionStatus();
+            }
+        }
+
+        // Handle prefix proposal from Worker
+        function handlePrefixProposal(data) {
+            pendingPrefixProposal = data;
+
+            // If no videos would resolve, skip confirmation
+            if (!data.would_resolve || data.would_resolve.length === 0) {
+                // No prefix pattern found - auto-select next unresolved
+                const nextUnresolved = missingVideos.findIndex(v => v.resolved_path === null);
+                if (nextUnresolved !== -1) {
+                    selectedVideoIndex = nextUnresolved;
+                    renderVideoList();
+                }
+                return;
+            }
+
+            showPrefixConfirmation(data);
+        }
+
+        // Show prefix confirmation dialog
+        function showPrefixConfirmation(data) {
+            document.getElementById('prefixOld').textContent = data.old_prefix;
+            document.getElementById('prefixNew').textContent = data.new_prefix;
+
+            // Show videos that would resolve
+            const wouldResolveDiv = document.getElementById('prefixWouldResolve');
+            if (data.would_resolve && data.would_resolve.length > 0) {
+                wouldResolveDiv.innerHTML = `
+                    <strong style="color: var(--success);">${data.would_resolve.length} video(s) would be resolved:</strong>
+                    <ul style="font-family: 'JetBrains Mono', monospace; font-size: 0.7rem; margin-top: 0.5rem; padding-left: 1.5rem; max-height: 120px; overflow-y: auto;">
+                        ${data.would_resolve.map(v => `<li style="margin-bottom: 0.25rem;">${getFilename(v.resolved)}</li>`).join('')}
+                    </ul>
+                `;
+            } else {
+                wouldResolveDiv.innerHTML = '';
+            }
+
+            // Show videos that would not resolve
+            const wouldNotResolveDiv = document.getElementById('prefixWouldNotResolve');
+            if (data.would_not_resolve && data.would_not_resolve.length > 0) {
+                wouldNotResolveDiv.innerHTML = `
+                    <strong style="color: var(--warning);">${data.would_not_resolve.length} video(s) would NOT be resolved:</strong>
+                    <ul style="font-family: 'JetBrains Mono', monospace; font-size: 0.7rem; margin-top: 0.5rem; padding-left: 1.5rem; max-height: 80px; overflow-y: auto; color: var(--text-muted);">
+                        ${data.would_not_resolve.map(v => `<li style="margin-bottom: 0.25rem;">${getFilename(v)}</li>`).join('')}
+                    </ul>
+                `;
+            } else {
+                wouldNotResolveDiv.innerHTML = '';
+            }
+
+            document.getElementById('prefixModal').classList.add('show');
+        }
+
+        // User confirms prefix application
+        function confirmPrefixApply() {
+            document.getElementById('prefixModal').classList.remove('show');
+
+            if (pendingPrefixProposal && pendingPrefixProposal.would_resolve) {
+                // Apply all resolutions locally
+                let autoResolvedCount = 0;
+                for (const item of pendingPrefixProposal.would_resolve) {
+                    const video = missingVideos.find(v => v.original_path === item.original);
+                    if (video && video.resolved_path === null) {
+                        video.resolved_path = item.resolved;
+                        video.auto_resolved = true;
+                        filenameMap[video.original_path] = item.resolved;
+                        autoResolvedCount++;
+                    }
+                }
+
+                if (autoResolvedCount > 0) {
+                    showToast(`Applied prefix to ${autoResolvedCount} video(s)`, 'success');
+                    renderVideoList();
+                    updateResolutionStatus();
+                }
+            }
+
+            // Send confirmation to worker (for logging/tracking)
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                    type: 'apply_prefix',
+                    confirmed: true
+                }));
+            }
+
+            pendingPrefixProposal = null;
+
+            // Auto-select next unresolved video
+            const nextUnresolved = missingVideos.findIndex(v => v.resolved_path === null);
+            if (nextUnresolved !== -1) {
+                selectedVideoIndex = nextUnresolved;
+                renderVideoList();
+            }
+        }
+
+        // User declines prefix application
+        function declinePrefixApply() {
+            document.getElementById('prefixModal').classList.remove('show');
+
+            // Send decline to worker (for logging/tracking)
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                    type: 'apply_prefix',
+                    confirmed: false
+                }));
+            }
+
+            pendingPrefixProposal = null;
+
+            // Auto-select next unresolved video
+            const nextUnresolved = missingVideos.findIndex(v => v.resolved_path === null);
+            if (nextUnresolved !== -1) {
+                selectedVideoIndex = nextUnresolved;
+                renderVideoList();
+            }
+        }
+
+        // Update resolution status
+        function updateResolutionStatus() {
+            const resolved = missingVideos.filter(v => v.resolved_path !== null).length;
+            const missing = missingVideos.length - resolved;
+
+            document.getElementById('resolvedCount').textContent = resolved;
+            document.getElementById('missingCount').textContent = missing;
+
+            // Enable save button if at least one is resolved
+            document.getElementById('saveBtn').disabled = resolved === 0;
+        }
+
+        // Save resolution
+        function saveResolution() {
+            const resolved = missingVideos.filter(v => v.resolved_path !== null).length;
+            const missing = missingVideos.length - resolved;
+
+            if (missing > 0) {
+                document.getElementById('modalTitle').textContent = 'Unresolved Videos';
+                document.getElementById('modalBody').textContent =
+                    `${missing} video(s) are still missing. The saved SLP file will have incomplete video paths. Continue anyway?`;
+                document.getElementById('confirmModal').classList.add('show');
+            } else {
+                promptOutputDir();
+            }
+        }
+
+        function closeModal() {
+            document.getElementById('confirmModal').classList.remove('show');
+        }
+
+        function confirmSave() {
+            closeModal();
+            promptOutputDir();
+        }
+
+        function promptOutputDir() {
+            // Use directory of original SLP as default output
+            pendingOutputDir = getDirectory(slpPath) || currentPath || (mounts[0] ? mounts[0].path : '');
+
+            // Generate default filename with resolved prefix
+            pendingOutputFilename = generateDefaultFilename(slpPath);
+            document.getElementById('outputFilename').value = pendingOutputFilename;
+
+            // Set up event listener for filename changes
+            const filenameInput = document.getElementById('outputFilename');
+            filenameInput.oninput = function() {
+                pendingOutputFilename = this.value;
+                updateOutputFullPath();
+            };
+
+            // Initialize the output directory browser
+            renderOutputMounts();
+            requestOutputDirList(pendingOutputDir);
+
+            updateOutputFullPath();
+            document.getElementById('outputDirModal').classList.add('show');
+        }
+
+        function generateDefaultFilename(slpPath) {
+            const originalFilename = getFilename(slpPath);
+            const now = new Date();
+            const dateStr = now.getFullYear().toString() +
+                           (now.getMonth() + 1).toString().padStart(2, '0') +
+                           now.getDate().toString().padStart(2, '0');
+
+            // Handle .pkg.slp extension
+            let stem = originalFilename;
+            let ext = '.slp';
+            if (stem.endsWith('.pkg.slp')) {
+                stem = stem.slice(0, -8);
+                ext = '.pkg.slp';
+            } else if (stem.endsWith('.slp')) {
+                stem = stem.slice(0, -4);
+            }
+
+            return `resolved_${dateStr}_${stem}${ext}`;
+        }
+
+        function updateOutputFullPath() {
+            const fullPath = pendingOutputDir + '/' + pendingOutputFilename;
+            document.getElementById('outputFullPath').textContent = fullPath;
+        }
+
+        function renderOutputMounts() {
+            const container = document.getElementById('outputMountSidebar');
+            if (mounts.length === 0) {
+                container.innerHTML = '<div style="padding: 1rem; color: var(--text-muted); font-size: 0.8rem;">No mounts</div>';
+                return;
+            }
+
+            container.innerHTML = mounts.map(mount => {
+                const isActive = pendingOutputDir.startsWith(mount.path);
+                return `
+                    <div class="mount-item ${isActive ? 'active' : ''}"
+                         style="padding: 0.5rem 0.75rem; cursor: pointer; border-bottom: 1px solid var(--border-color); font-size: 0.8rem; ${isActive ? 'background: var(--accent-glow); border-left: 2px solid var(--accent-primary);' : ''}"
+                         onclick="navigateOutputDir('${mount.path}')">
+                        <div style="font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${mount.label}</div>
+                        <div style="font-size: 0.7rem; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${mount.path}</div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function renderOutputBreadcrumb() {
+            const container = document.getElementById('outputBreadcrumb');
+            if (!pendingOutputDir) {
+                container.innerHTML = '';
+                return;
+            }
+
+            const parts = pendingOutputDir.split('/').filter(p => p);
+            let pathAccum = '';
+
+            const crumbs = parts.map((part, i) => {
+                pathAccum += '/' + part;
+                const isLast = i === parts.length - 1;
+                const path = pathAccum;
+                return `
+                    <span style="cursor: pointer; ${isLast ? 'color: var(--text-primary);' : 'color: var(--text-muted);'}"
+                          onclick="navigateOutputDir('${path}')">${part}</span>
+                    ${isLast ? '' : '<span style="color: var(--text-muted); margin: 0 0.25rem;">/</span>'}
+                `;
+            }).join('');
+
+            container.innerHTML = crumbs;
+        }
+
+        function renderOutputFileBrowser() {
+            renderOutputBreadcrumb();
+            const container = document.getElementById('outputFileBrowser');
+
+            // Filter to show only directories
+            const directories = outputDirEntries.filter(e => e.type === 'directory');
+
+            if (directories.length === 0) {
+                container.innerHTML = `
+                    <div style="padding: 2rem; text-align: center; color: var(--text-muted);">
+                        <div style="font-size: 0.85rem;">No subdirectories</div>
+                        <div style="font-size: 0.75rem; margin-top: 0.25rem;">Save to current directory</div>
+                    </div>
+                `;
+                return;
+            }
+
+            const items = directories.map(entry => {
+                const itemPath = pendingOutputDir + '/' + entry.name;
+                return `
+                    <div style="display: flex; align-items: center; padding: 0.5rem; cursor: pointer; border-radius: 4px; gap: 0.5rem;"
+                         onmouseover="this.style.background='var(--bg-hover)'"
+                         onmouseout="this.style.background='transparent'"
+                         onclick="navigateOutputDir('${itemPath}')">
+                        <svg style="width: 16px; height: 16px; color: var(--folder-color); flex-shrink: 0;" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/>
+                        </svg>
+                        <span style="font-size: 0.85rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${entry.name}</span>
+                    </div>
+                `;
+            }).join('');
+
+            container.innerHTML = items;
+        }
+
+        function navigateOutputDir(path) {
+            pendingOutputDir = path;
+            requestOutputDirList(path);
+            renderOutputMounts();
+            updateOutputFullPath();
+        }
+
+        function requestOutputDirList(path) {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                    type: 'list_dir',
+                    path: path,
+                    offset: 0
+                }));
+            }
+        }
+
+        function closeOutputDirModal() {
+            document.getElementById('outputDirModal').classList.remove('show');
+        }
+
+        function confirmOutputDir() {
+            closeOutputDirModal();
+
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                    type: 'write_slp',
+                    slp_path: slpPath,
+                    output_dir: pendingOutputDir,
+                    output_filename: pendingOutputFilename,
+                    filename_map: filenameMap
+                }));
+                showToast('Saving corrected SLP file...', 'success');
+            }
+        }
+
+        function handleWriteSlpOk(data) {
+            showToast(`Saved to: ${getFilename(data.output_path)}`, 'success');
+
+            // Show success modal or close window
+            document.getElementById('modalTitle').textContent = 'Success!';
+            document.getElementById('modalBody').innerHTML = `
+                Corrected SLP file saved to:<br>
+                <code style="font-family: 'JetBrains Mono', monospace; font-size: 0.8rem; word-break: break-all;">${data.output_path}</code>
+                <br><br>
+                ${data.videos_updated} video path(s) updated.
+            `;
+            document.querySelector('#confirmModal .modal-actions').innerHTML = `
+                <button class="btn btn-primary" onclick="closeModal()">Done</button>
+            `;
+            document.getElementById('confirmModal').classList.add('show');
+        }
+
+        function handleWriteSlpError(data) {
+            showToast(`Error: ${data.error}`, 'error');
+        }
+
+        function cancelResolution() {
+            if (confirm('Cancel video path resolution? No changes will be saved.')) {
+                window.close();
+            }
+        }
+
+        function showToast(message, type = '') {
+            const toast = document.getElementById('toast');
+            toast.className = 'toast' + (type ? ' ' + type : '');
+            document.getElementById('toastMessage').textContent = message;
+            toast.classList.add('show');
+
+            setTimeout(() => {
+                toast.classList.remove('show');
+            }, 3000);
+        }
+
+        // Panel resize
+        let isResizing = false;
+        let startX = 0;
+        let startWidth = 0;
+
+        document.getElementById('resizeHandle').addEventListener('mousedown', (e) => {
+            isResizing = true;
+            startX = e.clientX;
+            startWidth = document.getElementById('videoPanel').offsetWidth;
+            document.body.style.cursor = 'col-resize';
+            document.body.style.userSelect = 'none';
+        });
+
+        document.addEventListener('mousemove', (e) => {
+            if (!isResizing) return;
+            const diff = e.clientX - startX;
+            const newWidth = Math.min(Math.max(startWidth + diff, 280), 500);
+            document.getElementById('videoPanel').style.width = newWidth + 'px';
+        });
+
+        document.addEventListener('mouseup', () => {
+            isResizing = false;
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
+        });
+
+        // Initialize
+        connectWebSocket();
+    </script>
+</body>
+</html>

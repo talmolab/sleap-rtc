@@ -264,6 +264,107 @@ MSG_USE_WORKER_PATH = "USE_WORKER_PATH"
 MSG_WORKER_PATH_OK = "WORKER_PATH_OK"
 MSG_WORKER_PATH_ERROR = "WORKER_PATH_ERROR"
 
+# =============================================================================
+# SLP Video Resolution Messages
+# =============================================================================
+#
+# These messages enable automatic detection and resolution of missing video
+# paths in SLP files. When a Worker loads an SLP file, it checks if the video
+# paths are accessible. If not, the Client can use these messages to resolve
+# the paths interactively.
+#
+# Message Flows:
+#
+# 1. Check Video Accessibility (triggered after WORKER_PATH_OK for .slp files):
+#    Worker → Client: FS_CHECK_VIDEOS_RESPONSE::{json}
+#    Response: {
+#      "slp_path": "/mnt/vast/project/labels.slp",
+#      "total_videos": 5,
+#      "missing": [
+#        {"filename": "video1.mp4", "original_path": "/Users/.../video1.mp4"},
+#        {"filename": "video2.mp4", "original_path": "/Users/.../video2.mp4"}
+#      ],
+#      "accessible": 3
+#    }
+#
+# 2. Scan Directory for Filenames (SLP Viewer style resolution):
+#    Client → Worker: FS_SCAN_DIR::{json}
+#    Request: {"directory": "/mnt/vast/project/", "filenames": ["video2.mp4", "video3.mp4"]}
+#    Worker → Client: FS_SCAN_DIR_RESPONSE::{json}
+#    Response: {
+#      "directory": "/mnt/vast/project/",
+#      "found": {"video2.mp4": "/mnt/vast/project/video2.mp4", "video3.mp4": null}
+#    }
+#
+# 3. Write Corrected SLP File:
+#    Client → Worker: FS_WRITE_SLP::{json}
+#    Request: {
+#      "slp_path": "/mnt/vast/project/labels.slp",
+#      "output_dir": "/mnt/vast/project/",
+#      "filename_map": {"/old/video1.mp4": "/new/video1.mp4", ...}
+#    }
+#    Worker → Client: FS_WRITE_SLP_OK::{json}
+#    Response: {"output_path": "/mnt/.../resolved_20260113_labels.slp", "videos_updated": 2}
+#    Or on error:
+#    Worker → Client: FS_WRITE_SLP_ERROR::{json}
+#    Response: {"error": "Permission denied writing to /mnt/vast/project/"}
+#
+
+# Video accessibility check (Worker sends after loading SLP)
+MSG_FS_CHECK_VIDEOS_RESPONSE = "FS_CHECK_VIDEOS_RESPONSE"
+
+# Directory scanning for filenames (SLP Viewer style)
+MSG_FS_SCAN_DIR = "FS_SCAN_DIR"
+MSG_FS_SCAN_DIR_RESPONSE = "FS_SCAN_DIR_RESPONSE"
+
+# SLP file writing with corrected video paths
+MSG_FS_WRITE_SLP = "FS_WRITE_SLP"
+MSG_FS_WRITE_SLP_OK = "FS_WRITE_SLP_OK"
+MSG_FS_WRITE_SLP_ERROR = "FS_WRITE_SLP_ERROR"
+
+# =============================================================================
+# Prefix-Based Video Path Resolution Messages
+# =============================================================================
+#
+# These messages implement SLEAP-style prefix replacement for resolving missing
+# video paths. When a user manually locates one video, the system computes the
+# prefix change and proposes applying it to all other missing videos.
+#
+# Message Flow:
+#
+# 1. User selects a replacement path for one missing video
+#    Client → Worker: FS_RESOLVE_WITH_PREFIX::{json}
+#    Request: {
+#      "original_path": "/Volumes/talmo/project/day1/vid1.mp4",
+#      "new_path": "/vast/project/day1/vid1.mp4",
+#      "other_missing": ["/Volumes/talmo/project/day2/vid2.mp4", ...]
+#    }
+#
+# 2. Worker computes prefix and returns proposal
+#    Worker → Client: FS_PREFIX_PROPOSAL::{json}
+#    Response: {
+#      "old_prefix": "/Volumes/talmo",
+#      "new_prefix": "/vast",
+#      "would_resolve": [
+#        {"original": "/Volumes/talmo/project/day2/vid2.mp4",
+#         "resolved": "/vast/project/day2/vid2.mp4"}
+#      ],
+#      "would_not_resolve": ["/Volumes/talmo/other/vid3.mp4"]
+#    }
+#
+# 3. User confirms the prefix change
+#    Client → Worker: FS_APPLY_PREFIX::{json}
+#    Request: {"confirmed": true}
+#    Worker → Client: FS_PREFIX_APPLIED::{json}
+#    Response: {"success": true}
+#
+
+# Prefix-based resolution messages
+MSG_FS_RESOLVE_WITH_PREFIX = "FS_RESOLVE_WITH_PREFIX"
+MSG_FS_PREFIX_PROPOSAL = "FS_PREFIX_PROPOSAL"
+MSG_FS_APPLY_PREFIX = "FS_APPLY_PREFIX"
+MSG_FS_PREFIX_APPLIED = "FS_PREFIX_APPLIED"
+
 # Message separators
 MSG_SEPARATOR = "::"
 

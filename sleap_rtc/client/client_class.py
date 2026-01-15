@@ -34,6 +34,10 @@ from sleap_rtc.protocol import (
     MSG_FS_GET_MOUNTS,
     MSG_FS_MOUNTS_RESPONSE,
     MSG_FS_ERROR,
+    MSG_FS_CHECK_VIDEOS_RESPONSE,
+    MSG_FS_SCAN_DIR_RESPONSE,
+    MSG_FS_WRITE_SLP_OK,
+    MSG_FS_WRITE_SLP_ERROR,
     MSG_SEPARATOR,
     MSG_USE_WORKER_PATH,
     MSG_WORKER_PATH_OK,
@@ -91,6 +95,10 @@ class RTCClient:
         self.peer_list_queue = asyncio.Queue()  # For peer_list responses
         self.job_response_queues = {}  # job_id -> asyncio.Queue for job responses
         self.fs_response_queue = asyncio.Queue()  # For FS_* responses via data channel
+
+        # Video resolution UI callback and data
+        self.on_missing_videos_detected = None  # Callback(missing_videos_data) to launch UI
+        self.pending_video_check_data = None  # Store FS_CHECK_VIDEOS_RESPONSE data
 
     def parse_session_string(self, session_string: str):
         prefix = "sleap-session:"
@@ -699,6 +707,172 @@ class RTCClient:
             logging.warning("USE_WORKER_PATH timed out")
             return {"success": False, "error": "Worker path validation timed out"}
 
+    async def _handle_video_resolution(
+        self, slp_path: str, timeout: float = 30.0
+    ) -> str:
+        """Handle video accessibility check and resolution for SLP files.
+
+        After WORKER_PATH_OK, the Worker checks video accessibility and sends
+        FS_CHECK_VIDEOS_RESPONSE. If videos are missing, this launches the
+        resolution UI and waits for the user to resolve paths.
+
+        Args:
+            slp_path: Path to SLP file on Worker filesystem.
+            timeout: Timeout for video check response.
+
+        Returns:
+            The final SLP path to use (original or corrected), or None if cancelled.
+        """
+        logging.info(f"Waiting for video accessibility check for: {slp_path}")
+
+        try:
+            # Wait for FS_CHECK_VIDEOS_RESPONSE from Worker
+            response = await asyncio.wait_for(
+                self.fs_response_queue.get(),
+                timeout=timeout,
+            )
+
+            # Check if this is a video check response
+            if not response.startswith(f"{MSG_FS_CHECK_VIDEOS_RESPONSE}{MSG_SEPARATOR}"):
+                logging.warning(f"Expected video check response, got: {response[:50]}")
+                # Put it back and proceed with original path
+                await self.fs_response_queue.put(response)
+                return slp_path
+
+            # Parse the video check response
+            json_str = response.split(MSG_SEPARATOR, 1)[1]
+            video_data = json.loads(json_str)
+            missing = video_data.get("missing", [])
+            total_videos = video_data.get("total_videos", 0)
+            accessible = video_data.get("accessible", 0)
+
+            if not missing:
+                logging.info(f"All {total_videos} videos are accessible")
+                print(f"\nAll {total_videos} video(s) are accessible on Worker.")
+                return slp_path
+
+            # Videos are missing - launch resolution UI
+            print(f"\nFound {len(missing)} missing video(s) out of {total_videos}:")
+            for v in missing[:5]:
+                print(f"  - {v.get('filename')}")
+            if len(missing) > 5:
+                print(f"  ... and {len(missing) - 5} more")
+
+            print("\nLaunching video path resolution UI...")
+
+            # Create and start resolution server
+            from sleap_rtc.client.fs_viewer_server import FSViewerServer
+
+            viewer_server = FSViewerServer(
+                send_to_worker=lambda msg: self.data_channel.send(msg),
+            )
+            viewer_server.set_video_check_data(video_data)
+
+            # Track resolution completion
+            resolution_complete = asyncio.Event()
+            resolved_slp_path = slp_path
+
+            # Register callback for resolution completion
+            async def on_write_slp_response(message: str):
+                nonlocal resolved_slp_path
+                if message.startswith("FS_WRITE_SLP_OK::"):
+                    json_str = message.split("::", 1)[1]
+                    data = json.loads(json_str)
+                    resolved_slp_path = data.get("output_path", slp_path)
+                    logging.info(f"Resolution complete, new SLP: {resolved_slp_path}")
+                    resolution_complete.set()
+                elif message.startswith("FS_WRITE_SLP_ERROR::"):
+                    logging.error(f"SLP write failed: {message}")
+                    # Keep original path
+
+            # Hook into worker response handling
+            original_handler = viewer_server.on_worker_response
+            async def wrapped_handler(message: str):
+                if original_handler:
+                    original_handler(message)
+                await on_write_slp_response(message)
+            viewer_server.on_worker_response = wrapped_handler
+
+            try:
+                # Start server
+                url = await viewer_server.start(port=8765, open_browser=False)
+                resolve_url = url.replace("/?", "/resolve?")
+
+                print(f"\nResolution UI: {resolve_url}")
+                print("Press Ctrl+C to skip video resolution.\n")
+
+                # Open browser
+                import webbrowser
+                webbrowser.open(resolve_url)
+
+                # Forward FS_* messages to viewer server while waiting
+                async def forward_fs_messages():
+                    while not resolution_complete.is_set():
+                        try:
+                            msg = await asyncio.wait_for(
+                                self.fs_response_queue.get(),
+                                timeout=1.0,
+                            )
+                            if msg.startswith("FS_"):
+                                await viewer_server.handle_worker_response(msg)
+                                await on_write_slp_response(msg)
+                        except asyncio.TimeoutError:
+                            pass
+
+                forward_task = asyncio.create_task(forward_fs_messages())
+
+                # Wait for resolution or timeout (10 minutes)
+                try:
+                    await asyncio.wait_for(resolution_complete.wait(), timeout=600.0)
+                    print(f"\nResolution complete. Using: {resolved_slp_path}")
+
+                    # If a new SLP file was created, tell the Worker to use it
+                    if resolved_slp_path != slp_path:
+                        logging.info(f"Updating Worker path to resolved SLP: {resolved_slp_path}")
+                        self.data_channel.send(f"{MSG_USE_WORKER_PATH}{MSG_SEPARATOR}{resolved_slp_path}")
+
+                        # Wait for Worker to acknowledge the new path
+                        try:
+                            response = await asyncio.wait_for(
+                                self.fs_response_queue.get(),
+                                timeout=10.0,
+                            )
+                            if response.startswith(f"{MSG_WORKER_PATH_OK}{MSG_SEPARATOR}"):
+                                logging.info("Worker accepted resolved SLP path")
+                            elif response.startswith(f"{MSG_WORKER_PATH_ERROR}{MSG_SEPARATOR}"):
+                                error = response.split(MSG_SEPARATOR, 1)[1] if MSG_SEPARATOR in response else "Unknown error"
+                                logging.error(f"Worker rejected resolved path: {error}")
+                                print(f"\nWarning: Worker rejected resolved path: {error}")
+                                print("Continuing with original SLP path.")
+                                resolved_slp_path = slp_path
+                            else:
+                                # Not the expected response, put it back
+                                await self.fs_response_queue.put(response)
+                        except asyncio.TimeoutError:
+                            logging.warning("Timeout waiting for Worker to accept resolved path")
+                            print("\nWarning: Worker did not respond to path update.")
+
+                except asyncio.TimeoutError:
+                    print("\nResolution timed out. Using original SLP path.")
+                finally:
+                    forward_task.cancel()
+
+            finally:
+                await viewer_server.stop()
+
+            return resolved_slp_path
+
+        except asyncio.TimeoutError:
+            logging.warning("Video check timed out, proceeding with original path")
+            print("\nVideo accessibility check timed out. Proceeding with original path.")
+            return slp_path
+        except json.JSONDecodeError as e:
+            logging.error(f"Failed to parse video check response: {e}")
+            return slp_path
+        except Exception as e:
+            logging.error(f"Video resolution error: {e}")
+            return slp_path
+
     async def send_client_file(self, file_path: str = None, output_dir: str = ""):
         """Handles direct, one-way file transfer from client to be sent to worker peer.
 
@@ -799,7 +973,17 @@ class RTCClient:
             result = await self._send_use_worker_path(resolved_path)
 
             if result.get("success"):
-                logging.info(f"Worker accepted path: {result.get('path')}")
+                accepted_path = result.get('path', resolved_path)
+                logging.info(f"Worker accepted path: {accepted_path}")
+
+                # For SLP files, wait for video check response
+                if accepted_path.lower().endswith('.slp'):
+                    final_path = await self._handle_video_resolution(accepted_path)
+                    if final_path is None:
+                        logging.info("Video resolution cancelled or failed")
+                        return
+                    accepted_path = final_path
+
                 # Send package type and output directory
                 self.data_channel.send("PACKAGE_TYPE::train")
 
@@ -850,6 +1034,24 @@ class RTCClient:
             # Handle filesystem browser responses (FS_*)
             if message.startswith("FS_"):
                 logging.info(f"Received FS response: {message[:50]}...")
+
+                # Special handling for video accessibility check response
+                if message.startswith(f"{MSG_FS_CHECK_VIDEOS_RESPONSE}{MSG_SEPARATOR}"):
+                    try:
+                        json_str = message.split(MSG_SEPARATOR, 1)[1]
+                        video_data = json.loads(json_str)
+                        missing = video_data.get("missing", [])
+                        if missing:
+                            logging.info(f"Video check found {len(missing)} missing video(s)")
+                            self.pending_video_check_data = video_data
+                            # Trigger callback to launch resolution UI if registered
+                            if self.on_missing_videos_detected:
+                                await self.on_missing_videos_detected(video_data)
+                        else:
+                            logging.info("All videos accessible, no resolution needed")
+                    except (json.JSONDecodeError, IndexError) as e:
+                        logging.error(f"Failed to parse video check response: {e}")
+
                 await self.fs_response_queue.put(message)
                 return
 
