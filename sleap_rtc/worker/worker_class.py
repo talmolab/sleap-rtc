@@ -1837,22 +1837,24 @@ class RTCWorkerClient:
         # Check video accessibility
         result = self.file_manager.check_video_accessibility(self.worker_input_path)
 
-        # Only send response if there are missing videos
-        if result.get("missing"):
-            import json
+        import json
 
+        # Always send a response so the client knows the check completed
+        if result.get("missing"):
             logging.info(
                 f"SLP has {len(result['missing'])} missing video(s), "
                 f"{result.get('accessible', 0)} accessible, "
                 f"{result.get('embedded', 0)} embedded"
             )
-            return f"{MSG_FS_CHECK_VIDEOS_RESPONSE}{MSG_SEPARATOR}{json.dumps(result)}"
-
-        # All videos accessible (or error occurred)
-        if result.get("error"):
+        elif result.get("error"):
             logging.warning(f"Error checking video accessibility: {result['error']}")
+        else:
+            logging.info(
+                f"All videos accessible: {result.get('accessible', 0)} accessible, "
+                f"{result.get('embedded', 0)} embedded"
+            )
 
-        return None
+        return f"{MSG_FS_CHECK_VIDEOS_RESPONSE}{MSG_SEPARATOR}{json.dumps(result)}"
 
     async def _process_worker_input_path(self, channel):
         """Process a job from a worker input path (no file transfer).
