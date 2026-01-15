@@ -242,6 +242,24 @@ class FSViewerServer:
                 })
                 self.send_to_worker(f"FS_WRITE_SLP::{request_payload}")
 
+            elif msg_type == "resolve_with_prefix":
+                # Prefix-based resolution for missing videos (SLEAP-style)
+                original_path = msg.get("original_path", "")
+                new_path = msg.get("new_path", "")
+                other_missing = msg.get("other_missing", [])
+                request_payload = json.dumps({
+                    "original_path": original_path,
+                    "new_path": new_path,
+                    "other_missing": other_missing
+                })
+                self.send_to_worker(f"FS_RESOLVE_WITH_PREFIX::{request_payload}")
+
+            elif msg_type == "apply_prefix":
+                # User confirmed prefix application
+                confirmed = msg.get("confirmed", True)
+                request_payload = json.dumps({"confirmed": confirmed})
+                self.send_to_worker(f"FS_APPLY_PREFIX::{request_payload}")
+
             elif msg_type == "get_video_check":
                 # Request video check data (for resolution UI initial load)
                 # The UI can request the pending video check data
@@ -381,6 +399,24 @@ class FSViewerServer:
                 data = json.loads(json_str)
                 await self._broadcast({
                     "type": "write_slp_error",
+                    "data": data,
+                })
+
+            elif message.startswith("FS_PREFIX_PROPOSAL::"):
+                # Broadcast prefix resolution proposal
+                json_str = message.split("::", 1)[1]
+                data = json.loads(json_str)
+                await self._broadcast({
+                    "type": "prefix_proposal",
+                    "data": data,
+                })
+
+            elif message.startswith("FS_PREFIX_APPLIED::"):
+                # Broadcast prefix application confirmation
+                json_str = message.split("::", 1)[1]
+                data = json.loads(json_str)
+                await self._broadcast({
+                    "type": "prefix_applied",
                     "data": data,
                 })
 

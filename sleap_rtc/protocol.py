@@ -322,6 +322,49 @@ MSG_FS_WRITE_SLP = "FS_WRITE_SLP"
 MSG_FS_WRITE_SLP_OK = "FS_WRITE_SLP_OK"
 MSG_FS_WRITE_SLP_ERROR = "FS_WRITE_SLP_ERROR"
 
+# =============================================================================
+# Prefix-Based Video Path Resolution Messages
+# =============================================================================
+#
+# These messages implement SLEAP-style prefix replacement for resolving missing
+# video paths. When a user manually locates one video, the system computes the
+# prefix change and proposes applying it to all other missing videos.
+#
+# Message Flow:
+#
+# 1. User selects a replacement path for one missing video
+#    Client → Worker: FS_RESOLVE_WITH_PREFIX::{json}
+#    Request: {
+#      "original_path": "/Volumes/talmo/project/day1/vid1.mp4",
+#      "new_path": "/vast/project/day1/vid1.mp4",
+#      "other_missing": ["/Volumes/talmo/project/day2/vid2.mp4", ...]
+#    }
+#
+# 2. Worker computes prefix and returns proposal
+#    Worker → Client: FS_PREFIX_PROPOSAL::{json}
+#    Response: {
+#      "old_prefix": "/Volumes/talmo",
+#      "new_prefix": "/vast",
+#      "would_resolve": [
+#        {"original": "/Volumes/talmo/project/day2/vid2.mp4",
+#         "resolved": "/vast/project/day2/vid2.mp4"}
+#      ],
+#      "would_not_resolve": ["/Volumes/talmo/other/vid3.mp4"]
+#    }
+#
+# 3. User confirms the prefix change
+#    Client → Worker: FS_APPLY_PREFIX::{json}
+#    Request: {"confirmed": true}
+#    Worker → Client: FS_PREFIX_APPLIED::{json}
+#    Response: {"success": true}
+#
+
+# Prefix-based resolution messages
+MSG_FS_RESOLVE_WITH_PREFIX = "FS_RESOLVE_WITH_PREFIX"
+MSG_FS_PREFIX_PROPOSAL = "FS_PREFIX_PROPOSAL"
+MSG_FS_APPLY_PREFIX = "FS_APPLY_PREFIX"
+MSG_FS_PREFIX_APPLIED = "FS_PREFIX_APPLIED"
+
 # Message separators
 MSG_SEPARATOR = "::"
 

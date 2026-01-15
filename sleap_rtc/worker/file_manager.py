@@ -884,3 +884,123 @@ class FileManager:
             "output_path": str(output_full_path),
             "videos_updated": videos_updated,
         }
+
+    # =========================================================================
+    # Prefix-Based Video Path Resolution Methods
+    # =========================================================================
+
+    def find_changed_subpath(self, old_path: str, new_path: str) -> tuple:
+        """Find the differing prefix between two paths.
+
+        Compares paths from the END to find the common suffix, then returns
+        the differing initial portions (prefixes). This implements SLEAP's
+        approach to detecting path prefix changes for auto-resolution.
+
+        Args:
+            old_path: Original path from SLP file.
+            new_path: User-selected replacement path on Worker.
+
+        Returns:
+            Tuple of (old_prefix, new_prefix) where:
+                - old_prefix: The initial portion of old_path that differs
+                - new_prefix: The corresponding portion in new_path
+
+        Example:
+            >>> find_changed_subpath(
+            ...     "/Volumes/talmo/project/day1/vid.mp4",
+            ...     "/vast/project/day1/vid.mp4"
+            ... )
+            ("/Volumes/talmo", "/vast")
+        """
+        old_parts = Path(old_path).parts
+        new_parts = Path(new_path).parts
+
+        # Find where paths match from the end (common suffix)
+        common_suffix_len = 0
+        for i in range(1, min(len(old_parts), len(new_parts)) + 1):
+            if old_parts[-i] == new_parts[-i]:
+                common_suffix_len = i
+            else:
+                break
+
+        # Extract prefixes (everything before the common suffix)
+        if common_suffix_len > 0 and common_suffix_len < len(old_parts):
+            old_prefix = str(Path(*old_parts[:-common_suffix_len]))
+            new_prefix = str(Path(*new_parts[:-common_suffix_len]))
+        else:
+            # No common suffix found, return full paths as prefixes
+            old_prefix = old_path
+            new_prefix = new_path
+
+        return old_prefix, new_prefix
+
+    def compute_prefix_resolution(
+        self,
+        original_path: str,
+        new_path: str,
+        other_missing: list,
+    ) -> dict:
+        """Compute which missing videos would resolve with a prefix replacement.
+
+        When a user manually locates one video, this method computes the prefix
+        change and checks which other missing videos would resolve by applying
+        the same prefix transformation.
+
+        Args:
+            original_path: The original path of the video the user selected.
+            new_path: The new path the user browsed to on the Worker.
+            other_missing: List of other missing video paths from the SLP.
+
+        Returns:
+            Dictionary with:
+                - old_prefix: The detected old prefix to replace
+                - new_prefix: The new prefix to use
+                - would_resolve: List of dicts with 'original' and 'resolved'
+                  paths for videos that would be resolved
+                - would_not_resolve: List of paths that wouldn't resolve
+                  (either different prefix or file doesn't exist)
+
+        Example:
+            >>> compute_prefix_resolution(
+            ...     "/Volumes/talmo/project/day1/vid1.mp4",
+            ...     "/vast/project/day1/vid1.mp4",
+            ...     ["/Volumes/talmo/project/day2/vid2.mp4"]
+            ... )
+            {
+                "old_prefix": "/Volumes/talmo",
+                "new_prefix": "/vast",
+                "would_resolve": [
+                    {"original": "/Volumes/.../vid2.mp4", "resolved": "/vast/.../vid2.mp4"}
+                ],
+                "would_not_resolve": []
+            }
+        """
+        old_prefix, new_prefix = self.find_changed_subpath(original_path, new_path)
+
+        would_resolve = []
+        would_not_resolve = []
+
+        for missing_path in other_missing:
+            # Check if this path shares the same old prefix
+            if missing_path.startswith(old_prefix):
+                # Apply the prefix transformation
+                candidate = missing_path.replace(old_prefix, new_prefix, 1)
+
+                # Check if the transformed path exists on the Worker filesystem
+                if Path(candidate).exists():
+                    would_resolve.append({
+                        "original": missing_path,
+                        "resolved": candidate,
+                    })
+                else:
+                    would_not_resolve.append(missing_path)
+            else:
+                # Different prefix - can't resolve with this transformation
+                would_not_resolve.append(missing_path)
+
+        return {
+            "old_prefix": old_prefix,
+            "new_prefix": new_prefix,
+            "would_resolve": would_resolve,
+            "would_not_resolve": would_not_resolve,
+        }

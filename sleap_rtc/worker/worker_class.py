@@ -48,6 +48,10 @@ from sleap_rtc.protocol import (
     MSG_FS_WRITE_SLP,
     MSG_FS_WRITE_SLP_OK,
     MSG_FS_WRITE_SLP_ERROR,
+    MSG_FS_RESOLVE_WITH_PREFIX,
+    MSG_FS_PREFIX_PROPOSAL,
+    MSG_FS_APPLY_PREFIX,
+    MSG_FS_PREFIX_APPLIED,
 )
 from sleap_rtc.worker.capabilities import WorkerCapabilities
 from sleap_rtc.worker.job_executor import JobExecutor
@@ -1711,6 +1715,44 @@ class RTCWorkerClient:
                     return f"{MSG_FS_WRITE_SLP_ERROR}{MSG_SEPARATOR}{json.dumps(result)}"
 
                 return f"{MSG_FS_WRITE_SLP_OK}{MSG_SEPARATOR}{json.dumps(result)}"
+
+            elif msg_type == MSG_FS_RESOLVE_WITH_PREFIX:
+                # Compute prefix-based resolution for missing videos (SLEAP-style)
+                # Format: FS_RESOLVE_WITH_PREFIX::{json}
+                # JSON: {"original_path": "...", "new_path": "...", "other_missing": [...]}
+                if len(parts) < 2:
+                    return f"{MSG_FS_ERROR}{MSG_SEPARATOR}{FS_ERROR_INVALID_REQUEST}{MSG_SEPARATOR}JSON payload is required"
+
+                try:
+                    payload = json.loads(parts[1])
+                except json.JSONDecodeError as e:
+                    return f"{MSG_FS_ERROR}{MSG_SEPARATOR}{FS_ERROR_INVALID_REQUEST}{MSG_SEPARATOR}Invalid JSON: {e}"
+
+                original_path = payload.get("original_path", "")
+                new_path = payload.get("new_path", "")
+                other_missing = payload.get("other_missing", [])
+
+                if not original_path:
+                    return f"{MSG_FS_ERROR}{MSG_SEPARATOR}{FS_ERROR_INVALID_REQUEST}{MSG_SEPARATOR}original_path is required"
+
+                if not new_path:
+                    return f"{MSG_FS_ERROR}{MSG_SEPARATOR}{FS_ERROR_INVALID_REQUEST}{MSG_SEPARATOR}new_path is required"
+
+                result = self.file_manager.compute_prefix_resolution(
+                    original_path=original_path,
+                    new_path=new_path,
+                    other_missing=other_missing,
+                )
+
+                return f"{MSG_FS_PREFIX_PROPOSAL}{MSG_SEPARATOR}{json.dumps(result)}"
+
+            elif msg_type == MSG_FS_APPLY_PREFIX:
+                # User confirmed prefix application - just acknowledge
+                # Format: FS_APPLY_PREFIX::{json}
+                # JSON: {"confirmed": true}
+                # The actual resolution was already computed in FS_RESOLVE_WITH_PREFIX
+                # Client has the resolved paths from the proposal response
+                return f"{MSG_FS_PREFIX_APPLIED}{MSG_SEPARATOR}{json.dumps({'success': True})}"
 
             else:
                 return f"{MSG_FS_ERROR}{MSG_SEPARATOR}{FS_ERROR_INVALID_REQUEST}{MSG_SEPARATOR}Unknown FS message type: {msg_type}"

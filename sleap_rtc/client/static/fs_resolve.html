@@ -775,6 +775,29 @@
         </div>
     </div>
 
+    <!-- Prefix Confirmation Modal -->
+    <div class="modal-overlay" id="prefixModal">
+        <div class="modal" style="max-width: 600px;">
+            <div class="modal-title">Apply Path Prefix to Other Videos?</div>
+            <div class="modal-body">
+                <div style="margin-bottom: 1rem;">
+                    <strong>Detected prefix change:</strong>
+                    <div style="font-family: 'JetBrains Mono', monospace; font-size: 0.75rem; margin-top: 0.5rem;">
+                        <div style="color: var(--error); word-break: break-all;" id="prefixOld"></div>
+                        <div style="margin: 0.25rem 0; color: var(--text-muted);">&#8595;</div>
+                        <div style="color: var(--success); word-break: break-all;" id="prefixNew"></div>
+                    </div>
+                </div>
+                <div id="prefixWouldResolve" style="margin-bottom: 1rem;"></div>
+                <div id="prefixWouldNotResolve"></div>
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" onclick="declinePrefixApply()">No, Skip</button>
+                <button class="btn btn-primary" onclick="confirmPrefixApply()">Yes, Apply</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         // State
         let ws = null;
@@ -791,6 +814,9 @@
 
         // Pending output directory for save
         let pendingOutputDir = '';
+
+        // Prefix resolution state
+        let pendingPrefixProposal = null;
 
         // Get token from URL
         function getToken() {
@@ -891,6 +917,19 @@
 
                 case 'write_slp_error':
                     handleWriteSlpError(msg.data);
+                    break;
+
+                case 'prefix_proposal':
+                    handlePrefixProposal(msg.data);
+                    break;
+
+                case 'prefix_applied':
+                    // Prefix was applied, auto-select next unresolved video
+                    const nextUnresolved = missingVideos.findIndex(v => v.resolved_path === null);
+                    if (nextUnresolved !== -1) {
+                        selectedVideoIndex = nextUnresolved;
+                        renderVideoList();
+                    }
                     break;
 
                 case 'error':
@@ -1117,32 +1156,36 @@
             video.auto_resolved = false;
             filenameMap[video.original_path] = filePath;
 
-            // Trigger directory scan for other missing videos
-            const directory = getDirectory(filePath);
-            const unresolvedFilenames = missingVideos
+            // Collect other missing video paths for prefix resolution
+            const otherMissing = missingVideos
                 .filter(v => v.resolved_path === null)
-                .map(v => v.filename);
+                .map(v => v.original_path);
 
-            if (unresolvedFilenames.length > 0 && ws && ws.readyState === WebSocket.OPEN) {
+            // Request prefix-based resolution for other missing videos
+            if (otherMissing.length > 0 && ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({
-                    type: 'scan_dir',
-                    directory: directory,
-                    filenames: unresolvedFilenames
+                    type: 'resolve_with_prefix',
+                    original_path: video.original_path,
+                    new_path: filePath,
+                    other_missing: otherMissing
                 }));
             }
 
             renderVideoList();
             updateResolutionStatus();
 
-            // Auto-select next unresolved video
-            const nextUnresolved = missingVideos.findIndex(v => v.resolved_path === null);
-            if (nextUnresolved !== -1) {
-                selectedVideoIndex = nextUnresolved;
-                renderVideoList();
+            // If no other missing videos, auto-select next (there won't be one)
+            if (otherMissing.length === 0) {
+                const nextUnresolved = missingVideos.findIndex(v => v.resolved_path === null);
+                if (nextUnresolved !== -1) {
+                    selectedVideoIndex = nextUnresolved;
+                    renderVideoList();
+                }
             }
+            // Otherwise, wait for prefix_proposal response before selecting next
         }
 
-        // Handle directory scan response
+        // Handle directory scan response (legacy, kept for compatibility)
         function handleScanDirResponse(data) {
             const found = data.found || {};
             let autoResolvedCount = 0;
@@ -1160,6 +1203,122 @@
                 showToast(`Auto-resolved ${autoResolvedCount} video(s)`, 'success');
                 renderVideoList();
                 updateResolutionStatus();
+            }
+        }
+
+        // Handle prefix proposal from Worker
+        function handlePrefixProposal(data) {
+            pendingPrefixProposal = data;
+
+            // If no videos would resolve, skip confirmation
+            if (!data.would_resolve || data.would_resolve.length === 0) {
+                // No prefix pattern found - auto-select next unresolved
+                const nextUnresolved = missingVideos.findIndex(v => v.resolved_path === null);
+                if (nextUnresolved !== -1) {
+                    selectedVideoIndex = nextUnresolved;
+                    renderVideoList();
+                }
+                return;
+            }
+
+            showPrefixConfirmation(data);
+        }
+
+        // Show prefix confirmation dialog
+        function showPrefixConfirmation(data) {
+            document.getElementById('prefixOld').textContent = data.old_prefix;
+            document.getElementById('prefixNew').textContent = data.new_prefix;
+
+            // Show videos that would resolve
+            const wouldResolveDiv = document.getElementById('prefixWouldResolve');
+            if (data.would_resolve && data.would_resolve.length > 0) {
+                wouldResolveDiv.innerHTML = `
+                    <strong style="color: var(--success);">${data.would_resolve.length} video(s) would be resolved:</strong>
+                    <ul style="font-family: 'JetBrains Mono', monospace; font-size: 0.7rem; margin-top: 0.5rem; padding-left: 1.5rem; max-height: 120px; overflow-y: auto;">
+                        ${data.would_resolve.map(v => `<li style="margin-bottom: 0.25rem;">${getFilename(v.resolved)}</li>`).join('')}
+                    </ul>
+                `;
+            } else {
+                wouldResolveDiv.innerHTML = '';
+            }
+
+            // Show videos that would not resolve
+            const wouldNotResolveDiv = document.getElementById('prefixWouldNotResolve');
+            if (data.would_not_resolve && data.would_not_resolve.length > 0) {
+                wouldNotResolveDiv.innerHTML = `
+                    <strong style="color: var(--warning);">${data.would_not_resolve.length} video(s) would NOT be resolved:</strong>
+                    <ul style="font-family: 'JetBrains Mono', monospace; font-size: 0.7rem; margin-top: 0.5rem; padding-left: 1.5rem; max-height: 80px; overflow-y: auto; color: var(--text-muted);">
+                        ${data.would_not_resolve.map(v => `<li style="margin-bottom: 0.25rem;">${getFilename(v)}</li>`).join('')}
+                    </ul>
+                `;
+            } else {
+                wouldNotResolveDiv.innerHTML = '';
+            }
+
+            document.getElementById('prefixModal').classList.add('show');
+        }
+
+        // User confirms prefix application
+        function confirmPrefixApply() {
+            document.getElementById('prefixModal').classList.remove('show');
+
+            if (pendingPrefixProposal && pendingPrefixProposal.would_resolve) {
+                // Apply all resolutions locally
+                let autoResolvedCount = 0;
+                for (const item of pendingPrefixProposal.would_resolve) {
+                    const video = missingVideos.find(v => v.original_path === item.original);
+                    if (video && video.resolved_path === null) {
+                        video.resolved_path = item.resolved;
+                        video.auto_resolved = true;
+                        filenameMap[video.original_path] = item.resolved;
+                        autoResolvedCount++;
+                    }
+                }
+
+                if (autoResolvedCount > 0) {
+                    showToast(`Applied prefix to ${autoResolvedCount} video(s)`, 'success');
+                    renderVideoList();
+                    updateResolutionStatus();
+                }
+            }
+
+            // Send confirmation to worker (for logging/tracking)
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                    type: 'apply_prefix',
+                    confirmed: true
+                }));
+            }
+
+            pendingPrefixProposal = null;
+
+            // Auto-select next unresolved video
+            const nextUnresolved = missingVideos.findIndex(v => v.resolved_path === null);
+            if (nextUnresolved !== -1) {
+                selectedVideoIndex = nextUnresolved;
+                renderVideoList();
+            }
+        }
+
+        // User declines prefix application
+        function declinePrefixApply() {
+            document.getElementById('prefixModal').classList.remove('show');
+
+            // Send decline to worker (for logging/tracking)
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                    type: 'apply_prefix',
+                    confirmed: false
+                }));
+            }
+
+            pendingPrefixProposal = null;
+
+            // Auto-select next unresolved video
+            const nextUnresolved = missingVideos.findIndex(v => v.resolved_path === null);
+            if (nextUnresolved !== -1) {
+                selectedVideoIndex = nextUnresolved;
+                renderVideoList();
             }
         }
 
