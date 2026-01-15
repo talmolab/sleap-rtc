@@ -1693,6 +1693,7 @@ class RTCWorkerClient:
 
                 slp_path = payload.get("slp_path", "")
                 output_dir = payload.get("output_dir", "")
+                output_filename = payload.get("output_filename", "")
                 filename_map = payload.get("filename_map", {})
 
                 if not slp_path:
@@ -1708,6 +1709,7 @@ class RTCWorkerClient:
                     slp_path=slp_path,
                     output_dir=output_dir,
                     filename_map=filename_map,
+                    output_filename=output_filename,
                 )
 
                 # Check for errors in result

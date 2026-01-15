@@ -234,10 +234,12 @@ class FSViewerServer:
                 # Write SLP file with corrected video paths
                 slp_path = msg.get("slp_path", "")
                 output_dir = msg.get("output_dir", "")
+                output_filename = msg.get("output_filename", "")
                 filename_map = msg.get("filename_map", {})
                 request_payload = json.dumps({
                     "slp_path": slp_path,
                     "output_dir": output_dir,
+                    "output_filename": output_filename,
                     "filename_map": filename_map
                 })
                 self.send_to_worker(f"FS_WRITE_SLP::{request_payload}")

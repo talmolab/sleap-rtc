@@ -781,7 +781,11 @@ class FileManager:
         }
 
     def write_slp_with_new_paths(
-        self, slp_path: str, output_dir: str, filename_map: dict
+        self,
+        slp_path: str,
+        output_dir: str,
+        filename_map: dict,
+        output_filename: str = "",
     ) -> dict:
         """Write a new SLP file with updated video paths.
 
@@ -793,6 +797,8 @@ class FileManager:
             output_dir: Directory to write the new SLP file to.
             filename_map: Dict mapping original paths to new resolved paths.
                           Example: {"/old/path/video.mp4": "/new/path/video.mp4"}
+            output_filename: Optional custom filename. If not provided, generates
+                             a default name with format: resolved_YYYYMMDD_<original>.slp
 
         Returns:
             Dictionary with:
@@ -858,19 +864,23 @@ class FileManager:
                 "error": f"Failed to replace filenames: {e}",
             }
 
-        # Generate output filename: resolved_YYYYMMDD_<original>.slp
-        from datetime import datetime
-
-        date_str = datetime.now().strftime("%Y%m%d")
-        original_name = slp_file.stem
-        # Handle .pkg.slp extension
-        if original_name.endswith(".pkg"):
-            original_name = original_name[:-4]
-            output_filename = f"resolved_{date_str}_{original_name}.pkg.slp"
+        # Use custom filename if provided, otherwise generate default
+        if output_filename:
+            final_filename = output_filename
         else:
-            output_filename = f"resolved_{date_str}_{original_name}.slp"
+            # Generate output filename: resolved_YYYYMMDD_<original>.slp
+            from datetime import datetime
 
-        output_full_path = output_path_obj / output_filename
+            date_str = datetime.now().strftime("%Y%m%d")
+            original_name = slp_file.stem
+            # Handle .pkg.slp extension
+            if original_name.endswith(".pkg"):
+                original_name = original_name[:-4]
+                final_filename = f"resolved_{date_str}_{original_name}.pkg.slp"
+            else:
+                final_filename = f"resolved_{date_str}_{original_name}.slp"
+
+        output_full_path = output_path_obj / final_filename
 
         # Save the updated SLP file
         try:
