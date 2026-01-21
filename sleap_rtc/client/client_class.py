@@ -29,6 +29,7 @@ from sleap_rtc.exceptions import (
 from sleap_rtc.filesystem import safe_mkdir
 from sleap_rtc.protocol import (
     parse_message,
+    format_message,
     MSG_FS_RESOLVE,
     MSG_FS_RESOLVE_RESPONSE,
     MSG_FS_GET_MOUNTS,
@@ -42,6 +43,11 @@ from sleap_rtc.protocol import (
     MSG_USE_WORKER_PATH,
     MSG_WORKER_PATH_OK,
     MSG_WORKER_PATH_ERROR,
+    # P2P Authentication messages
+    MSG_AUTH_REQUIRED,
+    MSG_AUTH_RESPONSE,
+    MSG_AUTH_SUCCESS,
+    MSG_AUTH_FAILURE,
 )
 from sleap_rtc.client.file_selector import (
     select_file_from_candidates,
@@ -100,6 +106,13 @@ class RTCClient:
         self.on_missing_videos_detected = None  # Callback(missing_videos_data) to launch UI
         self.pending_video_check_data = None  # Store FS_CHECK_VIDEOS_RESPONSE data
 
+        # P2P Authentication state (TOTP)
+        self._authenticated = False  # Whether we've passed TOTP auth
+        self._auth_required = False  # Whether worker requires auth
+        self._auth_attempts = 0  # Number of failed attempts
+        self._max_auth_attempts = 3  # Max attempts before giving up
+        self._auth_event = None  # asyncio.Event to signal auth completion
+
     def parse_session_string(self, session_string: str):
         prefix = "sleap-session:"
         if not session_string.startswith(prefix):
@@ -116,6 +129,66 @@ class RTCClient:
             }
         except jsonpickle.UnpicklingError as e:
             raise ValueError(f"Failed to decode session string: {e}")
+
+    async def _prompt_for_otp(self) -> str:
+        """Prompt user to enter OTP code from their authenticator app.
+
+        Returns:
+            6-digit OTP code string.
+        """
+        import sys
+
+        # Print prompt
+        attempt_info = ""
+        if self._auth_attempts > 0:
+            remaining = self._max_auth_attempts - self._auth_attempts
+            attempt_info = f" ({remaining} attempts remaining)"
+
+        print(f"\n{'='*60}")
+        print("AUTHENTICATION REQUIRED")
+        print(f"{'='*60}")
+        print("Enter the 6-digit code from your authenticator app")
+        print(f"(e.g., Google Authenticator, Authy){attempt_info}")
+        print("")
+
+        # Use asyncio to read input without blocking
+        loop = asyncio.get_event_loop()
+
+        # Read OTP code
+        otp_code = await loop.run_in_executor(
+            None, lambda: input("OTP Code: ").strip()
+        )
+
+        return otp_code
+
+    async def _handle_auth_required(self, worker_id: str):
+        """Handle AUTH_REQUIRED message from worker.
+
+        Args:
+            worker_id: ID of the worker requesting authentication.
+        """
+        self._auth_required = True
+        logging.info(f"Worker {worker_id} requires TOTP authentication")
+
+        while self._auth_attempts < self._max_auth_attempts:
+            # Prompt user for OTP
+            otp_code = await self._prompt_for_otp()
+
+            # Validate input
+            if not otp_code or len(otp_code) != 6 or not otp_code.isdigit():
+                print("Invalid code format. Please enter exactly 6 digits.")
+                self._auth_attempts += 1
+                continue
+
+            # Send AUTH_RESPONSE
+            auth_response = format_message(MSG_AUTH_RESPONSE, otp_code)
+            if self.data_channel and self.data_channel.readyState == "open":
+                self.data_channel.send(auth_response)
+                logging.info("Sent OTP code to worker")
+
+            # Wait for response (handled in on_message)
+            # The auth response will set _authenticated or increment _auth_attempts
+            break
 
     def request_peer_room_deletion(self, peer_id: str):
         """Requests the signaling server to delete the room and associated user/worker."""
@@ -1030,6 +1103,43 @@ class RTCClient:
             # if message == b"KEEP_ALIVE":
             #     logging.info("Keep alive message received.")
             #     return
+
+            # Handle authentication messages (AUTH_*)
+            if message.startswith(MSG_AUTH_REQUIRED):
+                msg_type, args = parse_message(message)
+                worker_id = args[0] if args else "unknown"
+                # Run auth prompt in background to not block message handler
+                asyncio.create_task(self._handle_auth_required(worker_id))
+                return
+
+            if message == MSG_AUTH_SUCCESS:
+                self._authenticated = True
+                self._auth_attempts = 0
+                print("\n" + "=" * 60)
+                print("AUTHENTICATION SUCCESSFUL")
+                print("=" * 60 + "\n")
+                logging.info("Successfully authenticated with worker via TOTP")
+                if self._auth_event:
+                    self._auth_event.set()
+                return
+
+            if message.startswith(MSG_AUTH_FAILURE):
+                msg_type, args = parse_message(message)
+                reason = args[0] if args else "unknown"
+                self._auth_attempts += 1
+
+                if reason == "max_attempts_exceeded" or self._auth_attempts >= self._max_auth_attempts:
+                    print("\n" + "=" * 60)
+                    print("AUTHENTICATION FAILED - Max attempts exceeded")
+                    print("=" * 60 + "\n")
+                    logging.error("Authentication failed - max attempts exceeded")
+                    if self._auth_event:
+                        self._auth_event.set()
+                else:
+                    print(f"\nInvalid OTP code. Please try again.")
+                    # Prompt for retry
+                    asyncio.create_task(self._handle_auth_required("worker"))
+                return
 
             # Handle filesystem browser responses (FS_*)
             if message.startswith("FS_"):

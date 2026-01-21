@@ -184,6 +184,49 @@ MSG_INFERENCE_COMPLETE = "INFERENCE_COMPLETE"
 MSG_ERROR = "ERROR"
 
 # =============================================================================
+# P2P Authentication Message Types (TOTP)
+# =============================================================================
+#
+# These messages implement TOTP-based authentication between Client and Worker
+# over the DataChannel. This provides end-to-end verification that the Client
+# has access to the room's OTP secret (from their authenticator app).
+#
+# Message Flow:
+#
+# 1. DataChannel opens
+#    Worker → Client: AUTH_REQUIRED::{worker_id}
+#
+# 2. Client prompts user for OTP code
+#    Client → Worker: AUTH_RESPONSE::{otp_code}
+#
+# 3. Worker validates OTP (allows ±1 time window)
+#    On success: Worker → Client: AUTH_SUCCESS
+#    On failure: Worker → Client: AUTH_FAILURE::{reason}
+#
+# 4. If AUTH_FAILURE, client can retry (up to 3 attempts)
+#
+# After AUTH_SUCCESS, normal protocol messages can proceed.
+# Before AUTH_SUCCESS, all non-auth messages are rejected.
+#
+# Security Notes:
+# - OTP secret is generated per-room (not per-worker)
+# - Worker rate-limits failed attempts (3 attempts max)
+# - Each OTP code is valid for ~30 seconds (±1 window = 90s total)
+#
+
+# Authentication message types
+MSG_AUTH_REQUIRED = "AUTH_REQUIRED"
+MSG_AUTH_RESPONSE = "AUTH_RESPONSE"
+MSG_AUTH_SUCCESS = "AUTH_SUCCESS"
+MSG_AUTH_FAILURE = "AUTH_FAILURE"
+
+# Authentication failure reasons
+AUTH_FAILURE_INVALID_OTP = "invalid_otp"
+AUTH_FAILURE_EXPIRED_OTP = "expired_otp"
+AUTH_FAILURE_RATE_LIMITED = "rate_limited"
+AUTH_FAILURE_MAX_ATTEMPTS = "max_attempts_exceeded"
+
+# =============================================================================
 # Filesystem Browser Message Types
 # =============================================================================
 #
