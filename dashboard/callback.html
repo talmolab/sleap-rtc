@@ -113,6 +113,11 @@
             <p id="error-message">An error occurred during login.</p>
             <a href="index.html" class="btn">Try Again</a>
         </div>
+
+        <div id="cli-success" class="hidden">
+            <h1>Login Successful!</h1>
+            <p>You can close this window and return to your terminal.</p>
+        </div>
     </div>
 
     <script src="config.js"></script>
@@ -122,6 +127,7 @@
             const successEl = document.getElementById('success');
             const errorEl = document.getElementById('error');
             const errorMsgEl = document.getElementById('error-message');
+            const cliSuccessEl = document.getElementById('cli-success');
 
             try {
                 // Parse URL parameters
@@ -129,6 +135,7 @@
                 const code = params.get('code');
                 const state = params.get('state');
                 const error = params.get('error');
+                const cliState = params.get('cli_state');
 
                 if (error) {
                     throw new Error(params.get('error_description') || error);
@@ -138,7 +145,7 @@
                     throw new Error('No authorization code received');
                 }
 
-                // Verify state
+                // Verify OAuth state
                 const savedState = sessionStorage.getItem('oauth_state');
                 if (state !== savedState) {
                     throw new Error('State mismatch - possible CSRF attack');
@@ -162,7 +169,30 @@
 
                 const data = await response.json();
 
-                // Save credentials (server returns 'token', not 'jwt')
+                // Check if this is CLI mode
+                if (cliState) {
+                    // Deposit token for CLI to poll
+                    const depositResponse = await fetch(`${CONFIG.SIGNALING_SERVER}/api/auth/cli/deposit`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            state: cliState,
+                            jwt: data.token,
+                            user: data.user,
+                        }),
+                    });
+
+                    if (!depositResponse.ok) {
+                        throw new Error('Failed to complete CLI login. Please try again.');
+                    }
+
+                    // Show CLI success message
+                    loadingEl.classList.add('hidden');
+                    cliSuccessEl.classList.remove('hidden');
+                    return;
+                }
+
+                // Normal dashboard flow: save credentials and redirect
                 localStorage.setItem(CONFIG.STORAGE_KEYS.JWT, data.token);
                 localStorage.setItem(CONFIG.STORAGE_KEYS.USER, JSON.stringify(data.user));
 
