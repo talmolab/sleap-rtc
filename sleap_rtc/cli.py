@@ -26,31 +26,18 @@ def cli():
 
 
 @cli.command()
-@click.option(
-    "--client-id",
-    envvar="SLEAP_GITHUB_CLIENT_ID",
-    help="GitHub OAuth App client ID (or set SLEAP_GITHUB_CLIENT_ID env var).",
-)
-def login(client_id):
+@click.option("--timeout", default=120, help="Login timeout in seconds.")
+def login(timeout):
     """Log in to SLEAP-RTC via GitHub OAuth.
 
-    Opens your browser to authenticate with GitHub. After authorization,
-    your credentials are saved locally for future CLI commands.
+    Opens your browser to authenticate with GitHub via the SLEAP-RTC dashboard.
+    After authorization, your credentials are saved locally for future CLI commands.
 
     Example:
-        sleap-rtc login --client-id Iv1.abc123...
-
-    Or set the environment variable:
-        export SLEAP_GITHUB_CLIENT_ID=Iv1.abc123...
         sleap-rtc login
     """
     from sleap_rtc.auth.credentials import save_jwt, is_logged_in, get_user
     from sleap_rtc.auth.github import github_login
-
-    if not client_id:
-        logger.error("GitHub client ID is required.")
-        logger.error("Provide --client-id or set SLEAP_GITHUB_CLIENT_ID env var.")
-        sys.exit(1)
 
     if is_logged_in():
         user = get_user()
@@ -60,7 +47,7 @@ def login(client_id):
                 return
 
     try:
-        result = github_login(client_id)
+        result = github_login(timeout=timeout)
         save_jwt(result["jwt"], result["user"])
 
         user = result["user"]
