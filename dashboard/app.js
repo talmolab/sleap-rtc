@@ -21,6 +21,14 @@ class SleapRTCDashboard {
         // Setup event listeners
         this.setupEventListeners();
 
+        // Check for CLI mode - auto-start OAuth
+        const urlParams = new URLSearchParams(window.location.search);
+        if (urlParams.get('cli') === 'true' && urlParams.get('cli_state')) {
+            // CLI mode: immediately start OAuth flow
+            this.handleLogin();
+            return;
+        }
+
         // Check auth state and render
         this.updateUI();
     }
