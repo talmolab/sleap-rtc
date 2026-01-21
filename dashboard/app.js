@@ -186,9 +186,19 @@ class SleapRTCDashboard {
     // =========================================================================
 
     handleLogin() {
+        // Check if we're in CLI mode
+        const urlParams = new URLSearchParams(window.location.search);
+        const cliState = urlParams.get('cli_state');
+
         const authUrl = new URL('https://github.com/login/oauth/authorize');
         authUrl.searchParams.set('client_id', CONFIG.GITHUB_CLIENT_ID);
-        authUrl.searchParams.set('redirect_uri', CONFIG.OAUTH_CALLBACK_URL);
+
+        // Build redirect URI - include cli_state if present
+        let redirectUri = CONFIG.OAUTH_CALLBACK_URL;
+        if (cliState) {
+            redirectUri += `?cli_state=${encodeURIComponent(cliState)}`;
+        }
+        authUrl.searchParams.set('redirect_uri', redirectUri);
         authUrl.searchParams.set('scope', 'read:user');
         authUrl.searchParams.set('state', this.generateState());
 
