@@ -267,9 +267,12 @@ def _exchange_code(code: str, redirect_uri: str, server_url: str) -> dict:
 
     data = response.json()
 
-    if "jwt" not in data or "user" not in data:
+    # Server returns 'token' not 'jwt'
+    if "token" not in data or "user" not in data:
         raise RuntimeError("Invalid response from server")
 
+    # Normalize to 'jwt' for consistency
+    data["jwt"] = data.pop("token")
     return data
 
 
