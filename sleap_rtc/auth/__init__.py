@@ -15,7 +15,7 @@ from sleap_rtc.auth.credentials import (
     get_api_key,
     CREDENTIALS_PATH,
 )
-from sleap_rtc.auth.github import github_login, github_device_login
+from sleap_rtc.auth.github import github_login, get_dashboard_url
 from sleap_rtc.auth.totp import validate_otp, generate_otp
 
 __all__ = [
@@ -29,7 +29,7 @@ __all__ = [
     "CREDENTIALS_PATH",
     # GitHub OAuth
     "github_login",
-    "github_device_login",
+    "get_dashboard_url",
     # TOTP
     "validate_otp",
     "generate_otp",
