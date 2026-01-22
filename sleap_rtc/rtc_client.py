@@ -16,6 +16,9 @@ def run_RTCclient(
     worker_path: str = None,
     non_interactive: bool = False,
     mount_label: str = None,
+    use_jwt: bool = False,
+    no_jwt: bool = False,
+    otp_secret: str = None,
     **kwargs,
 ):
     """Standalone function to run the RTC client with CLI arguments.
@@ -32,6 +35,9 @@ def run_RTCclient(
         worker_path: Explicit path on worker filesystem (skips resolution)
         non_interactive: Auto-select best match without prompting (for CI/scripts)
         mount_label: Specific mount label to search (skips mount selection)
+        use_jwt: Require JWT authentication (fail if not logged in)
+        no_jwt: Force Cognito auth (skip JWT even if logged in)
+        otp_secret: Base32-encoded OTP secret for auto-authentication
         **kwargs: Additional arguments passed to run_client
     """
     # Create client instance (DNS will be loaded from config)
@@ -61,6 +67,11 @@ def run_RTCclient(
         "worker_path": worker_path,
         "non_interactive": non_interactive,
         "mount_label": mount_label,
+        # JWT authentication parameters
+        "use_jwt": use_jwt,
+        "no_jwt": no_jwt,
+        # OTP auto-authentication
+        "otp_secret": otp_secret,
     }
 
     # Add any additional kwargs
