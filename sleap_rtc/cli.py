@@ -94,9 +94,7 @@ def whoami():
         sys.exit(1)
 
     click.echo(f"Username: {user.get('username', 'unknown')}")
-    click.echo(f"User ID:  {user.get('id', 'unknown')}")
-    if user.get('avatar_url'):
-        click.echo(f"Avatar:   {user.get('avatar_url')}")
+    click.echo(f"User ID:  {user.get('user_id', user.get('id', 'unknown'))}")
 
     # Show JWT expiry if we can decode it
     jwt_token = get_jwt()
@@ -447,6 +445,59 @@ def room_create(name):
         click.echo(f"  1. Create a worker token: sleap-rtc token create --room {data['room_id']} --name my-worker")
         click.echo(f"  2. Start a worker with the token")
         click.echo("")
+
+    except requests.RequestException as e:
+        logger.error(f"Request failed: {e}")
+        sys.exit(1)
+
+
+@room.command(name="delete")
+@click.argument("room_id")
+@click.option(
+    "--force",
+    "-f",
+    is_flag=True,
+    help="Skip confirmation prompt.",
+)
+def room_delete(room_id, force):
+    """Delete a room.
+
+    Permanently deletes a room and all associated data including tokens
+    and memberships. Only room owners can delete rooms.
+
+    Example:
+        sleap-rtc room delete abc123
+        sleap-rtc room delete abc123 --force
+    """
+    from sleap_rtc.auth.credentials import get_jwt
+    from sleap_rtc.config import get_config
+
+    jwt_token = get_jwt()
+    if not jwt_token:
+        logger.error("Not logged in. Run: sleap-rtc login")
+        sys.exit(1)
+
+    if not force:
+        if not click.confirm(f"Are you sure you want to delete room '{room_id}'? This cannot be undone."):
+            click.echo("Cancelled")
+            return
+
+    config = get_config()
+    endpoint = f"{config.get_http_url()}/api/auth/rooms/{room_id}"
+
+    try:
+        response = requests.delete(
+            endpoint,
+            headers={"Authorization": f"Bearer {jwt_token}"},
+            timeout=30,
+        )
+
+        if response.status_code != 200:
+            error = response.json().get("detail", response.json().get("error", response.text))
+            logger.error(f"Failed to delete room: {error}")
+            sys.exit(1)
+
+        click.echo(f"Room '{room_id}' deleted successfully")
 
     except requests.RequestException as e:
         logger.error(f"Request failed: {e}")

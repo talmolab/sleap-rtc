@@ -19,7 +19,7 @@ from loguru import logger
 from sleap_rtc.config import get_config
 
 # Default dashboard URL (GitHub Pages)
-DEFAULT_DASHBOARD_URL = "https://alicup29-test-org.github.io/sleap-rtc-dashboard/"
+DEFAULT_DASHBOARD_URL = "https://talmolab.github.io/sleap-rtc/dashboard/"
 
 # Polling settings
 POLL_INTERVAL = 2  # seconds
