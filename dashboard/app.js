@@ -330,6 +330,7 @@ class SleapRTCDashboard {
                     </div>
                     <div class="card-actions">
                         ${room.role === 'owner' ? `
+                            <button class="btn btn-primary btn-small" onclick="app.handleViewRoom('${room.room_id}')">View Details</button>
                             <button class="btn btn-secondary btn-small" onclick="app.handleInvite('${room.room_id}')">Invite</button>
                             <button class="btn btn-danger btn-small" onclick="app.handleDeleteRoom('${room.room_id}', '${room.name || room.room_id}')">Delete</button>
                         ` : ''}
@@ -393,6 +394,7 @@ class SleapRTCDashboard {
             }
 
             this.hideModal('create-room-modal');
+            document.getElementById('room-modal-title').textContent = 'Room Created!';
             this.showModal('room-created-modal');
 
             // Refresh rooms list
@@ -401,6 +403,58 @@ class SleapRTCDashboard {
 
         } catch (e) {
             console.error('Failed to create room:', e);
+            this.showToast(e.message, 'error');
+        }
+    }
+
+    async handleViewRoom(roomId) {
+        try {
+            const data = await this.apiRequest(`/api/auth/rooms/${roomId}`);
+
+            // Populate the room details modal (reuse the room-created-modal)
+            document.getElementById('new-room-id').textContent = data.room_id;
+            document.getElementById('new-room-token').textContent = data.room_token || 'N/A';
+
+            // Generate QR code if OTP secret provided
+            if (data.otp_secret) {
+                document.getElementById('new-room-otp-secret').textContent = data.otp_secret;
+                const qrContainer = document.getElementById('otp-qr-code');
+                qrContainer.innerHTML = '';
+                try {
+                    if (typeof QRCode !== 'undefined') {
+                        QRCode.toDataURL(data.otp_uri, {
+                            width: 200,
+                            margin: 2,
+                            color: { dark: '#000000', light: '#ffffff' }
+                        }, (err, url) => {
+                            if (err) {
+                                console.warn('QR code generation failed:', err);
+                                qrContainer.innerHTML = '<p style="color: var(--text-muted); font-size: 0.875rem;">QR code unavailable. Use the secret below.</p>';
+                            } else {
+                                const img = document.createElement('img');
+                                img.src = url;
+                                img.alt = 'OTP QR Code';
+                                img.style.display = 'block';
+                                qrContainer.appendChild(img);
+                            }
+                        });
+                    } else {
+                        qrContainer.innerHTML = '<p style="color: var(--text-muted); font-size: 0.875rem;">QR code unavailable. Use the secret below.</p>';
+                    }
+                } catch (qrError) {
+                    console.warn('QR code generation failed:', qrError);
+                    qrContainer.innerHTML = '<p style="color: var(--text-muted); font-size: 0.875rem;">QR code unavailable. Use the secret below.</p>';
+                }
+            } else {
+                document.getElementById('new-room-otp-secret').textContent = 'N/A';
+                document.getElementById('otp-qr-code').innerHTML = '';
+            }
+
+            document.getElementById('room-modal-title').textContent = 'Room Details';
+            this.showModal('room-created-modal');
+
+        } catch (e) {
+            console.error('Failed to get room details:', e);
             this.showToast(e.message, 'error');
         }
     }
