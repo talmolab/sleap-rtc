@@ -366,10 +366,22 @@ class SleapRTCDashboard {
                 qrContainer.innerHTML = '';
                 try {
                     if (typeof QRCode !== 'undefined') {
-                        QRCode.toCanvas(qrContainer, data.otp_uri, {
+                        // Use toDataURL for better compatibility
+                        QRCode.toDataURL(data.otp_uri, {
                             width: 200,
                             margin: 2,
                             color: { dark: '#000000', light: '#ffffff' }
+                        }, (err, url) => {
+                            if (err) {
+                                console.warn('QR code generation failed:', err);
+                                qrContainer.innerHTML = '<p style="color: var(--text-muted); font-size: 0.875rem;">QR code unavailable. Use the secret below.</p>';
+                            } else {
+                                const img = document.createElement('img');
+                                img.src = url;
+                                img.alt = 'OTP QR Code';
+                                img.style.display = 'block';
+                                qrContainer.appendChild(img);
+                            }
                         });
                     } else {
                         qrContainer.innerHTML = '<p style="color: var(--text-muted); font-size: 0.875rem;">QR code unavailable. Use the secret below.</p>';
