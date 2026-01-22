@@ -325,8 +325,8 @@ class SleapRTCDashboard {
             <div class="card">
                 <div class="card-header">
                     <div>
-                        <div class="card-title">${room.room_id}</div>
-                        <div class="card-subtitle">${room.name || 'Unnamed Room'}</div>
+                        <div class="card-title">${room.name || 'Unnamed Room'}</div>
+                        <div class="card-subtitle">${room.room_id}</div>
                     </div>
                     <div class="card-actions">
                         ${room.role === 'owner' ? `
