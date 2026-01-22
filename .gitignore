@@ -220,5 +220,18 @@ __MACOSX/
 *.training_job.zip
 labels.v9291.slp.training_job/
 
+# Video files (test data)
+*.mp4
+*.avi
+*.mov
+
+# Scratch/investigation folders (local development notes)
+scratch/
+
+# JWT/PEM key files (secrets)
+*.pem
+jwt_private.pem
+jwt_public.pem
+
 # Design docs (local planning)
 docs/plans/
