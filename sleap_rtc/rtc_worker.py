@@ -10,6 +10,7 @@ from sleap_rtc.config import get_config
 
 
 def run_RTCworker(
+    api_key=None,
     room_id=None,
     token=None,
     working_dir=None,
@@ -17,6 +18,7 @@ def run_RTCworker(
     """Create RTCWorkerClient and start it.
 
     Args:
+        api_key: API key for authentication (slp_xxx...). New auth method.
         room_id: Optional room ID to join. If not provided, a new room will be created.
         token: Optional room token for authentication. Required if room_id is provided.
         working_dir: Optional working directory. CLI option overrides config file.
@@ -55,6 +57,7 @@ def run_RTCworker(
                 pc=pc,
                 DNS=config.signaling_websocket,
                 port_number=8080,
+                api_key=api_key,
                 room_id=room_id,
                 token=token,
             )

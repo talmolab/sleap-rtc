@@ -67,6 +67,7 @@ class StateManager:
         self.room_id: Optional[str] = None
         self.room_token: Optional[str] = None
         self.id_token: Optional[str] = None
+        self.api_key: Optional[str] = None  # New API key auth
 
     @property
     def is_admin(self) -> bool:
@@ -148,9 +149,6 @@ class StateManager:
             registration_msg = {
                 "type": "register",
                 "peer_id": self.worker_id,
-                "room_id": self.room_id,
-                "token": self.room_token,
-                "id_token": self.id_token,  # Required for authentication
                 "role": "worker",
                 "metadata": {
                     "tags": [
@@ -166,6 +164,18 @@ class StateManager:
             if self.is_admin:
                 registration_msg["is_admin"] = True
                 logging.info("Re-registering as admin worker")
+
+            # Add auth credentials based on method
+            if self.api_key:
+                # New API key authentication
+                registration_msg["api_key"] = self.api_key
+                logging.info("Re-registering with API key authentication")
+            else:
+                # Legacy Cognito authentication
+                registration_msg["room_id"] = self.room_id
+                registration_msg["token"] = self.room_token
+                registration_msg["id_token"] = self.id_token
+                logging.info("Re-registering with Cognito authentication")
 
             # Send full registration message (not just metadata update)
             await self.websocket.send(json.dumps(registration_msg))
@@ -259,17 +269,25 @@ class StateManager:
             logging.error(f"Failed to get anonymous token: {response.text}")
             return None
 
-    def set_room_credentials(self, room_id: str, token: str, id_token: str):
+    def set_room_credentials(
+        self,
+        room_id: str,
+        token: str,
+        id_token: Optional[str] = None,
+        api_key: Optional[str] = None,
+    ):
         """Set room credentials for re-registration.
 
         Args:
             room_id: Room identifier.
             token: Room authentication token.
-            id_token: Cognito ID token.
+            id_token: Cognito ID token (legacy auth).
+            api_key: API key for authentication (new auth).
         """
         self.room_id = room_id
         self.room_token = token
         self.id_token = id_token
+        self.api_key = api_key
 
     def get_status(self) -> str:
         """Get current worker status.

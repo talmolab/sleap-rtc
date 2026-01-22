@@ -1,17 +1,611 @@
 """Unified CLI for sleap-RTC using Click."""
 
-import click
-from loguru import logger
+import json
+import os
+import sys
+from datetime import datetime
 from pathlib import Path
+
+import click
+import requests
+from loguru import logger
+
 from sleap_rtc.rtc_worker import run_RTCworker
 from sleap_rtc.rtc_client import run_RTCclient
 from sleap_rtc.rtc_client_track import run_RTCclient_track
-import sys
 
 
 @click.group()
 def cli():
     pass
+
+
+# =============================================================================
+# Auth Commands
+# =============================================================================
+
+
+@cli.command()
+@click.option("--timeout", default=120, help="Login timeout in seconds.")
+def login(timeout):
+    """Log in to SLEAP-RTC via GitHub OAuth.
+
+    Opens your browser to authenticate with GitHub via the SLEAP-RTC dashboard.
+    After authorization, your credentials are saved locally for future CLI commands.
+
+    Example:
+        sleap-rtc login
+    """
+    from sleap_rtc.auth.credentials import save_jwt, is_logged_in, get_user
+    from sleap_rtc.auth.github import github_login
+
+    if is_logged_in():
+        user = get_user()
+        if user:
+            click.echo(f"Already logged in as {user.get('username', 'unknown')}")
+            if not click.confirm("Log in as a different user?"):
+                return
+
+    try:
+        result = github_login(timeout=timeout)
+        save_jwt(result["jwt"], result["user"])
+
+        user = result["user"]
+        click.echo(f"Logged in as {user.get('username', 'unknown')}")
+        logger.info("Credentials saved to ~/.sleap-rtc/credentials.json")
+
+    except Exception as e:
+        logger.error(f"Login failed: {e}")
+        sys.exit(1)
+
+
+@cli.command()
+def logout():
+    """Log out and clear stored credentials.
+
+    Removes the JWT and user info from ~/.sleap-rtc/credentials.json.
+    Worker tokens (API keys) are also removed.
+    """
+    from sleap_rtc.auth.credentials import clear_credentials, is_logged_in
+
+    if not is_logged_in():
+        click.echo("Not currently logged in")
+        return
+
+    clear_credentials()
+    click.echo("Logged out successfully")
+
+
+@cli.command()
+def whoami():
+    """Display current logged-in user info.
+
+    Shows your GitHub username and user ID from the stored JWT.
+    """
+    from sleap_rtc.auth.credentials import get_user, get_jwt, is_logged_in
+
+    if not is_logged_in():
+        click.echo("Not logged in. Run: sleap-rtc login")
+        sys.exit(1)
+
+    user = get_user()
+    if not user:
+        click.echo("No user info found. Try logging in again.")
+        sys.exit(1)
+
+    click.echo(f"Username: {user.get('username', 'unknown')}")
+    click.echo(f"User ID:  {user.get('user_id', user.get('id', 'unknown'))}")
+
+    # Show JWT expiry if we can decode it
+    jwt_token = get_jwt()
+    if jwt_token:
+        try:
+            import jwt
+            # Decode without verification just to read claims
+            claims = jwt.decode(jwt_token, options={"verify_signature": False})
+            exp = claims.get("exp")
+            if exp:
+                exp_dt = datetime.fromtimestamp(exp)
+                click.echo(f"JWT expires: {exp_dt.isoformat()}")
+        except Exception:
+            pass
+
+
+# =============================================================================
+# Token Commands (subgroup)
+# =============================================================================
+
+
+@cli.group()
+def token():
+    """Manage worker API tokens.
+
+    Worker tokens are used to authenticate workers with the signaling server.
+    Each token is associated with a specific room.
+    """
+    pass
+
+
+@token.command(name="create")
+@click.option(
+    "--room",
+    "-r",
+    required=True,
+    help="Room ID to create token for.",
+)
+@click.option(
+    "--name",
+    "-n",
+    required=True,
+    help="Human-readable name for this worker (e.g., 'lab-gpu-1').",
+)
+@click.option(
+    "--expires",
+    "-e",
+    type=int,
+    default=None,
+    help="Token expiration in days (default: 7).",
+)
+@click.option(
+    "--save/--no-save",
+    default=True,
+    help="Save token to credentials file (default: yes).",
+)
+def token_create(room, name, expires, save):
+    """Create a new worker API token.
+
+    Creates an API key for a worker to join a specific room.
+    The room must already exist and you must be a member.
+
+    Example:
+        sleap-rtc token create --room abc123 --name lab-gpu-1
+    """
+    from sleap_rtc.auth.credentials import get_jwt, save_token
+    from sleap_rtc.config import get_config
+
+    jwt_token = get_jwt()
+    if not jwt_token:
+        logger.error("Not logged in. Run: sleap-rtc login")
+        sys.exit(1)
+
+    config = get_config()
+    endpoint = f"{config.get_http_url()}/api/auth/token"
+
+    payload = {
+        "room_id": room,
+        "worker_name": name,
+    }
+    if expires:
+        payload["expires_days"] = expires
+
+    try:
+        response = requests.post(
+            endpoint,
+            json=payload,
+            headers={"Authorization": f"Bearer {jwt_token}"},
+            timeout=30,
+        )
+
+        if response.status_code != 200:
+            error = response.json().get("error", response.text)
+            logger.error(f"Failed to create token: {error}")
+            sys.exit(1)
+
+        data = response.json()
+
+        click.echo("")
+        click.echo("Worker token created successfully!")
+        click.echo("")
+        click.echo(f"  API Key:     {data['token_id']}")
+        click.echo(f"  Room:        {data['room_id']}")
+        click.echo(f"  Worker Name: {name}")
+        if data.get("expires_at"):
+            click.echo(f"  Expires:     {data['expires_at']}")
+        click.echo("")
+        click.echo("To start a worker with this token:")
+        click.echo(f"  sleap-rtc worker --api-key {data['token_id']}")
+        click.echo("")
+
+        if save:
+            save_token(room, data["token_id"], name)
+            logger.info("Token saved to ~/.sleap-rtc/credentials.json")
+
+    except requests.RequestException as e:
+        logger.error(f"Request failed: {e}")
+        sys.exit(1)
+
+
+@token.command(name="list")
+def token_list():
+    """List your API tokens.
+
+    Shows all tokens you've created, their status, and expiration.
+    """
+    from sleap_rtc.auth.credentials import get_jwt
+    from sleap_rtc.config import get_config
+
+    jwt_token = get_jwt()
+    if not jwt_token:
+        logger.error("Not logged in. Run: sleap-rtc login")
+        sys.exit(1)
+
+    config = get_config()
+    endpoint = f"{config.get_http_url()}/api/auth/tokens"
+
+    try:
+        response = requests.get(
+            endpoint,
+            headers={"Authorization": f"Bearer {jwt_token}"},
+            timeout=30,
+        )
+
+        if response.status_code != 200:
+            error = response.json().get("error", response.text)
+            logger.error(f"Failed to list tokens: {error}")
+            sys.exit(1)
+
+        data = response.json()
+        tokens = data.get("tokens", [])
+
+        if not tokens:
+            click.echo("No tokens found")
+            return
+
+        click.echo("")
+        click.echo(f"{'NAME':<20} {'ROOM':<12} {'STATUS':<10} {'EXPIRES':<20}")
+        click.echo("-" * 62)
+
+        for t in tokens:
+            name = t.get("worker_name", "unknown")[:20]
+            room = t.get("room_id", "?")[:12]
+            status = "revoked" if t.get("revoked_at") else "active"
+            expires = t.get("expires_at", "never")[:20]
+            click.echo(f"{name:<20} {room:<12} {status:<10} {expires:<20}")
+
+        click.echo("")
+
+    except requests.RequestException as e:
+        logger.error(f"Request failed: {e}")
+        sys.exit(1)
+
+
+@token.command(name="revoke")
+@click.argument("token_id")
+@click.option("--yes", "-y", is_flag=True, help="Skip confirmation prompt.")
+def token_revoke(token_id, yes):
+    """Revoke an API token.
+
+    Immediately invalidates the token. Workers using this token
+    will no longer be able to connect.
+
+    Example:
+        sleap-rtc token revoke slp_abc123...
+    """
+    from sleap_rtc.auth.credentials import get_jwt
+    from sleap_rtc.config import get_config
+
+    jwt_token = get_jwt()
+    if not jwt_token:
+        logger.error("Not logged in. Run: sleap-rtc login")
+        sys.exit(1)
+
+    if not yes:
+        if not click.confirm(f"Revoke token {token_id[:20]}...?"):
+            click.echo("Cancelled")
+            return
+
+    config = get_config()
+    endpoint = f"{config.get_http_url()}/api/auth/token/{token_id}"
+
+    try:
+        response = requests.delete(
+            endpoint,
+            headers={"Authorization": f"Bearer {jwt_token}"},
+            timeout=30,
+        )
+
+        if response.status_code != 200:
+            error = response.json().get("error", response.text)
+            logger.error(f"Failed to revoke token: {error}")
+            sys.exit(1)
+
+        click.echo("Token revoked successfully")
+
+    except requests.RequestException as e:
+        logger.error(f"Request failed: {e}")
+        sys.exit(1)
+
+
+# =============================================================================
+# Room Commands (subgroup)
+# =============================================================================
+
+
+@cli.group()
+def room():
+    """Manage rooms.
+
+    Rooms are workspaces where workers and clients connect.
+    Room owners can invite other users and create worker tokens.
+    """
+    pass
+
+
+@room.command(name="list")
+def room_list():
+    """List rooms you have access to.
+
+    Shows all rooms where you are an owner or member.
+    """
+    from sleap_rtc.auth.credentials import get_jwt
+    from sleap_rtc.config import get_config
+
+    jwt_token = get_jwt()
+    if not jwt_token:
+        logger.error("Not logged in. Run: sleap-rtc login")
+        sys.exit(1)
+
+    config = get_config()
+    endpoint = f"{config.get_http_url()}/api/auth/rooms"
+
+    try:
+        response = requests.get(
+            endpoint,
+            headers={"Authorization": f"Bearer {jwt_token}"},
+            timeout=30,
+        )
+
+        if response.status_code != 200:
+            error = response.json().get("error", response.text)
+            logger.error(f"Failed to list rooms: {error}")
+            sys.exit(1)
+
+        data = response.json()
+        rooms = data.get("rooms", [])
+
+        if not rooms:
+            click.echo("No rooms found")
+            click.echo("Create one with: sleap-rtc room create")
+            return
+
+        click.echo("")
+        click.echo(f"{'ROOM ID':<12} {'ROLE':<10} {'JOINED':<20}")
+        click.echo("-" * 42)
+
+        for r in rooms:
+            room_id = r.get("room_id", "?")[:12]
+            role = r.get("role", "?")[:10]
+            joined = r.get("joined_at", "?")[:20]
+            click.echo(f"{room_id:<12} {role:<10} {joined:<20}")
+
+        click.echo("")
+
+    except requests.RequestException as e:
+        logger.error(f"Request failed: {e}")
+        sys.exit(1)
+
+
+@room.command(name="create")
+@click.option(
+    "--name",
+    "-n",
+    default=None,
+    help="Optional name for the room.",
+)
+def room_create(name):
+    """Create a new room.
+
+    Creates a room where you can add workers and invite collaborators.
+    You will be the owner of the created room.
+
+    Example:
+        sleap-rtc room create --name "my-training-room"
+    """
+    from sleap_rtc.auth.credentials import get_jwt
+    from sleap_rtc.config import get_config
+
+    jwt_token = get_jwt()
+    if not jwt_token:
+        logger.error("Not logged in. Run: sleap-rtc login")
+        sys.exit(1)
+
+    config = get_config()
+    endpoint = f"{config.get_http_url()}/api/auth/rooms"
+
+    payload = {}
+    if name:
+        payload["name"] = name
+
+    try:
+        response = requests.post(
+            endpoint,
+            json=payload,
+            headers={"Authorization": f"Bearer {jwt_token}"},
+            timeout=30,
+        )
+
+        if response.status_code != 200:
+            error = response.json().get("error", response.text)
+            logger.error(f"Failed to create room: {error}")
+            sys.exit(1)
+
+        data = response.json()
+
+        click.echo("")
+        click.echo("Room created successfully!")
+        click.echo("")
+        click.echo(f"  Room ID:    {data['room_id']}")
+        click.echo(f"  Room Token: {data['room_token']}")
+        if data.get("otp_uri"):
+            click.echo("")
+            click.echo("  OTP Setup (scan with authenticator app):")
+            click.echo(f"  {data['otp_uri']}")
+        click.echo("")
+        click.echo("Next steps:")
+        click.echo(f"  1. Create a worker token: sleap-rtc token create --room {data['room_id']} --name my-worker")
+        click.echo(f"  2. Start a worker with the token")
+        click.echo("")
+
+    except requests.RequestException as e:
+        logger.error(f"Request failed: {e}")
+        sys.exit(1)
+
+
+@room.command(name="delete")
+@click.argument("room_id")
+@click.option(
+    "--force",
+    "-f",
+    is_flag=True,
+    help="Skip confirmation prompt.",
+)
+def room_delete(room_id, force):
+    """Delete a room.
+
+    Permanently deletes a room and all associated data including tokens
+    and memberships. Only room owners can delete rooms.
+
+    Example:
+        sleap-rtc room delete abc123
+        sleap-rtc room delete abc123 --force
+    """
+    from sleap_rtc.auth.credentials import get_jwt
+    from sleap_rtc.config import get_config
+
+    jwt_token = get_jwt()
+    if not jwt_token:
+        logger.error("Not logged in. Run: sleap-rtc login")
+        sys.exit(1)
+
+    if not force:
+        if not click.confirm(f"Are you sure you want to delete room '{room_id}'? This cannot be undone."):
+            click.echo("Cancelled")
+            return
+
+    config = get_config()
+    endpoint = f"{config.get_http_url()}/api/auth/rooms/{room_id}"
+
+    try:
+        response = requests.delete(
+            endpoint,
+            headers={"Authorization": f"Bearer {jwt_token}"},
+            timeout=30,
+        )
+
+        if response.status_code != 200:
+            error = response.json().get("detail", response.json().get("error", response.text))
+            logger.error(f"Failed to delete room: {error}")
+            sys.exit(1)
+
+        click.echo(f"Room '{room_id}' deleted successfully")
+
+    except requests.RequestException as e:
+        logger.error(f"Request failed: {e}")
+        sys.exit(1)
+
+
+@room.command(name="invite")
+@click.argument("room_id")
+def room_invite(room_id):
+    """Generate an invite code for a room.
+
+    Creates a short-lived invite code that others can use to join the room.
+    You must be the owner of the room to generate invites.
+
+    Example:
+        sleap-rtc room invite abc123
+    """
+    from sleap_rtc.auth.credentials import get_jwt
+    from sleap_rtc.config import get_config
+
+    jwt_token = get_jwt()
+    if not jwt_token:
+        logger.error("Not logged in. Run: sleap-rtc login")
+        sys.exit(1)
+
+    config = get_config()
+    endpoint = f"{config.get_http_url()}/api/auth/rooms/{room_id}/invite"
+
+    try:
+        response = requests.post(
+            endpoint,
+            headers={"Authorization": f"Bearer {jwt_token}"},
+            timeout=30,
+        )
+
+        if response.status_code != 200:
+            error = response.json().get("error", response.text)
+            logger.error(f"Failed to create invite: {error}")
+            sys.exit(1)
+
+        data = response.json()
+
+        click.echo("")
+        click.echo("Invite code created!")
+        click.echo("")
+        click.echo(f"  Code:    {data['invite_code']}")
+        click.echo(f"  Expires: {data.get('expires_at', 'in 24 hours')}")
+        click.echo("")
+        click.echo("Share this command with your collaborator:")
+        click.echo(f"  sleap-rtc room join --code {data['invite_code']}")
+        click.echo("")
+
+    except requests.RequestException as e:
+        logger.error(f"Request failed: {e}")
+        sys.exit(1)
+
+
+@room.command(name="join")
+@click.option(
+    "--code",
+    "-c",
+    required=True,
+    help="Invite code from room owner.",
+)
+def room_join(code):
+    """Join a room using an invite code.
+
+    Use an invite code shared by the room owner to join their room.
+
+    Example:
+        sleap-rtc room join --code ABCD1234
+    """
+    from sleap_rtc.auth.credentials import get_jwt
+    from sleap_rtc.config import get_config
+
+    jwt_token = get_jwt()
+    if not jwt_token:
+        logger.error("Not logged in. Run: sleap-rtc login")
+        sys.exit(1)
+
+    config = get_config()
+    endpoint = f"{config.get_http_url()}/api/auth/rooms/join"
+
+    try:
+        response = requests.post(
+            endpoint,
+            json={"invite_code": code},
+            headers={"Authorization": f"Bearer {jwt_token}"},
+            timeout=30,
+        )
+
+        if response.status_code != 200:
+            error = response.json().get("error", response.text)
+            logger.error(f"Failed to join room: {error}")
+            sys.exit(1)
+
+        data = response.json()
+
+        click.echo("")
+        click.echo("Successfully joined room!")
+        click.echo("")
+        click.echo(f"  Room ID: {data['room_id']}")
+        click.echo(f"  Role:    {data.get('role', 'member')}")
+        click.echo("")
+
+    except requests.RequestException as e:
+        logger.error(f"Request failed: {e}")
+        sys.exit(1)
 
 
 def show_worker_help():
@@ -33,18 +627,26 @@ def show_worker_help():
 
 @cli.command()
 @click.option(
+    "--api-key",
+    "-k",
+    type=str,
+    envvar="SLEAP_RTC_API_KEY",
+    required=False,
+    help="API key for worker authentication (slp_xxx...). Can also use SLEAP_RTC_API_KEY env var.",
+)
+@click.option(
     "--room-id",
     "-r",
     type=str,
     required=False,
-    help="Room ID to join (if not provided, a new room will be created).",
+    help="[Legacy] Room ID to join (if not provided, a new room will be created).",
 )
 @click.option(
     "--token",
     "-t",
     type=str,
     required=False,
-    help="Room token for authentication (required if --room-id is provided).",
+    help="[Legacy] Room token for authentication (required if --room-id is provided).",
 )
 @click.option(
     "--working-dir",
@@ -53,12 +655,47 @@ def show_worker_help():
     required=False,
     help="Working directory for the worker. Overrides config file value.",
 )
-def worker(room_id, token, working_dir):
-    """Start the sleap-RTC worker node."""
-    # Validate that both room_id and token are provided together
-    if (room_id and not token) or (token and not room_id):
-        logger.error("Both --room-id and --token must be provided together")
+def worker(api_key, room_id, token, working_dir):
+    """Start the sleap-RTC worker node.
+
+    Authentication modes (choose one):
+
+    1. API Key (recommended):
+       sleap-rtc worker --api-key slp_xxx...
+
+       Get an API key from: sleap-rtc token create --room ROOM --name NAME
+
+    2. Legacy room credentials:
+       sleap-rtc worker --room-id ROOM --token TOKEN
+
+       Or omit both to create a new anonymous room (deprecated).
+    """
+    # Check for credential file if no explicit auth provided
+    if not api_key and not room_id:
+        from sleap_rtc.auth.credentials import get_credentials
+        creds = get_credentials()
+        tokens = creds.get("tokens", {})
+        if tokens:
+            # Use first available token
+            first_room = next(iter(tokens))
+            api_key = tokens[first_room].get("api_key")
+            if api_key:
+                logger.info(f"Using API key from credentials for room: {first_room}")
+
+    # Validate authentication options
+    has_api_key = api_key is not None
+    has_legacy = room_id is not None or token is not None
+
+    if has_api_key and has_legacy:
+        logger.error("Cannot use both --api-key and --room-id/--token")
+        logger.error("Choose one authentication method")
         sys.exit(1)
+
+    if has_legacy:
+        # Legacy mode validation
+        if (room_id and not token) or (token and not room_id):
+            logger.error("Both --room-id and --token must be provided together")
+            sys.exit(1)
 
     # Validate working directory if provided
     if working_dir:
@@ -72,6 +709,7 @@ def worker(room_id, token, working_dir):
         logger.info(f"Using working directory: {working_dir}")
 
     run_RTCworker(
+        api_key=api_key,
         room_id=room_id,
         token=token,
         working_dir=working_dir,

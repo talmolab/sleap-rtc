@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SLEAP-RTC - Logging in...</title>
+    <style>
+        :root {
+            --primary-color: #6366f1;
+            --background: #0f172a;
+            --surface: #1e293b;
+            --text: #f1f5f9;
+            --text-secondary: #94a3b8;
+            --danger-color: #ef4444;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--background);
+            color: var(--text);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .container {
+            text-align: center;
+            padding: 40px;
+            background: var(--surface);
+            border-radius: 16px;
+            max-width: 400px;
+            width: 90%;
+        }
+
+        h1 {
+            font-size: 1.5rem;
+            margin-bottom: 8px;
+            color: var(--primary-color);
+        }
+
+        p {
+            color: var(--text-secondary);
+            margin-bottom: 24px;
+        }
+
+        .spinner {
+            width: 40px;
+            height: 40px;
+            border: 3px solid var(--surface);
+            border-top-color: var(--primary-color);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 24px;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .error {
+            color: var(--danger-color);
+            background: rgba(239, 68, 68, 0.1);
+            padding: 16px;
+            border-radius: 8px;
+            margin-top: 16px;
+        }
+
+        .btn {
+            display: inline-block;
+            padding: 12px 24px;
+            background: var(--primary-color);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 0.875rem;
+            font-weight: 500;
+            cursor: pointer;
+            text-decoration: none;
+            margin-top: 16px;
+        }
+
+        .btn:hover {
+            background: #4f46e5;
+        }
+
+        .hidden {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div id="loading">
+            <div class="spinner"></div>
+            <h1>SLEAP-RTC</h1>
+            <p>Completing login...</p>
+        </div>
+
+        <div id="success" class="hidden">
+            <h1>Login Successful!</h1>
+            <p>Redirecting to dashboard...</p>
+        </div>
+
+        <div id="error" class="hidden">
+            <h1>Login Failed</h1>
+            <p id="error-message">An error occurred during login.</p>
+            <a href="index.html" class="btn">Try Again</a>
+        </div>
+
+        <div id="cli-success" class="hidden">
+            <h1>Login Successful!</h1>
+            <p>You can close this window and return to your terminal.</p>
+        </div>
+    </div>
+
+    <script src="config.js"></script>
+    <script>
+        async function handleCallback() {
+            const loadingEl = document.getElementById('loading');
+            const successEl = document.getElementById('success');
+            const errorEl = document.getElementById('error');
+            const errorMsgEl = document.getElementById('error-message');
+            const cliSuccessEl = document.getElementById('cli-success');
+
+            try {
+                // Parse URL parameters
+                const params = new URLSearchParams(window.location.search);
+                const code = params.get('code');
+                const state = params.get('state');
+                const error = params.get('error');
+                const cliState = params.get('cli_state');
+
+                if (error) {
+                    throw new Error(params.get('error_description') || error);
+                }
+
+                if (!code) {
+                    throw new Error('No authorization code received');
+                }
+
+                // Verify OAuth state
+                const savedState = sessionStorage.getItem('oauth_state');
+                if (state !== savedState) {
+                    throw new Error('State mismatch - possible CSRF attack');
+                }
+                sessionStorage.removeItem('oauth_state');
+
+                // Exchange code for JWT
+                const response = await fetch(`${CONFIG.SIGNALING_SERVER}/api/auth/github/callback`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        code,
+                        redirect_uri: CONFIG.OAUTH_CALLBACK_URL,
+                    }),
+                });
+
+                if (!response.ok) {
+                    const data = await response.json();
+                    throw new Error(data.detail || data.error || 'OAuth exchange failed');
+                }
+
+                const data = await response.json();
+
+                // Check if this is CLI mode
+                if (cliState) {
+                    // Deposit token for CLI to poll
+                    const depositResponse = await fetch(`${CONFIG.SIGNALING_SERVER}/api/auth/cli/deposit`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            state: cliState,
+                            jwt: data.token,
+                            user: data.user,
+                        }),
+                    });
+
+                    if (!depositResponse.ok) {
+                        throw new Error('Failed to complete CLI login. Please try again.');
+                    }
+
+                    // Show CLI success message
+                    loadingEl.classList.add('hidden');
+                    cliSuccessEl.classList.remove('hidden');
+                    return;
+                }
+
+                // Normal dashboard flow: save credentials and redirect
+                localStorage.setItem(CONFIG.STORAGE_KEYS.JWT, data.token);
+                localStorage.setItem(CONFIG.STORAGE_KEYS.USER, JSON.stringify(data.user));
+
+                // Show success
+                loadingEl.classList.add('hidden');
+                successEl.classList.remove('hidden');
+
+                // Redirect to dashboard
+                setTimeout(() => {
+                    window.location.href = 'index.html';
+                }, 1000);
+
+            } catch (e) {
+                console.error('OAuth callback error:', e);
+                loadingEl.classList.add('hidden');
+                errorEl.classList.remove('hidden');
+                errorMsgEl.textContent = e.message;
+            }
+        }
+
+        // Run on page load
+        handleCallback();
+    </script>
+</body>
+</html>

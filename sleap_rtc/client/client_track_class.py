@@ -21,6 +21,14 @@ import requests
 
 from sleap_rtc.config import get_config
 from sleap_rtc.filesystem import safe_mkdir
+from sleap_rtc.protocol import (
+    parse_message,
+    format_message,
+    MSG_AUTH_REQUIRED,
+    MSG_AUTH_RESPONSE,
+    MSG_AUTH_SUCCESS,
+    MSG_AUTH_FAILURE,
+)
 
 logging.basicConfig(level=logging.INFO)
 
@@ -60,6 +68,60 @@ class RTCTrackClient:
         self.target_worker = None
         self.reconnecting = False
         self.reconnect_attempts = 0
+
+        # P2P Authentication state (TOTP)
+        self._authenticated = False  # Whether we've passed TOTP auth
+        self._auth_required = False  # Whether worker requires auth
+        self._auth_attempts = 0  # Number of failed attempts
+        self._max_auth_attempts = 3  # Max attempts before giving up
+        self._auth_event = None  # asyncio.Event to signal auth completion
+
+    async def _prompt_for_otp(self) -> str:
+        """Prompt user to enter OTP code from their authenticator app.
+
+        Returns:
+            6-digit OTP code string.
+        """
+        attempt_info = ""
+        if self._auth_attempts > 0:
+            remaining = self._max_auth_attempts - self._auth_attempts
+            attempt_info = f" ({remaining} attempts remaining)"
+
+        print(f"\n{'='*60}")
+        print("AUTHENTICATION REQUIRED")
+        print(f"{'='*60}")
+        print("Enter the 6-digit code from your authenticator app")
+        print(f"(e.g., Google Authenticator, Authy){attempt_info}")
+        print("")
+
+        loop = asyncio.get_event_loop()
+        otp_code = await loop.run_in_executor(
+            None, lambda: input("OTP Code: ").strip()
+        )
+        return otp_code
+
+    async def _handle_auth_required(self, worker_id: str):
+        """Handle AUTH_REQUIRED message from worker.
+
+        Args:
+            worker_id: ID of the worker requesting authentication.
+        """
+        self._auth_required = True
+        logging.info(f"Worker {worker_id} requires TOTP authentication")
+
+        while self._auth_attempts < self._max_auth_attempts:
+            otp_code = await self._prompt_for_otp()
+
+            if not otp_code or len(otp_code) != 6 or not otp_code.isdigit():
+                print("Invalid code format. Please enter exactly 6 digits.")
+                self._auth_attempts += 1
+                continue
+
+            auth_response = format_message(MSG_AUTH_RESPONSE, otp_code)
+            if self.data_channel and self.data_channel.readyState == "open":
+                self.data_channel.send(auth_response)
+                logging.info("Sent OTP code to worker")
+            break
 
     def create_track_package(
         self,
@@ -302,6 +364,41 @@ sleap-nn track \\
             message: Message from worker (string or bytes)
         """
         if isinstance(message, str):
+            # Handle authentication messages (AUTH_*)
+            if message.startswith(MSG_AUTH_REQUIRED):
+                msg_type, args = parse_message(message)
+                worker_id = args[0] if args else "unknown"
+                asyncio.create_task(self._handle_auth_required(worker_id))
+                return
+
+            if message == MSG_AUTH_SUCCESS:
+                self._authenticated = True
+                self._auth_attempts = 0
+                print("\n" + "=" * 60)
+                print("AUTHENTICATION SUCCESSFUL")
+                print("=" * 60 + "\n")
+                logging.info("Successfully authenticated with worker via TOTP")
+                if self._auth_event:
+                    self._auth_event.set()
+                return
+
+            if message.startswith(MSG_AUTH_FAILURE):
+                msg_type, args = parse_message(message)
+                reason = args[0] if args else "unknown"
+                self._auth_attempts += 1
+
+                if reason == "max_attempts_exceeded" or self._auth_attempts >= self._max_auth_attempts:
+                    print("\n" + "=" * 60)
+                    print("AUTHENTICATION FAILED - Max attempts exceeded")
+                    print("=" * 60 + "\n")
+                    logging.error("Authentication failed - max attempts exceeded")
+                    if self._auth_event:
+                        self._auth_event.set()
+                else:
+                    print(f"\nInvalid OTP code. Please try again.")
+                    asyncio.create_task(self._handle_auth_required("worker"))
+                return
+
             if message == "END_OF_FILE":
                 # Save received predictions file
                 if self.predictions_data:

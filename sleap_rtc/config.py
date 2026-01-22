@@ -294,8 +294,13 @@ class Config:
             HTTP base URL with port.
         """
         url = self.signaling_http
-        # Add port if not present
-        if ":" not in url.split("//")[-1]:
+        # Don't add port to standard HTTPS/HTTP URLs (they use 443/80)
+        # Only add port for localhost or explicit non-standard URLs
+        host_part = url.split("//")[-1]
+        is_localhost = host_part.startswith("localhost") or host_part.startswith("127.0.0.1")
+        has_port = ":" in host_part
+
+        if is_localhost and not has_port:
             url = f"{url}:{port}"
         return url
 
