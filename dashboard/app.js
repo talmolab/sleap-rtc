@@ -1,11 +1,92 @@
 // SLEAP-RTC Dashboard Application
 
+// =========================================================================
+// Relative Time Formatting
+// =========================================================================
+
+/**
+ * Format a date as relative time (e.g., "2 hours ago", "yesterday")
+ * Uses Intl.RelativeTimeFormat for localized output
+ * @param {string} isoString - ISO 8601 date string
+ * @returns {string} Relative time string
+ */
+function formatRelativeTime(isoString) {
+    if (!isoString) return 'N/A';
+
+    const date = new Date(isoString);
+    const now = new Date();
+    const diffMs = now - date;
+    const diffSec = Math.floor(diffMs / 1000);
+    const diffMin = Math.floor(diffSec / 60);
+    const diffHour = Math.floor(diffMin / 60);
+    const diffDay = Math.floor(diffHour / 24);
+
+    const rtf = new Intl.RelativeTimeFormat('en', { numeric: 'auto' });
+
+    // Handle future dates (for expiration)
+    if (diffMs < 0) {
+        const futureSec = Math.abs(diffSec);
+        const futureMin = Math.floor(futureSec / 60);
+        const futureHour = Math.floor(futureMin / 60);
+        const futureDay = Math.floor(futureHour / 24);
+
+        if (futureDay > 0) return rtf.format(futureDay, 'day');
+        if (futureHour > 0) return rtf.format(futureHour, 'hour');
+        if (futureMin > 0) return rtf.format(futureMin, 'minute');
+        return 'in a moment';
+    }
+
+    // Handle past dates
+    if (diffDay > 0) return rtf.format(-diffDay, 'day');
+    if (diffHour > 0) return rtf.format(-diffHour, 'hour');
+    if (diffMin > 0) return rtf.format(-diffMin, 'minute');
+    return 'just now';
+}
+
+/**
+ * Format a date as an exact datetime string for tooltip display
+ * @param {string} isoString - ISO 8601 date string
+ * @returns {string} Formatted datetime string
+ */
+function formatExactDate(isoString) {
+    if (!isoString) return '';
+    const date = new Date(isoString);
+    return date.toLocaleString('en-US', {
+        weekday: 'short',
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        timeZoneName: 'short'
+    });
+}
+
+/**
+ * Extract hostname from worker peer_id
+ * peer_id format: "worker-{worker_name}-{uuid}" e.g., "worker-labgpu1-8f3a"
+ * @param {string} peerId - The peer ID string
+ * @returns {string} Extracted hostname or the original peer_id
+ */
+function extractWorkerHostname(peerId) {
+    if (!peerId) return 'Unknown';
+    // Format: worker-{name}-{uuid4_hex_4chars}
+    // Example: "worker-labgpu1-8f3a" -> "labgpu1"
+    const match = peerId.match(/^worker-(.+)-[a-f0-9]{4}$/i);
+    if (match) {
+        return match[1];
+    }
+    // Fallback: return peer_id without "worker-" prefix if present
+    return peerId.replace(/^worker-/i, '');
+}
+
 class SleapRTCDashboard {
     constructor() {
         this.jwt = null;
         this.user = null;
         this.rooms = [];
         this.tokens = [];
+        this.tokenWorkers = {}; // Cache of connected workers by token_id
 
         this.init();
     }
@@ -73,24 +154,26 @@ class SleapRTCDashboard {
     updateUI() {
         const loginSection = document.getElementById('login-section');
         const dashboardSection = document.getElementById('dashboard-section');
-        const userInfo = document.getElementById('user-info');
 
         if (this.isLoggedIn()) {
             loginSection.classList.add('hidden');
             dashboardSection.classList.remove('hidden');
-            userInfo.classList.remove('hidden');
 
-            // Update user info
+            // Update user info in top bar
             document.getElementById('user-avatar').src = this.user.avatar_url || '';
             document.getElementById('user-name').textContent = this.user.username || 'User';
 
             // Load data
             this.loadRooms();
             this.loadTokens();
+
+            // Initialize Lucide icons
+            if (typeof lucide !== 'undefined') {
+                lucide.createIcons();
+            }
         } else {
             loginSection.classList.remove('hidden');
             dashboardSection.classList.add('hidden');
-            userInfo.classList.add('hidden');
         }
     }
 
@@ -101,9 +184,33 @@ class SleapRTCDashboard {
         // Logout button
         document.getElementById('logout-btn')?.addEventListener('click', () => this.handleLogout());
 
-        // Tab switching
-        document.querySelectorAll('.tab').forEach(tab => {
-            tab.addEventListener('click', (e) => this.switchTab(e.target.dataset.tab));
+        // User dropdown toggle
+        document.getElementById('user-trigger')?.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.toggleUserMenu();
+        });
+
+        // Close user menu when clicking outside
+        document.addEventListener('click', (e) => {
+            const dropdown = document.querySelector('.user-dropdown');
+            if (dropdown && !dropdown.contains(e.target)) {
+                document.getElementById('user-menu')?.classList.remove('open');
+            }
+        });
+
+        // Sidebar navigation
+        document.querySelectorAll('.nav-item[data-tab]').forEach(item => {
+            item.addEventListener('click', (e) => this.switchTab(e.currentTarget.dataset.tab));
+        });
+
+        // Refresh buttons
+        document.getElementById('refresh-rooms-btn')?.addEventListener('click', () => {
+            this.loadRooms();
+            this.showToast('Rooms refreshed');
+        });
+        document.getElementById('refresh-tokens-btn')?.addEventListener('click', () => {
+            this.loadTokens();
+            this.showToast('Tokens refreshed');
         });
 
         // Create room
@@ -116,6 +223,9 @@ class SleapRTCDashboard {
         // Create token
         document.getElementById('create-token-btn')?.addEventListener('click', () => this.showCreateTokenModal());
         document.getElementById('create-token-form')?.addEventListener('submit', (e) => this.handleCreateToken(e));
+
+        // Verify OTP
+        document.getElementById('verify-otp-form')?.addEventListener('submit', (e) => this.handleVerifyOTP(e));
 
         // Modal close buttons
         document.querySelectorAll('[data-close-modal]').forEach(btn => {
@@ -146,21 +256,37 @@ class SleapRTCDashboard {
         });
     }
 
+    toggleUserMenu() {
+        const menu = document.getElementById('user-menu');
+        menu?.classList.toggle('open');
+    }
+
     switchTab(tabName) {
-        // Update tab buttons
-        document.querySelectorAll('.tab').forEach(tab => {
-            tab.classList.toggle('active', tab.dataset.tab === tabName);
+        // Update sidebar nav items
+        document.querySelectorAll('.nav-item[data-tab]').forEach(item => {
+            item.classList.toggle('active', item.dataset.tab === tabName);
         });
 
         // Update tab content
         document.querySelectorAll('.tab-content').forEach(content => {
             content.classList.toggle('active', content.id === `${tabName}-tab`);
-            content.classList.toggle('hidden', content.id !== `${tabName}-tab`);
         });
+
+        // Update page title
+        const titles = {
+            'rooms': 'Rooms',
+            'tokens': 'Worker Tokens',
+            'verify-otp': 'Verify OTP'
+        };
+        document.getElementById('page-title').textContent = titles[tabName] || tabName;
     }
 
     showModal(modalId) {
         document.getElementById(modalId)?.classList.remove('hidden');
+        // Refresh Lucide icons in modal
+        if (typeof lucide !== 'undefined') {
+            lucide.createIcons();
+        }
     }
 
     hideModal(modalId) {
@@ -171,11 +297,22 @@ class SleapRTCDashboard {
         const container = document.getElementById('toast-container');
         const toast = document.createElement('div');
         toast.className = `toast ${type}`;
-        toast.textContent = message;
+
+        const icon = type === 'success' ? 'check-circle' : 'x-circle';
+        toast.innerHTML = `
+            <i data-lucide="${icon}"></i>
+            <span>${message}</span>
+        `;
         container.appendChild(toast);
 
+        // Initialize Lucide icon in toast
+        if (typeof lucide !== 'undefined') {
+            lucide.createIcons();
+        }
+
         setTimeout(() => {
-            toast.remove();
+            toast.style.animation = 'slideIn 0.2s ease reverse';
+            setTimeout(() => toast.remove(), 200);
         }, 3000);
     }
 
@@ -221,8 +358,9 @@ class SleapRTCDashboard {
 
     handleLogout() {
         this.clearCredentials();
+        document.getElementById('user-menu')?.classList.remove('open');
         this.updateUI();
-        this.showToast('Logged out successfully');
+        this.showToast('Signed out successfully');
     }
 
     // Called from callback.html
@@ -302,10 +440,21 @@ class SleapRTCDashboard {
             const data = await this.apiRequest('/api/auth/rooms');
             this.rooms = data.rooms || [];
             this.renderRooms();
+            this.updateCounts();
         } catch (e) {
             console.error('Failed to load rooms:', e);
-            container.innerHTML = `<p class="error">Failed to load rooms: ${e.message}</p>`;
+            container.innerHTML = `<p class="loading" style="color: var(--status-error);">Failed to load rooms: ${e.message}</p>`;
         }
+    }
+
+    updateCounts() {
+        // Update sidebar badges
+        document.getElementById('rooms-count').textContent = this.rooms.length;
+        document.getElementById('tokens-count').textContent = this.tokens.length;
+
+        // Update section titles
+        document.getElementById('rooms-title-count').textContent = this.rooms.length;
+        document.getElementById('tokens-title-count').textContent = this.tokens.length;
     }
 
     renderRooms() {
@@ -314,34 +463,75 @@ class SleapRTCDashboard {
         if (this.rooms.length === 0) {
             container.innerHTML = `
                 <div class="empty-state">
+                    <div class="empty-icon">
+                        <i data-lucide="home"></i>
+                    </div>
                     <h3>No rooms yet</h3>
                     <p>Create a room to get started with remote training.</p>
+                    <button class="btn btn-primary" onclick="app.showModal('create-room-modal')">
+                        <i data-lucide="plus"></i>
+                        Create Room
+                    </button>
                 </div>
             `;
+            if (typeof lucide !== 'undefined') {
+                lucide.createIcons();
+            }
             return;
         }
 
         container.innerHTML = this.rooms.map(room => `
-            <div class="card">
-                <div class="card-header">
-                    <div>
-                        <div class="card-title">${room.name || 'Unnamed Room'}</div>
-                        <div class="card-subtitle">${room.room_id}</div>
+            <div class="room-card">
+                <div class="room-header">
+                    <div class="room-main">
+                        <div class="room-icon">
+                            <i data-lucide="home"></i>
+                        </div>
+                        <div class="room-info">
+                            <h3>${room.name || 'Unnamed Room'}</h3>
+                            <div class="room-meta">
+                                <span class="room-meta-item">
+                                    <i data-lucide="hash"></i>
+                                    ${room.room_id}
+                                </span>
+                                <span class="room-meta-item" title="${formatExactDate(room.joined_at)}">
+                                    <i data-lucide="calendar"></i>
+                                    Joined ${formatRelativeTime(room.joined_at)}
+                                </span>
+                            </div>
+                        </div>
                     </div>
-                    <div class="card-actions">
+                    <div class="room-actions">
+                        <span class="role-badge ${room.role}">${room.role}</span>
+                        <button class="btn btn-secondary btn-sm" onclick="app.handleViewRoom('${room.room_id}')">
+                            <i data-lucide="eye"></i>
+                            View
+                        </button>
                         ${room.role === 'owner' ? `
-                            <button class="btn btn-primary btn-small" onclick="app.handleViewRoom('${room.room_id}')">View Details</button>
-                            <button class="btn btn-secondary btn-small" onclick="app.handleInvite('${room.room_id}')">Invite</button>
-                            <button class="btn btn-danger btn-small" onclick="app.handleDeleteRoom('${room.room_id}', '${room.name || room.room_id}')">Delete</button>
+                            <button class="btn btn-secondary btn-sm" onclick="app.handleInvite('${room.room_id}')">
+                                <i data-lucide="user-plus"></i>
+                                Invite
+                            </button>
+                            <button class="btn btn-danger btn-sm" onclick="app.handleDeleteRoom('${room.room_id}', '${this.escapeHtml(room.name || room.room_id)}')">
+                                <i data-lucide="trash-2"></i>
+                                Delete
+                            </button>
                         ` : ''}
                     </div>
                 </div>
-                <div class="card-meta">
-                    <span><span class="badge ${room.role === 'owner' ? 'badge-success' : 'badge-warning'}">${room.role}</span></span>
-                    <span>Joined: ${new Date(room.joined_at).toLocaleDateString()}</span>
-                </div>
             </div>
         `).join('');
+
+        // Initialize Lucide icons
+        if (typeof lucide !== 'undefined') {
+            lucide.createIcons();
+        }
+    }
+
+    escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML.replace(/'/g, "\\'");
     }
 
     async handleCreateRoom(e) {
@@ -529,9 +719,65 @@ class SleapRTCDashboard {
             const data = await this.apiRequest('/api/auth/tokens');
             this.tokens = data.tokens || [];
             this.renderTokens();
+            this.updateCounts();
+
+            // Load worker counts for all tokens (non-blocking)
+            this.loadAllTokenWorkers().then(() => {
+                this.updateWorkerBadges();
+            });
         } catch (e) {
             console.error('Failed to load tokens:', e);
-            container.innerHTML = `<p class="error">Failed to load tokens: ${e.message}</p>`;
+            container.innerHTML = `<p class="loading" style="color: var(--status-error);">Failed to load tokens: ${e.message}</p>`;
+        }
+    }
+
+    updateWorkerBadges() {
+        // Update worker count badges after loading worker data
+        for (const token of this.tokens) {
+            if (token.revoked_at) continue;
+
+            const workerData = this.tokenWorkers[token.token_id] || { workers: [], count: 0 };
+            const badge = document.getElementById(`worker-badge-${token.token_id}`);
+            const workersList = document.getElementById(`workers-list-${token.token_id}`);
+
+            if (badge) {
+                const count = workerData.count;
+                const text = count === 0 ? '0 connected' :
+                    count === 1 ? '1 connected' : `${count} connected`;
+                badge.innerHTML = `
+                    <i data-lucide="${count > 0 ? 'zap' : 'zap-off'}"></i>
+                    ${text}
+                `;
+                badge.className = `worker-count-badge ${count === 0 ? 'offline' : ''}`;
+            }
+
+            if (workersList) {
+                if (workerData.workers.length === 0) {
+                    workersList.innerHTML = '<div class="nested-worker-row" style="justify-content: center; color: var(--text-muted);">No workers currently connected</div>';
+                } else {
+                    workersList.innerHTML = workerData.workers.map(worker => `
+                        <div class="nested-worker-row">
+                            <div class="worker-cell">
+                                <div class="worker-avatar">
+                                    <i data-lucide="monitor"></i>
+                                </div>
+                                <div>
+                                    <div class="worker-name">${extractWorkerHostname(worker.peer_id)}</div>
+                                    <div class="worker-id">${worker.peer_id}</div>
+                                </div>
+                            </div>
+                            <span class="worker-connected" title="${formatExactDate(worker.connected_at)}">
+                                Connected ${formatRelativeTime(worker.connected_at)}
+                            </span>
+                        </div>
+                    `).join('');
+                }
+            }
+
+            // Refresh Lucide icons
+            if (typeof lucide !== 'undefined') {
+                lucide.createIcons();
+            }
         }
     }
 
@@ -541,37 +787,92 @@ class SleapRTCDashboard {
         if (this.tokens.length === 0) {
             container.innerHTML = `
                 <div class="empty-state">
+                    <div class="empty-icon">
+                        <i data-lucide="key-round"></i>
+                    </div>
                     <h3>No tokens yet</h3>
                     <p>Create a token to authenticate workers.</p>
+                    <button class="btn btn-primary" onclick="app.showCreateTokenModal()">
+                        <i data-lucide="plus"></i>
+                        Create Token
+                    </button>
                 </div>
             `;
+            if (typeof lucide !== 'undefined') {
+                lucide.createIcons();
+            }
             return;
         }
 
-        container.innerHTML = this.tokens.map(token => `
-            <div class="card">
-                <div class="card-header">
-                    <div>
-                        <div class="card-title">${token.worker_name}</div>
-                        <div class="card-subtitle">Room: ${token.room_id}</div>
+        container.innerHTML = this.tokens.map(token => {
+            const isRevoked = !!token.revoked_at;
+            const isExpiringSoon = token.expires_at && new Date(token.expires_at) - new Date() < 3 * 24 * 60 * 60 * 1000;
+
+            return `
+            <div class="token-card">
+                <div class="token-header">
+                    <div class="token-main">
+                        <div class="token-icon" ${isRevoked ? 'style="opacity: 0.5;"' : ''}>
+                            <i data-lucide="key-round"></i>
+                        </div>
+                        <div class="token-info">
+                            <h3>${token.worker_name}</h3>
+                            <div class="token-meta">
+                                <span class="token-meta-item">
+                                    <i data-lucide="home"></i>
+                                    ${token.room_name ? `${token.room_name} (${token.room_id.substring(0, 8)}...)` : token.room_id}
+                                </span>
+                                <span class="token-meta-item" title="${formatExactDate(token.created_at)}">
+                                    <i data-lucide="calendar"></i>
+                                    Created ${formatRelativeTime(token.created_at)}
+                                </span>
+                                ${token.expires_at ? `
+                                    <span class="token-meta-item" ${isExpiringSoon && !isRevoked ? 'style="color: var(--status-warning);"' : ''} title="${formatExactDate(token.expires_at)}">
+                                        <i data-lucide="${isExpiringSoon && !isRevoked ? 'alert-triangle' : 'clock'}"></i>
+                                        Expires ${formatRelativeTime(token.expires_at)}
+                                    </span>
+                                ` : ''}
+                                ${isRevoked ? `
+                                    <span class="token-meta-item" style="color: var(--status-error);">
+                                        <i data-lucide="x-circle"></i>
+                                        Revoked
+                                    </span>
+                                ` : ''}
+                            </div>
+                        </div>
                     </div>
-                    <div class="card-actions">
-                        ${!token.revoked_at ? `
-                            <button class="btn btn-danger btn-small" onclick="app.handleRevokeToken('${token.token_id}')">Revoke</button>
+                    <div class="token-actions">
+                        ${!isRevoked ? `
+                            <div id="worker-badge-${token.token_id}" class="worker-count-badge offline">
+                                <i data-lucide="zap-off"></i>
+                                Loading...
+                            </div>
+                            <button class="btn btn-danger btn-sm" onclick="app.handleRevokeToken('${token.token_id}')">
+                                <i data-lucide="trash-2"></i>
+                                Revoke
+                            </button>
                         ` : ''}
                     </div>
                 </div>
-                <div class="card-meta">
-                    <span>
-                        <span class="badge ${token.revoked_at ? 'badge-danger' : 'badge-success'}">
-                            ${token.revoked_at ? 'Revoked' : 'Active'}
-                        </span>
-                    </span>
-                    <span>Created: ${new Date(token.created_at).toLocaleDateString()}</span>
-                    ${token.expires_at ? `<span>Expires: ${new Date(token.expires_at).toLocaleDateString()}</span>` : ''}
-                </div>
+                ${!isRevoked ? `
+                    <div class="nested-workers">
+                        <div class="nested-header" onclick="app.toggleWorkersList('${token.token_id}', this)">
+                            <span>Connected Workers</span>
+                            <i data-lucide="chevron-down"></i>
+                        </div>
+                        <div id="workers-list-${token.token_id}" class="nested-worker-list">
+                            <div class="nested-worker-row" style="justify-content: center; color: var(--text-muted);">Loading workers...</div>
+                        </div>
+                    </div>
+                ` : ''}
             </div>
-        `).join('');
+        `;
+        }).join('');
+
+        // Initialize Lucide icons
+        if (typeof lucide !== 'undefined') {
+            lucide.createIcons();
+        }
     }
 
     async showCreateTokenModal() {
@@ -609,7 +910,12 @@ class SleapRTCDashboard {
 
             // Show success modal
             document.getElementById('new-token-id').textContent = data.token_id;
-            document.getElementById('new-token-room').textContent = data.room_id;
+            // Look up room name from our rooms list
+            const room = this.rooms.find(r => r.room_id === roomId);
+            const roomDisplay = room && room.name
+                ? `${room.name} (${roomId.substring(0, 8)}...)`
+                : roomId;
+            document.getElementById('new-token-room').textContent = roomDisplay;
             document.getElementById('new-token-name').textContent = workerName;
             document.getElementById('worker-command').textContent = `sleap-rtc worker --api-key ${data.token_id}`;
 
@@ -629,6 +935,37 @@ class SleapRTCDashboard {
         }
     }
 
+    async loadTokenWorkers(tokenId) {
+        try {
+            const data = await this.apiRequest(`/api/auth/tokens/${tokenId}/workers`);
+            this.tokenWorkers[tokenId] = data;
+            return data;
+        } catch (e) {
+            console.error(`Failed to load workers for token ${tokenId}:`, e);
+            this.tokenWorkers[tokenId] = { workers: [], count: 0 };
+            return this.tokenWorkers[tokenId];
+        }
+    }
+
+    async loadAllTokenWorkers() {
+        // Load worker counts for all active tokens in parallel
+        const activeTokens = this.tokens.filter(t => !t.revoked_at);
+        const promises = activeTokens.map(token => this.loadTokenWorkers(token.token_id));
+        await Promise.all(promises);
+    }
+
+    toggleWorkersList(tokenId, headerElement) {
+        const list = document.getElementById(`workers-list-${tokenId}`);
+        if (list && headerElement) {
+            const isExpanded = list.classList.toggle('expanded');
+            headerElement.classList.toggle('expanded', isExpanded);
+            // Refresh Lucide icons for the chevron
+            if (typeof lucide !== 'undefined') {
+                lucide.createIcons();
+            }
+        }
+    }
+
     async handleRevokeToken(tokenId) {
         if (!confirm('Are you sure you want to revoke this token? Workers using it will no longer be able to connect.')) {
             return;
@@ -645,6 +982,48 @@ class SleapRTCDashboard {
         } catch (e) {
             console.error('Failed to revoke token:', e);
             this.showToast(e.message, 'error');
+        }
+    }
+
+    // =========================================================================
+    // OTP Verification
+    // =========================================================================
+
+    async handleVerifyOTP(e) {
+        e.preventDefault();
+
+        const roomId = document.getElementById('otp-room-id').value.trim();
+        const code = document.getElementById('otp-code').value.trim();
+        const result = document.getElementById('otp-result');
+
+        if (!roomId || !code) {
+            result.className = 'otp-result error';
+            result.textContent = 'Please enter both Room ID and OTP code';
+            result.style.display = 'block';
+            return;
+        }
+
+        if (code.length !== 6 || !/^\d+$/.test(code)) {
+            result.className = 'otp-result error';
+            result.textContent = 'OTP code must be exactly 6 digits';
+            result.style.display = 'block';
+            return;
+        }
+
+        try {
+            const data = await this.apiRequest(`/api/auth/rooms/${roomId}/verify-otp`, {
+                method: 'POST',
+                body: JSON.stringify({ otp_code: code }),
+            });
+
+            result.className = 'otp-result success';
+            result.innerHTML = '<strong>Valid!</strong> OTP code verified successfully.';
+            result.style.display = 'block';
+
+        } catch (e) {
+            result.className = 'otp-result error';
+            result.textContent = e.message || 'Invalid OTP code. Please try again.';
+            result.style.display = 'block';
         }
     }
 }
