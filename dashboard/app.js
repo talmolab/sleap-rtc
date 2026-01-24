@@ -13,7 +13,12 @@
 function formatRelativeTime(isoString) {
     if (!isoString) return 'N/A';
 
-    const date = new Date(isoString);
+    // Ensure UTC parsing: if no timezone indicator, assume UTC
+    let dateStr = isoString;
+    if (!isoString.endsWith('Z') && !isoString.includes('+') && !isoString.includes('-', 10)) {
+        dateStr = isoString + 'Z';
+    }
+    const date = new Date(dateStr);
     const now = new Date();
     const diffMs = now - date;
     const diffSec = Math.floor(diffMs / 1000);
@@ -50,7 +55,12 @@ function formatRelativeTime(isoString) {
  */
 function formatExactDate(isoString) {
     if (!isoString) return '';
-    const date = new Date(isoString);
+    // Ensure UTC parsing: if no timezone indicator, assume UTC
+    let dateStr = isoString;
+    if (!isoString.endsWith('Z') && !isoString.includes('+') && !isoString.includes('-', 10)) {
+        dateStr = isoString + 'Z';
+    }
+    const date = new Date(dateStr);
     return date.toLocaleString('en-US', {
         weekday: 'short',
         year: 'numeric',
