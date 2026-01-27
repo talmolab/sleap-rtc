@@ -23,6 +23,7 @@ class WorkerInfo:
 
     peer_id: str
     hostname: str = ""
+    worker_name: str = ""
     status: str = "unknown"
     gpu_info: str = ""
     mounts: list = None
@@ -43,6 +44,7 @@ class WorkerInfo:
         return cls(
             peer_id=peer_id,
             hostname=props.get("hostname", peer_id[:15]),
+            worker_name=props.get("worker_name", ""),
             status=props.get("status", "unknown"),
             gpu_info=props.get("gpu_name", ""),
             mounts=props.get("mounts", []),
@@ -51,6 +53,8 @@ class WorkerInfo:
     @property
     def display_name(self) -> str:
         """Get display name for the tab."""
+        if self.worker_name:
+            return self.worker_name[:20]
         return self.hostname[:20] if self.hostname else self.peer_id[:20]
 
     @property

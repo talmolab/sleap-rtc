@@ -655,7 +655,14 @@ def show_worker_help():
     required=False,
     help="Working directory for the worker. Overrides config file value.",
 )
-def worker(api_key, room_id, token, working_dir):
+@click.option(
+    "--name",
+    "-n",
+    type=str,
+    required=False,
+    help="Human-readable name for this worker (e.g. 'lab-gpu-1'). Shown in TUI and client discovery.",
+)
+def worker(api_key, room_id, token, working_dir, name):
     """Start the sleap-RTC worker node.
 
     Authentication modes (choose one):
@@ -713,6 +720,7 @@ def worker(api_key, room_id, token, working_dir):
         room_id=room_id,
         token=token,
         working_dir=working_dir,
+        name=name,
     )
 
 

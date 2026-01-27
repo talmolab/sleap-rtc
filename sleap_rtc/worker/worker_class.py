@@ -92,6 +92,7 @@ class RTCWorkerClient:
         gpu_id=0,
         mounts: list = None,
         working_dir: str = None,
+        name: str = None,
     ):
         # Use /app/shared_data in production, current dir + shared_data in dev
         self.save_dir = "."
@@ -106,6 +107,7 @@ class RTCWorkerClient:
         # Filesystem browser configuration
         self.mounts: list = mounts or []
         self.working_dir: str = working_dir
+        self.name: str = name
 
         logging.info("Transfer mode: RTC Transfer")
 
@@ -2556,6 +2558,7 @@ class RTCWorkerClient:
                             "sleap_version": sleap_version,
                             "cuda_version": self.cuda_version,
                             "hostname": socket.gethostname(),
+                            "worker_name": self.name,
                             "status": self.status,
                             "max_concurrent_jobs": self.max_concurrent_jobs,
                             "supported_models": self.supported_models,
