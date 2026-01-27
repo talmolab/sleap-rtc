@@ -14,6 +14,7 @@ def run_RTCworker(
     room_id=None,
     token=None,
     working_dir=None,
+    name=None,
 ):
     """Create RTCWorkerClient and start it.
 
@@ -22,6 +23,7 @@ def run_RTCworker(
         room_id: Optional room ID to join. If not provided, a new room will be created.
         token: Optional room token for authentication. Required if room_id is provided.
         working_dir: Optional working directory. CLI option overrides config file.
+        name: Optional human-readable name for this worker.
     """
     # Get configuration
     config = get_config()
@@ -45,7 +47,7 @@ def run_RTCworker(
             logging.info(f"  - {mount.label}: {mount.path}")
 
     # Create the worker instance with mounts
-    worker = RTCWorkerClient(mounts=valid_mounts, working_dir=effective_working_dir)
+    worker = RTCWorkerClient(mounts=valid_mounts, working_dir=effective_working_dir, name=name)
 
     # Create the RTCPeerConnection object.
     pc = RTCPeerConnection()

@@ -655,7 +655,14 @@ def show_worker_help():
     required=False,
     help="Working directory for the worker. Overrides config file value.",
 )
-def worker(api_key, room_id, token, working_dir):
+@click.option(
+    "--name",
+    "-n",
+    type=str,
+    required=False,
+    help="Human-readable name for this worker (e.g. 'lab-gpu-1'). Shown in TUI and client discovery.",
+)
+def worker(api_key, room_id, token, working_dir, name):
     """Start the sleap-RTC worker node.
 
     Authentication modes (choose one):
@@ -713,6 +720,7 @@ def worker(api_key, room_id, token, working_dir):
         room_id=room_id,
         token=token,
         working_dir=working_dir,
+        name=name,
     )
 
 
@@ -1290,7 +1298,13 @@ def browse(room, token, port, no_browser, use_jwt, no_jwt, otp_secret):
     default=False,
     help="Don't auto-open browser (just print URL).",
 )
-def resolve_paths(room, token, slp, port, no_browser):
+@click.option(
+    "--use-jwt",
+    is_flag=True,
+    default=False,
+    help="Use JWT authentication (requires 'sleap-rtc login' first).",
+)
+def resolve_paths(room, token, slp, port, no_browser, use_jwt):
     """Resolve missing video paths in an SLP file on a Worker.
 
     This command connects to a Worker and checks if the video paths in an SLP
@@ -1322,6 +1336,16 @@ def resolve_paths(room, token, slp, port, no_browser):
     logger.info(f"Starting video path resolution for: {slp}")
     logger.info(f"Connecting to room: {room}")
 
+    # Check for JWT if --use-jwt flag is set
+    jwt_token = None
+    if use_jwt:
+        from sleap_rtc.auth.credentials import get_valid_jwt
+        jwt_token = get_valid_jwt()
+        if not jwt_token:
+            logger.error("No valid JWT found. Run: sleap-rtc login")
+            sys.exit(1)
+        logger.info("Using JWT authentication")
+
     try:
         result = asyncio.run(
             run_resolve_client(
@@ -1330,6 +1354,7 @@ def resolve_paths(room, token, slp, port, no_browser):
                 slp_path=slp,
                 port=port,
                 open_browser=not no_browser,
+                jwt_token=jwt_token,
             )
         )
         if result:
