@@ -36,7 +36,7 @@ class ResolveClient:
     - Relays messages between browser and Worker for path resolution
     """
 
-    def __init__(self, room_id: str, token: str, slp_path: str, port: int = 8765):
+    def __init__(self, room_id: str, token: str, slp_path: str, port: int = 8765, jwt_token: str = None):
         """Initialize the resolve client.
 
         Args:
@@ -44,11 +44,13 @@ class ResolveClient:
             token: Room token for authentication.
             slp_path: Path to SLP file on Worker filesystem.
             port: Local port for the resolution UI server.
+            jwt_token: Optional JWT token for authenticated access.
         """
         self.room_id = room_id
         self.token = token
         self.slp_path = slp_path
         self.port = port
+        self.jwt_token = jwt_token
 
         # Load config
         config = get_config()
@@ -85,16 +87,24 @@ class ResolveClient:
             The resolved SLP path if videos were resolved, None otherwise.
         """
         try:
-            # Sign in anonymously to get credentials
-            sign_in_json = self._request_anonymous_signin()
-            id_token = sign_in_json.get("id_token")
-            self.peer_id = sign_in_json.get("username")
+            # Use JWT if provided, otherwise fall back to anonymous sign-in
+            if self.jwt_token:
+                from sleap_rtc.auth.credentials import get_user
+                user = get_user()
+                self.peer_id = user.get("username", "jwt-client") if user else "jwt-client"
+                id_token = self.jwt_token
+                logging.info(f"Using JWT authentication as: {self.peer_id}")
+            else:
+                # Sign in anonymously to get credentials
+                sign_in_json = self._request_anonymous_signin()
+                id_token = sign_in_json.get("id_token")
+                self.peer_id = sign_in_json.get("username")
 
-            if not id_token:
-                logging.error("Failed to get anonymous ID token")
-                return None
+                if not id_token:
+                    logging.error("Failed to get anonymous ID token")
+                    return None
 
-            logging.info(f"Signed in as: {self.peer_id}")
+                logging.info(f"Signed in anonymously as: {self.peer_id}")
 
             # Connect to signaling server
             async with websockets.connect(self.dns) as websocket:
@@ -213,12 +223,11 @@ class ResolveClient:
         import platform
         import os
 
-        register_msg = json.dumps({
+        register_data = {
             "type": "register",
             "peer_id": self.peer_id,
             "room_id": self.room_id,
             "token": self.token,
-            "id_token": id_token,
             "role": "client",
             "metadata": {
                 "tags": ["sleap-rtc", "resolve-client"],
@@ -227,9 +236,15 @@ class ResolveClient:
                     "user_id": os.environ.get("USER", "unknown"),
                 },
             },
-        })
+        }
 
-        await self.websocket.send(register_msg)
+        # Use 'jwt' field for JWT authentication, 'id_token' for anonymous
+        if self.jwt_token:
+            register_data["jwt"] = id_token
+        else:
+            register_data["id_token"] = id_token
+
+        await self.websocket.send(json.dumps(register_data))
 
         # Wait for registration confirmation
         response = await self.websocket.recv()
@@ -473,6 +488,7 @@ async def run_resolve_client(
     slp_path: str,
     port: int = 8765,
     open_browser: bool = True,
+    jwt_token: str = None,
 ) -> str:
     """Run the resolve client.
 
@@ -482,6 +498,7 @@ async def run_resolve_client(
         slp_path: Path to SLP file on Worker filesystem.
         port: Local port for the resolution UI server.
         open_browser: Whether to auto-open the browser.
+        jwt_token: Optional JWT token for authenticated access.
 
     Returns:
         The resolved SLP path if successful, None otherwise.
@@ -491,5 +508,6 @@ async def run_resolve_client(
         token=token,
         slp_path=slp_path,
         port=port,
+        jwt_token=jwt_token,
     )
     return await client.run(open_browser=open_browser)
