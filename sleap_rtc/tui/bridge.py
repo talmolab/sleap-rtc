@@ -208,6 +208,11 @@ class WebRTCBridge:
             if data.get("type") == "peer_list":
                 workers = data.get("peers", [])
                 logging.info(f"Discovered {len(workers)} workers")
+                # Debug: dump discovery response to file for inspection
+                import json as _json
+                with open("/tmp/tui-discovery-debug.json", "w") as _f:
+                    _json.dump(workers, _f, indent=2)
+                    logging.info("Wrote discovery response to /tmp/tui-discovery-debug.json")
                 return workers
             else:
                 logging.warning(f"Unexpected discovery response: {data}")

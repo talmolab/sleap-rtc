@@ -228,6 +228,9 @@ labels.v9291.slp.training_job/
 # Scratch/investigation folders (local development notes)
 scratch/
 
+# Playwright MCP screenshots
+.playwright-mcp/
+
 # JWT/PEM key files (secrets)
 *.pem
 jwt_private.pem
