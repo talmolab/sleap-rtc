@@ -631,7 +631,8 @@ def show_worker_help():
     help="API key for worker authentication (slp_xxx...). Can also use SLEAP_RTC_API_KEY env var.",
 )
 @click.option(
-    "--room-id",
+    "--room",
+    "--room-id",  # Alias for backward compatibility
     "-r",
     type=str,
     required=False,
@@ -642,7 +643,7 @@ def show_worker_help():
     "-t",
     type=str,
     required=False,
-    help="[Legacy] Room token for authentication (required if --room-id is provided).",
+    help="[Legacy] Room token for authentication (required if --room is provided).",
 )
 @click.option(
     "--working-dir",
@@ -658,7 +659,7 @@ def show_worker_help():
     required=False,
     help="Human-readable name for this worker (e.g. 'lab-gpu-1'). Shown in TUI and client discovery.",
 )
-def worker(api_key, room_id, token, working_dir, name):
+def worker(api_key, room, token, working_dir, name):
     """Start the sleap-RTC worker node.
 
     Authentication modes (choose one):
@@ -669,12 +670,12 @@ def worker(api_key, room_id, token, working_dir, name):
        Get an API key from: sleap-rtc token create --room ROOM --name NAME
 
     2. Legacy room credentials:
-       sleap-rtc worker --room-id ROOM --token TOKEN
+       sleap-rtc worker --room ROOM --token TOKEN
 
        Or omit both to create a new anonymous room (deprecated).
     """
     # Check for credential file if no explicit auth provided
-    if not api_key and not room_id:
+    if not api_key and not room:
         from sleap_rtc.auth.credentials import get_credentials
         creds = get_credentials()
         tokens = creds.get("tokens", {})
@@ -687,17 +688,17 @@ def worker(api_key, room_id, token, working_dir, name):
 
     # Validate authentication options
     has_api_key = api_key is not None
-    has_legacy = room_id is not None or token is not None
+    has_legacy = room is not None or token is not None
 
     if has_api_key and has_legacy:
-        logger.error("Cannot use both --api-key and --room-id/--token")
+        logger.error("Cannot use both --api-key and --room/--token")
         logger.error("Choose one authentication method")
         sys.exit(1)
 
     if has_legacy:
         # Legacy mode validation
-        if (room_id and not token) or (token and not room_id):
-            logger.error("Both --room-id and --token must be provided together")
+        if (room and not token) or (token and not room):
+            logger.error("Both --room and --token must be provided together")
             sys.exit(1)
 
     # Validate working directory if provided
@@ -713,7 +714,7 @@ def worker(api_key, room_id, token, working_dir, name):
 
     run_RTCworker(
         api_key=api_key,
-        room_id=room_id,
+        room_id=room,
         token=token,
         working_dir=working_dir,
         name=name,
@@ -730,7 +731,8 @@ def worker(api_key, room_id, token, working_dir, name):
     help="Session string for direct connection to a specific worker.",
 )
 @click.option(
-    "--room-id",
+    "--room",
+    "--room-id",  # Alias for backward compatibility
     type=str,
     required=False,
     help="Room ID for room-based worker discovery.",
@@ -739,7 +741,7 @@ def worker(api_key, room_id, token, working_dir, name):
     "--token",
     type=str,
     required=False,
-    help="Room token for authentication (required with --room-id).",
+    help="Room token for authentication (required with --room).",
 )
 @click.option(
     "--worker-id",
@@ -751,7 +753,7 @@ def worker(api_key, room_id, token, working_dir, name):
     "--auto-select",
     is_flag=True,
     default=False,
-    help="Automatically select best worker by GPU memory (use with --room-id).",
+    help="Automatically select best worker by GPU memory (use with --room).",
 )
 @click.option(
     "--pkg_path",
@@ -809,7 +811,7 @@ def client_train(**kwargs):
     1. Session string (direct): --session-string SESSION
        Connect directly to a specific worker using its session string.
 
-    2. Room-based discovery: --room-id ROOM --token TOKEN
+    2. Room-based discovery: --room ROOM --token TOKEN
        Join a room and discover available workers. Supports:
        - Interactive selection (default)
        - Auto-select: --auto-select
@@ -842,23 +844,23 @@ def client_train(**kwargs):
     if has_session and has_room:
         logger.error("Connection modes are mutually exclusive. Use only one of:")
         logger.error("  --session-string (direct connection)")
-        logger.error("  --room-id and --token (room-based discovery)")
+        logger.error("  --room and --token (room-based discovery)")
         sys.exit(1)
 
     if not has_session and not has_room:
         logger.error("Must provide a connection method:")
         logger.error("  --session-string SESSION (direct connection)")
-        logger.error("  --room-id ROOM --token TOKEN (room-based discovery)")
+        logger.error("  --room ROOM --token TOKEN (room-based discovery)")
         sys.exit(1)
 
     # Validation: room-id and token must be together
     if (room_id and not token) or (token and not room_id):
-        logger.error("Both --room-id and --token must be provided together")
+        logger.error("Both --room and --token must be provided together")
         sys.exit(1)
 
     # Validation: worker selection options require room-id
     if (worker_id or auto_select) and not room_id:
-        logger.error("--worker-id and --auto-select require --room-id and --token")
+        logger.error("--worker-id and --auto-select require --room and --token")
         sys.exit(1)
 
     # Validation: worker-id and auto-select are mutually exclusive
@@ -921,7 +923,8 @@ def client_train(**kwargs):
     help="Session string for direct connection to a specific worker.",
 )
 @click.option(
-    "--room-id",
+    "--room",
+    "--room-id",  # Alias for backward compatibility
     type=str,
     required=False,
     help="Room ID for room-based worker discovery.",
@@ -930,7 +933,7 @@ def client_train(**kwargs):
     "--token",
     type=str,
     required=False,
-    help="Room token for authentication (required with --room-id).",
+    help="Room token for authentication (required with --room).",
 )
 @click.option(
     "--worker-id",
@@ -942,7 +945,7 @@ def client_train(**kwargs):
     "--auto-select",
     is_flag=True,
     default=False,
-    help="Automatically select best worker by GPU memory (use with --room-id).",
+    help="Automatically select best worker by GPU memory (use with --room).",
 )
 @click.option(
     "--data_path",
@@ -986,7 +989,7 @@ def client_track(**kwargs):
     1. Session string (direct): --session-string SESSION
        Connect directly to a specific worker using its session string.
 
-    2. Room-based discovery: --room-id ROOM --token TOKEN
+    2. Room-based discovery: --room ROOM --token TOKEN
        Join a room and discover available workers. Supports:
        - Interactive selection (default)
        - Auto-select: --auto-select
@@ -1008,23 +1011,23 @@ def client_track(**kwargs):
     if has_session and has_room:
         logger.error("Connection modes are mutually exclusive. Use only one of:")
         logger.error("  --session-string (direct connection)")
-        logger.error("  --room-id and --token (room-based discovery)")
+        logger.error("  --room and --token (room-based discovery)")
         sys.exit(1)
 
     if not has_session and not has_room:
         logger.error("Must provide a connection method:")
         logger.error("  --session-string SESSION (direct connection)")
-        logger.error("  --room-id ROOM --token TOKEN (room-based discovery)")
+        logger.error("  --room ROOM --token TOKEN (room-based discovery)")
         sys.exit(1)
 
     # Validation: room-id and token must be together
     if (room_id and not token) or (token and not room_id):
-        logger.error("Both --room-id and --token must be provided together")
+        logger.error("Both --room and --token must be provided together")
         sys.exit(1)
 
     # Validation: worker selection options require room-id
     if (worker_id or auto_select) and not room_id:
-        logger.error("--worker-id and --auto-select require --room-id and --token")
+        logger.error("--worker-id and --auto-select require --room and --token")
         sys.exit(1)
 
     # Validation: worker-id and auto-select are mutually exclusive
@@ -1077,6 +1080,7 @@ def client_deprecated(ctx, **kwargs):
 @cli.command(name="browse")
 @click.option(
     "--room",
+    "--room-id",  # Alias for backward compatibility
     "-r",
     type=str,
     required=True,
@@ -1151,6 +1155,7 @@ def browse(room, token, port, no_browser):
 @cli.command(name="resolve-paths")
 @click.option(
     "--room",
+    "--room-id",  # Alias for backward compatibility
     "-r",
     type=str,
     required=True,
