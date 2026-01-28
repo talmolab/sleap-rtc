@@ -15,10 +15,6 @@ from aiortc import RTCPeerConnection, RTCSessionDescription
 
 from sleap_rtc.config import get_config
 from sleap_rtc.protocol import (
-    MSG_AUTH_REQUIRED,
-    MSG_AUTH_RESPONSE,
-    MSG_AUTH_SUCCESS,
-    MSG_AUTH_FAILURE,
     MSG_FS_GET_MOUNTS,
     MSG_FS_LIST_DIR,
     MSG_USE_WORKER_PATH,
@@ -44,7 +40,6 @@ class WebRTCBridge:
     - WebSocket connection to signaling server
     - WebRTC peer connection and data channel
     - Async message sending and receiving
-    - Authentication state (TOTP)
 
     The TUI uses this bridge to send filesystem commands and receive responses
     without needing a browser or HTTP server.
@@ -54,11 +49,7 @@ class WebRTCBridge:
         self,
         room_id: str,
         token: str,
-        otp_secret: Optional[str] = None,
         on_message: Optional[Callable[[str], Any]] = None,
-        on_auth_required: Optional[Callable[[], Any]] = None,
-        on_auth_success: Optional[Callable[[], Any]] = None,
-        on_auth_failure: Optional[Callable[[str], Any]] = None,
         on_connected: Optional[Callable[[], Any]] = None,
         on_disconnected: Optional[Callable[[], Any]] = None,
     ):
@@ -67,23 +58,15 @@ class WebRTCBridge:
         Args:
             room_id: Room ID to connect to.
             token: Room token for authentication.
-            otp_secret: Base32-encoded OTP secret for auto-authentication.
             on_message: Callback for incoming messages from worker.
-            on_auth_required: Callback when worker requires authentication.
-            on_auth_success: Callback when authentication succeeds.
-            on_auth_failure: Callback when authentication fails (with reason).
             on_connected: Callback when data channel opens.
             on_disconnected: Callback when connection is lost.
         """
         self.room_id = room_id
         self.token = token
-        self.otp_secret = otp_secret
 
         # Callbacks
         self._on_message = on_message
-        self._on_auth_required = on_auth_required
-        self._on_auth_success = on_auth_success
-        self._on_auth_failure = on_auth_failure
         self._on_connected = on_connected
         self._on_disconnected = on_disconnected
 
@@ -99,10 +82,6 @@ class WebRTCBridge:
         self.worker_id: Optional[str] = None
         self.ice_servers: list = []
 
-        # Authentication state
-        self._authenticated = False
-        self._auth_required = False
-
         # Message queue for request/response pattern
         self._response_queue: asyncio.Queue = asyncio.Queue()
         self._pending_requests: dict[str, asyncio.Future] = {}
@@ -117,11 +96,6 @@ class WebRTCBridge:
             self.data_channel is not None
             and self.data_channel.readyState == "open"
         )
-
-    @property
-    def is_authenticated(self) -> bool:
-        """Check if authenticated with worker."""
-        return self._authenticated or not self._auth_required
 
     async def connect(self, worker_id: str) -> bool:
         """Connect to a specific worker.
@@ -234,11 +208,6 @@ class WebRTCBridge:
             logging.warning("Cannot send: data channel not open")
             return False
 
-        # Gate FS_* commands on authentication
-        if message.startswith("FS_") and self._auth_required and not self._authenticated:
-            logging.warning("Cannot send FS command before authentication")
-            return False
-
         self.data_channel.send(message)
         return True
 
@@ -322,22 +291,6 @@ class WebRTCBridge:
                 except json.JSONDecodeError:
                     logging.error("Failed to parse list response")
         return None
-
-    def send_auth_response(self, otp_code: str) -> bool:
-        """Send OTP authentication response to worker.
-
-        Args:
-            otp_code: The 6-digit OTP code.
-
-        Returns:
-            True if sent, False otherwise.
-        """
-        if not self.is_connected:
-            return False
-
-        message = format_message(MSG_AUTH_RESPONSE, otp_code)
-        self.data_channel.send(message)
-        return True
 
     async def check_slp_videos(self, slp_path: str) -> Optional[dict]:
         """Check video accessibility for an SLP file.
@@ -656,43 +609,6 @@ class WebRTCBridge:
 
     async def _handle_message(self, message: str):
         """Handle incoming message from worker."""
-        # Handle authentication messages
-        if message.startswith(MSG_AUTH_REQUIRED):
-            self._auth_required = True
-            _, args = parse_message(message)
-            worker_id = args[0] if args else "unknown"
-            logging.info(f"Worker {worker_id} requires authentication")
-
-            # Try auto-auth with OTP secret
-            if self.otp_secret:
-                try:
-                    from sleap_rtc.auth.totp import generate_otp
-                    otp_code = generate_otp(self.otp_secret)
-                    self.send_auth_response(otp_code)
-                    logging.info("Auto-sent OTP from stored secret")
-                    return
-                except Exception as e:
-                    logging.warning(f"Auto-auth failed: {e}")
-
-            if self._on_auth_required:
-                await self._call_async(self._on_auth_required)
-            return
-
-        if message == MSG_AUTH_SUCCESS:
-            self._authenticated = True
-            logging.info("Authentication successful")
-            if self._on_auth_success:
-                await self._call_async(self._on_auth_success)
-            return
-
-        if message.startswith(MSG_AUTH_FAILURE):
-            _, args = parse_message(message)
-            reason = args[0] if args else "unknown"
-            logging.warning(f"Authentication failed: {reason}")
-            if self._on_auth_failure:
-                await self._call_async(self._on_auth_failure, reason)
-            return
-
         # Check for pending request responses
         for prefix, future in list(self._pending_requests.items()):
             if message.startswith(prefix) and not future.done():

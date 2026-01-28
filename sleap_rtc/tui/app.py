@@ -48,19 +48,16 @@ class TUIApp(App):
         self,
         room_id: Optional[str] = None,
         token: Optional[str] = None,
-        otp_secret: Optional[str] = None,
     ):
         """Initialize the TUI app.
 
         Args:
             room_id: Optional room ID (bypasses room selection).
             token: Optional room token (required with room_id).
-            otp_secret: Optional OTP secret for auto-authentication.
         """
         super().__init__()
         self.room_id = room_id
         self.token = token
-        self.otp_secret = otp_secret
 
         # Will be set during connection
         self.bridge = None
@@ -160,7 +157,6 @@ class TUIApp(App):
         browser_screen = BrowserScreen(
             room_id=room_id,
             token=token,
-            otp_secret=self.otp_secret,
         )
         self.push_screen(browser_screen)
 
@@ -175,14 +171,12 @@ class TUIApp(App):
 def run_tui(
     room_id: Optional[str] = None,
     token: Optional[str] = None,
-    otp_secret: Optional[str] = None,
 ) -> None:
     """Run the TUI application.
 
     Args:
         room_id: Optional room ID to connect to directly.
         token: Optional room token (required with room_id).
-        otp_secret: Optional OTP secret for auto-authentication.
     """
-    app = TUIApp(room_id=room_id, token=token, otp_secret=otp_secret)
+    app = TUIApp(room_id=room_id, token=token)
     app.run()

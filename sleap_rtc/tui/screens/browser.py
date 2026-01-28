@@ -21,7 +21,6 @@ from sleap_rtc.tui.widgets.tree_browser import TreeBrowser
 from sleap_rtc.tui.widgets.worker_tabs import WorkerTabs, WorkerInfo
 from sleap_rtc.tui.widgets.slp_panel import SLPContextPanel, SLPInfo, VideoInfo
 from sleap_rtc.tui.bridge import WebRTCBridge
-from sleap_rtc.tui.screens.otp_input import OTPInputScreen
 from sleap_rtc.tui.screens.resolve_confirm import ResolveConfirmScreen
 
 
@@ -163,7 +162,6 @@ class BrowserScreen(Screen):
         self,
         room_id: str,
         token: str,
-        otp_secret: Optional[str] = None,
         name: Optional[str] = None,
     ):
         """Initialize browser screen.
@@ -171,13 +169,11 @@ class BrowserScreen(Screen):
         Args:
             room_id: Room ID to connect to.
             token: Room token for authentication.
-            otp_secret: Optional OTP secret for auto-auth.
             name: Screen name.
         """
         super().__init__(name=name)
         self.room_id = room_id
         self.token = token
-        self.otp_secret = otp_secret
 
         # WebRTC bridge (one per worker connection)
         self.bridge: Optional[WebRTCBridge] = None
@@ -312,12 +308,8 @@ class BrowserScreen(Screen):
             self.bridge = WebRTCBridge(
                 room_id=self.room_id,
                 token=self.token,
-                otp_secret=self.otp_secret,
                 on_connected=self._on_connected,
                 on_disconnected=self._on_disconnected,
-                on_auth_required=self._on_auth_required,
-                on_auth_success=self._on_auth_success,
-                on_auth_failure=self._on_auth_failure,
             )
 
             # Connect to signaling server
@@ -379,12 +371,8 @@ class BrowserScreen(Screen):
             self.bridge = WebRTCBridge(
                 room_id=self.room_id,
                 token=self.token,
-                otp_secret=self.otp_secret,
                 on_connected=self._on_connected,
                 on_disconnected=self._on_disconnected,
-                on_auth_required=self._on_auth_required,
-                on_auth_success=self._on_auth_success,
-                on_auth_failure=self._on_auth_failure,
             )
             await self.bridge.connect_signaling()
 
@@ -409,8 +397,7 @@ class BrowserScreen(Screen):
             miller = self.query_one("#miller-columns", MillerColumns)
             miller.focus()
 
-            # Wait a moment for auth messages, then load if authenticated
-            # (if auth is required, _on_auth_required will be called and handle it)
+            # Wait a moment for connection to stabilize, then load root
             self.set_timer(0.5, self._try_load_root)
 
         else:
@@ -460,10 +447,6 @@ class BrowserScreen(Screen):
         if not self.bridge.is_connected:
             return {"error": "Data channel not connected"}
 
-        # Check if auth is required but not completed
-        if self.bridge._auth_required and not self.bridge._authenticated:
-            return {"error": "Worker requires OTP authentication"}
-
         # Handle root path specially - fetch mounts
         if path == "/":
             mounts = await self.bridge.get_mounts()
@@ -492,13 +475,8 @@ class BrowserScreen(Screen):
         return result
 
     def _try_load_root(self):
-        """Try to load root directory if authenticated."""
+        """Try to load root directory."""
         if not self.bridge:
-            return
-
-        # If auth is required but not completed, don't load yet
-        if self.bridge._auth_required and not self.bridge._authenticated:
-            # Auth flow will handle loading after success
             return
 
         # Only load the active view to avoid race conditions
@@ -525,61 +503,6 @@ class BrowserScreen(Screen):
         worker_tabs.set_worker_connected(self.current_worker_index, False)
 
         self.notify("Connection to worker lost", severity="warning")
-
-    def _on_auth_required(self):
-        """Called when worker requires OTP authentication."""
-        self.notify("OTP authentication required - showing input...", severity="warning")
-        # Use call_later to ensure the screen is ready
-        self.call_later(self._show_otp_input)
-
-    def _show_otp_input(self):
-        """Show the OTP input modal."""
-        worker_name = self.current_worker_name or "Worker"
-
-        def on_otp_entered(code: str):
-            """Called when user enters OTP code."""
-            if self.bridge:
-                self.bridge.send_auth_response(code)
-                # Don't dismiss yet - wait for auth success/failure
-
-        def on_cancel():
-            """Called when user cancels OTP input."""
-            self.notify("Authentication cancelled", severity="warning")
-
-        self._otp_screen = OTPInputScreen(
-            worker_name=worker_name,
-            on_otp_entered=on_otp_entered,
-            on_cancel=on_cancel,
-        )
-        self.app.push_screen(self._otp_screen)
-
-    def _on_auth_success(self):
-        """Called when authentication succeeds."""
-        self.notify("Authentication successful", severity="information")
-        # Dismiss OTP modal if open
-        if hasattr(self, '_otp_screen') and self._otp_screen:
-            self._otp_screen.dismiss()
-            self._otp_screen = None
-        # Only load the active view
-        if self.view_mode == "miller":
-            miller = self.query_one("#miller-columns", MillerColumns)
-            miller.load_root()
-            self._miller_loaded = True
-        else:
-            tree = self.query_one("#tree-browser", TreeBrowser)
-            tree.load_root()
-            self._tree_loaded = True
-
-    def _on_auth_failure(self, reason: str):
-        """Called when authentication fails."""
-        self.notify(f"AUTH FAILURE callback: {reason}", severity="error")
-        # Show error in OTP modal if open
-        if hasattr(self, '_otp_screen') and self._otp_screen:
-            self._otp_screen.show_error(f"Authentication failed: {reason}")
-        else:
-            # No OTP screen yet - maybe auth required wasn't received first
-            # Try showing the OTP input now
-            self.call_later(self._show_otp_input)
 
     def on_worker_tabs_worker_selected(self, event: WorkerTabs.WorkerSelected):
         """Handle worker selection from sidebar."""
