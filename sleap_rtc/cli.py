@@ -826,7 +826,7 @@ def client_train(**kwargs):
     """
     # Extract connection options
     session_string = kwargs.pop("session_string", None)
-    room_id = kwargs.pop("room_id", None)
+    room_id = kwargs.pop("room", None)
     token = kwargs.pop("token", None)
     worker_id = kwargs.pop("worker_id", None)
     auto_select = kwargs.pop("auto_select", False)
@@ -998,7 +998,7 @@ def client_track(**kwargs):
     """
     # Extract connection options
     session_string = kwargs.pop("session_string", None)
-    room_id = kwargs.pop("room_id", None)
+    room_id = kwargs.pop("room", None)
     token = kwargs.pop("token", None)
     worker_id = kwargs.pop("worker_id", None)
     auto_select = kwargs.pop("auto_select", False)

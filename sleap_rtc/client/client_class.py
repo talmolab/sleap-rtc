@@ -102,6 +102,7 @@ class RTCClient:
         self.pending_video_check_data = None  # Store FS_CHECK_VIDEOS_RESPONSE data
 
         self.room_id = None  # Room ID for credential lookup
+        self.cognito_username = None  # Legacy field for cleanup compatibility
 
     def parse_session_string(self, session_string: str):
         prefix = "sleap-session:"
