@@ -26,13 +26,13 @@ class StateManager:
     room creation, registration with the signaling server, and status updates.
 
     Attributes:
-        worker_id: Unique worker identifier (Cognito username).
+        worker_id: Unique worker identifier.
         websocket: WebSocket connection to signaling server.
         capabilities: WorkerCapabilities instance for metadata.
         status: Current worker status ("available", "busy", "reserved", "maintenance").
         room_id: Room ID for this worker.
         room_token: Room authentication token.
-        id_token: Cognito ID token for API authentication.
+        api_key: API key for authentication.
         max_concurrent_jobs: Maximum concurrent jobs this worker can handle.
     """
 
@@ -46,7 +46,7 @@ class StateManager:
         """Initialize state manager.
 
         Args:
-            worker_id: Unique worker identifier (Cognito username).
+            worker_id: Unique worker identifier.
             websocket: WebSocket connection to signaling server.
             capabilities: WorkerCapabilities instance for metadata.
             max_concurrent_jobs: Maximum concurrent jobs (default 1).
@@ -66,8 +66,7 @@ class StateManager:
         # Room credentials (set during registration)
         self.room_id: Optional[str] = None
         self.room_token: Optional[str] = None
-        self.id_token: Optional[str] = None
-        self.api_key: Optional[str] = None  # New API key auth
+        self.api_key: Optional[str] = None
 
     @property
     def is_admin(self) -> bool:
@@ -165,17 +164,13 @@ class StateManager:
                 registration_msg["is_admin"] = True
                 logging.info("Re-registering as admin worker")
 
-            # Add auth credentials based on method
+            # Add API key authentication
             if self.api_key:
-                # New API key authentication
                 registration_msg["api_key"] = self.api_key
                 logging.info("Re-registering with API key authentication")
             else:
-                # Legacy Cognito authentication
-                registration_msg["room_id"] = self.room_id
-                registration_msg["token"] = self.room_token
-                registration_msg["id_token"] = self.id_token
-                logging.info("Re-registering with Cognito authentication")
+                logging.error("No API key available for re-registration")
+                return
 
             # Send full registration message (not just metadata update)
             await self.websocket.send(json.dumps(registration_msg))
@@ -203,7 +198,7 @@ class StateManager:
         """Request signaling server to delete the room and associated peer.
 
         Args:
-            peer_id: Peer ID to delete (Cognito username).
+            peer_id: Peer ID to delete.
 
         Returns:
             None on success, otherwise None with error logged.
@@ -214,7 +209,7 @@ class StateManager:
             "peer_id": peer_id,
         }
 
-        # Pass the Cognito username (peer_id) to identify which room/peers to delete.
+        # Pass the peer_id to identify which room/peers to delete.
         response = requests.post(url, json=payload)
 
         if response.status_code == 200:
@@ -228,7 +223,7 @@ class StateManager:
         """Request signaling server to create a room.
 
         Args:
-            id_token: Cognito ID token for authentication.
+            id_token: Bearer token for authentication.
 
         Returns:
             Dictionary with room_id and token if successful.
@@ -238,9 +233,7 @@ class StateManager:
         """
         config = get_config()
         url = config.get_http_endpoint("/create-room")
-        headers = {
-            "Authorization": f"Bearer {id_token}"
-        }  # Use the ID token string for authentication
+        headers = {"Authorization": f"Bearer {id_token}"}
 
         response = requests.post(url, headers=headers)
 
@@ -252,28 +245,10 @@ class StateManager:
             )
             raise Exception("Failed to create room")
 
-    @staticmethod
-    def request_anonymous_signin() -> Optional[dict]:
-        """Request anonymous sign-in from signaling server.
-
-        Returns:
-            Dictionary with id_token and username if successful, None otherwise.
-        """
-        config = get_config()
-        url = config.get_http_endpoint("/anonymous-signin")
-        response = requests.post(url)
-
-        if response.status_code == 200:
-            return response.json()
-        else:
-            logging.error(f"Failed to get anonymous token: {response.text}")
-            return None
-
     def set_room_credentials(
         self,
         room_id: str,
         token: str,
-        id_token: Optional[str] = None,
         api_key: Optional[str] = None,
     ):
         """Set room credentials for re-registration.
@@ -281,12 +256,10 @@ class StateManager:
         Args:
             room_id: Room identifier.
             token: Room authentication token.
-            id_token: Cognito ID token (legacy auth).
-            api_key: API key for authentication (new auth).
+            api_key: API key for authentication.
         """
         self.room_id = room_id
         self.room_token = token
-        self.id_token = id_token
         self.api_key = api_key
 
     def get_status(self) -> str:
