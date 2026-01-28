@@ -123,7 +123,7 @@ class TokenInputScreen(Screen):
                 ),
                 Static(f"Room: {self.room_name} ({self.room_id})", id="room-info"),
                 Input(
-                    placeholder="Paste your token (slp__...)",
+                    placeholder="Paste your room token",
                     id="token-input",
                     password=False,
                 ),
@@ -167,10 +167,6 @@ class TokenInputScreen(Screen):
 
         if not token:
             error_msg.update("Please enter a token")
-            return
-
-        if not token.startswith("slp_"):
-            error_msg.update("Token should start with 'slp_'")
             return
 
         # Token looks valid, save and callback
