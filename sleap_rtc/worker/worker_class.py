@@ -2072,18 +2072,12 @@ class RTCWorkerClient:
             await self.file_manager.send_file(channel, file_path, self.output_dir)
             return
 
-        @channel.on("open")
-        def on_channel_open():
+        def handle_channel_open():
             """Handle channel open event.
 
             If PSK authentication is configured, sends AUTH_CHALLENGE to the client
             and starts a timeout task. The client must respond with a valid HMAC
             within 10 seconds or the connection will be closed.
-
-            Args:
-                None
-            Returns:
-                None
             """
             asyncio.create_task(self.keep_ice_alive(channel))
             logging.info(f"{channel.label} channel is open")
@@ -2114,6 +2108,16 @@ class RTCWorkerClient:
                 # No secret configured - mark as authenticated immediately (legacy mode)
                 self._authenticated_channels.add(channel.label)
                 logging.info(f"{channel.label} authenticated (legacy mode - no secret configured)")
+
+        # Register handler for future open events
+        @channel.on("open")
+        def on_channel_open():
+            handle_channel_open()
+
+        # If channel is already open (common with remote-created channels), handle immediately
+        if channel.readyState == "open":
+            logging.info(f"{channel.label} channel already open, handling immediately")
+            handle_channel_open()
 
         @channel.on("message")
         async def on_message(message):
