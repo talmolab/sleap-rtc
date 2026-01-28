@@ -551,6 +551,88 @@ def room_invite(room_id):
         sys.exit(1)
 
 
+@room.command(name="create-secret")
+@click.option(
+    "--room",
+    "--room-id",
+    "-r",
+    type=str,
+    required=True,
+    help="Room ID to create secret for.",
+)
+@click.option(
+    "--save/--no-save",
+    default=True,
+    help="Save secret to credentials file (default: yes).",
+)
+def room_create_secret(room, save):
+    """Generate a new room secret for P2P authentication.
+
+    Creates a cryptographically secure 256-bit secret for authenticating
+    P2P connections between workers and clients in the room.
+
+    The secret must be shared with:
+    - Workers: via --room-secret flag, SLEAP_ROOM_SECRET env var, or filesystem
+    - Clients: via --room-secret flag, SLEAP_ROOM_SECRET env var, or credentials
+
+    Configuration options (in priority order):
+    1. CLI flag: --room-secret SECRET
+    2. Environment variable: SLEAP_ROOM_SECRET=SECRET
+    3. Filesystem: ~/.sleap-rtc/room-secrets/<room-id>
+    4. Credentials file: ~/.sleap-rtc/credentials.json
+
+    Examples:
+
+        # Generate and save secret for a room
+        sleap-rtc room create-secret --room my-room
+
+        # Generate without saving (just display)
+        sleap-rtc room create-secret --room my-room --no-save
+
+        # Use the secret with worker
+        sleap-rtc worker --api-key slp_xxx --room-secret SECRET
+
+        # Use the secret with client (env var method)
+        export SLEAP_ROOM_SECRET=SECRET
+        sleap-rtc client-train --room my-room --token TOKEN -p package.zip
+    """
+    from sleap_rtc.auth.psk import generate_secret
+    from sleap_rtc.auth.credentials import save_room_secret, get_room_secret
+
+    # Check if secret already exists
+    existing = get_room_secret(room)
+    if existing:
+        if not click.confirm(f"Room '{room}' already has a secret. Generate a new one?"):
+            click.echo("Cancelled")
+            return
+
+    # Generate new secret
+    secret = generate_secret()
+
+    click.echo("")
+    click.echo("Room secret generated!")
+    click.echo("")
+    click.echo(f"  Room ID: {room}")
+    click.echo(f"  Secret:  {secret}")
+    click.echo("")
+
+    if save:
+        save_room_secret(room, secret)
+        click.echo("Secret saved to ~/.sleap-rtc/credentials.json")
+        click.echo("")
+
+    click.echo("To use this secret:")
+    click.echo("")
+    click.echo("  Worker:")
+    click.echo(f"    sleap-rtc worker --api-key slp_xxx --room-secret {secret}")
+    click.echo("    # Or set SLEAP_ROOM_SECRET environment variable")
+    click.echo("")
+    click.echo("  Client:")
+    click.echo(f"    sleap-rtc client-train --room {room} --token TOKEN -p pkg.zip --room-secret {secret}")
+    click.echo("    # Or set SLEAP_ROOM_SECRET environment variable")
+    click.echo("")
+
+
 @room.command(name="join")
 @click.option(
     "--code",
@@ -659,7 +741,14 @@ def show_worker_help():
     required=False,
     help="Human-readable name for this worker (e.g. 'lab-gpu-1'). Shown in TUI and client discovery.",
 )
-def worker(api_key, room, token, working_dir, name):
+@click.option(
+    "--room-secret",
+    type=str,
+    envvar="SLEAP_ROOM_SECRET",
+    required=False,
+    help="Room secret for P2P authentication. Can also use SLEAP_ROOM_SECRET env var.",
+)
+def worker(api_key, room, token, working_dir, name, room_secret):
     """Start the sleap-RTC worker node.
 
     Authentication modes (choose one):
@@ -718,6 +807,7 @@ def worker(api_key, room, token, working_dir, name):
         token=token,
         working_dir=working_dir,
         name=name,
+        room_secret=room_secret,
     )
 
 
@@ -803,6 +893,13 @@ def worker(api_key, room, token, working_dir, name):
     default=None,
     help="Mount label to search (skips mount selection prompt). Use 'all' to search all mounts.",
 )
+@click.option(
+    "--room-secret",
+    type=str,
+    envvar="SLEAP_ROOM_SECRET",
+    required=False,
+    help="Room secret for P2P authentication. Can also use SLEAP_ROOM_SECRET env var.",
+)
 def client_train(**kwargs):
     """Run remote training on a worker.
 
@@ -836,6 +933,9 @@ def client_train(**kwargs):
     worker_path = kwargs.pop("worker_path", None)
     non_interactive = kwargs.pop("non_interactive", False)
     mount_label = kwargs.pop("mount", None)
+
+    # Extract P2P authentication options
+    room_secret = kwargs.pop("room_secret", None)
 
     # Validation: Must provide either session string OR room credentials
     has_session = session_string is not None
@@ -909,6 +1009,7 @@ def client_train(**kwargs):
         worker_path=worker_path,
         non_interactive=non_interactive,
         mount_label=mount_label,
+        room_secret=room_secret,
         **kwargs,
     )
 
@@ -981,6 +1082,13 @@ def client_train(**kwargs):
     default=None,
     help="Minimum GPU memory in MB required for inference.",
 )
+@click.option(
+    "--room-secret",
+    type=str,
+    envvar="SLEAP_ROOM_SECRET",
+    required=False,
+    help="Room secret for P2P authentication. Can also use SLEAP_ROOM_SECRET env var.",
+)
 def client_track(**kwargs):
     """Run remote inference on a worker with pre-trained models.
 
@@ -1003,6 +1111,9 @@ def client_track(**kwargs):
     worker_id = kwargs.pop("worker_id", None)
     auto_select = kwargs.pop("auto_select", False)
     min_gpu_memory = kwargs.pop("min_gpu_memory", None)
+
+    # Extract P2P authentication options
+    room_secret = kwargs.pop("room_secret", None)
 
     # Validation: Must provide either session string OR room credentials
     has_session = session_string is not None
@@ -1062,6 +1173,7 @@ def client_track(**kwargs):
         model_paths=list(kwargs.pop("model_paths")),
         output=kwargs.pop("output"),
         only_suggested_frames=kwargs.pop("only_suggested_frames"),
+        room_secret=room_secret,
         **kwargs,
     )
 
@@ -1106,7 +1218,14 @@ def client_deprecated(ctx, **kwargs):
     default=False,
     help="Don't auto-open browser (just print URL).",
 )
-def browse(room, token, port, no_browser):
+@click.option(
+    "--room-secret",
+    type=str,
+    envvar="SLEAP_ROOM_SECRET",
+    required=False,
+    help="Room secret for P2P authentication. Can also use SLEAP_ROOM_SECRET env var.",
+)
+def browse(room, token, port, no_browser, room_secret):
     """Browse a Worker's filesystem via web UI.
 
     This command connects to a Worker in the specified room and starts
@@ -1143,6 +1262,7 @@ def browse(room, token, port, no_browser):
                 token=token,
                 port=port,
                 open_browser=not no_browser,
+                room_secret=room_secret,
             )
         )
     except KeyboardInterrupt:
@@ -1188,7 +1308,19 @@ def browse(room, token, port, no_browser):
     default=False,
     help="Don't auto-open browser (just print URL).",
 )
-def resolve_paths(room, token, slp, port, no_browser):
+@click.option(
+    "--room-secret",
+    type=str,
+    envvar="SLEAP_ROOM_SECRET",
+    required=False,
+    help="Room secret for P2P authentication. Can also use SLEAP_ROOM_SECRET env var.",
+)
+@click.option(
+    "--use-jwt/--no-jwt",
+    default=True,
+    help="Use JWT authentication (default: yes). Disable for testing.",
+)
+def resolve_paths(room, token, slp, port, no_browser, room_secret, use_jwt):
     """Resolve missing video paths in an SLP file on a Worker.
 
     This command connects to a Worker and checks if the video paths in an SLP
@@ -1230,6 +1362,8 @@ def resolve_paths(room, token, slp, port, no_browser):
                 slp_path=slp,
                 port=port,
                 open_browser=not no_browser,
+                room_secret=room_secret,
+                use_jwt=use_jwt,
             )
         )
         if result:
