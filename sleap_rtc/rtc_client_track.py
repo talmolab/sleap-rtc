@@ -19,9 +19,6 @@ def run_RTCclient_track(
     worker_id: str = None,
     auto_select: bool = False,
     min_gpu_memory: int = None,
-    use_jwt: bool = False,
-    no_jwt: bool = False,
-    otp_secret: str = None,
     **kwargs,
 ) -> None:
     """Main entry point for remote inference client.
@@ -37,9 +34,6 @@ def run_RTCclient_track(
         worker_id: Specific worker peer-id to connect to (skips discovery)
         auto_select: Automatically select best worker by GPU memory
         min_gpu_memory: Minimum GPU memory in MB for worker filtering
-        use_jwt: Require JWT authentication (fail if not logged in)
-        no_jwt: Force Cognito auth (skip JWT even if logged in)
-        otp_secret: Base32-encoded OTP secret for auto-authentication
         **kwargs: Additional arguments passed to run_client
 
     Returns:
@@ -88,11 +82,6 @@ def run_RTCclient_track(
                 worker_id=worker_id,
                 auto_select=auto_select,
                 min_gpu_memory=min_gpu_memory,
-                # JWT authentication parameters
-                use_jwt=use_jwt,
-                no_jwt=no_jwt,
-                # OTP auto-authentication
-                otp_secret=otp_secret,
                 **kwargs,
             )
         )

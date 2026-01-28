@@ -36,7 +36,7 @@ class ResolveClient:
     - Relays messages between browser and Worker for path resolution
     """
 
-    def __init__(self, room_id: str, token: str, slp_path: str, port: int = 8765, jwt_token: str = None):
+    def __init__(self, room_id: str, token: str, slp_path: str, port: int = 8765):
         """Initialize the resolve client.
 
         Args:
@@ -44,13 +44,11 @@ class ResolveClient:
             token: Room token for authentication.
             slp_path: Path to SLP file on Worker filesystem.
             port: Local port for the resolution UI server.
-            jwt_token: Optional JWT token for authenticated access.
         """
         self.room_id = room_id
         self.token = token
         self.slp_path = slp_path
         self.port = port
-        self.jwt_token = jwt_token
 
         # Load config
         config = get_config()
@@ -87,31 +85,26 @@ class ResolveClient:
             The resolved SLP path if videos were resolved, None otherwise.
         """
         try:
-            # Use JWT if provided, otherwise fall back to anonymous sign-in
-            if self.jwt_token:
-                from sleap_rtc.auth.credentials import get_user
-                user = get_user()
-                self.peer_id = user.get("username", "jwt-client") if user else "jwt-client"
-                id_token = self.jwt_token
-                logging.info(f"Using JWT authentication as: {self.peer_id}")
-            else:
-                # Sign in anonymously to get credentials
-                sign_in_json = self._request_anonymous_signin()
-                id_token = sign_in_json.get("id_token")
-                self.peer_id = sign_in_json.get("username")
+            # JWT authentication (required)
+            from sleap_rtc.auth.credentials import get_valid_jwt, get_user
 
-                if not id_token:
-                    logging.error("Failed to get anonymous ID token")
-                    return None
+            jwt_token = get_valid_jwt()
+            if not jwt_token:
+                logging.error(
+                    "No valid JWT found. Run 'sleap-rtc login' to authenticate."
+                )
+                return None
 
-                logging.info(f"Signed in anonymously as: {self.peer_id}")
+            user = get_user()
+            self.peer_id = user.get("username", "unknown") if user else "unknown"
+            logging.info(f"Using JWT authentication as: {self.peer_id}")
 
             # Connect to signaling server
             async with websockets.connect(self.dns) as websocket:
                 self.websocket = websocket
 
                 # Register with room
-                await self._register_with_room(id_token)
+                await self._register_with_room(jwt_token)
 
                 # Discover workers
                 workers = await self._discover_workers()
@@ -203,23 +196,12 @@ class ResolveClient:
         finally:
             await self._cleanup()
 
-    def _request_anonymous_signin(self) -> dict:
-        """Request anonymous sign-in from Cognito."""
-        import requests
-        from sleap_rtc.config import get_config
+    async def _register_with_room(self, jwt_token: str):
+        """Register with the signaling server room.
 
-        config = get_config()
-        url = config.get_http_endpoint("/anonymous-signin")
-
-        response = requests.post(url)
-        if response.status_code == 200:
-            return response.json()
-        else:
-            logging.error(f"Anonymous sign-in failed: {response.status_code}")
-            return {}
-
-    async def _register_with_room(self, id_token: str):
-        """Register with the signaling server room."""
+        Args:
+            jwt_token: JWT token from GitHub OAuth.
+        """
         import platform
         import os
 
@@ -229,6 +211,7 @@ class ResolveClient:
             "room_id": self.room_id,
             "token": self.token,
             "role": "client",
+            "jwt": jwt_token,
             "metadata": {
                 "tags": ["sleap-rtc", "resolve-client"],
                 "properties": {
@@ -237,12 +220,6 @@ class ResolveClient:
                 },
             },
         }
-
-        # Use 'jwt' field for JWT authentication, 'id_token' for anonymous
-        if self.jwt_token:
-            register_data["jwt"] = id_token
-        else:
-            register_data["id_token"] = id_token
 
         await self.websocket.send(json.dumps(register_data))
 
@@ -488,7 +465,6 @@ async def run_resolve_client(
     slp_path: str,
     port: int = 8765,
     open_browser: bool = True,
-    jwt_token: str = None,
 ) -> str:
     """Run the resolve client.
 
@@ -498,7 +474,6 @@ async def run_resolve_client(
         slp_path: Path to SLP file on Worker filesystem.
         port: Local port for the resolution UI server.
         open_browser: Whether to auto-open the browser.
-        jwt_token: Optional JWT token for authenticated access.
 
     Returns:
         The resolved SLP path if successful, None otherwise.
@@ -508,6 +483,5 @@ async def run_resolve_client(
         token=token,
         slp_path=slp_path,
         port=port,
-        jwt_token=jwt_token,
     )
     return await client.run(open_browser=open_browser)

@@ -12,7 +12,6 @@ from textual.binding import Binding
 from sleap_rtc.tui.screens.login import LoginScreen
 from sleap_rtc.tui.screens.room_select import RoomSelectScreen
 from sleap_rtc.tui.screens.browser import BrowserScreen
-from sleap_rtc.tui.screens.token_input import TokenInputScreen
 
 
 class TUIApp(App):
@@ -48,29 +47,27 @@ class TUIApp(App):
         self,
         room_id: Optional[str] = None,
         token: Optional[str] = None,
-        otp_secret: Optional[str] = None,
     ):
         """Initialize the TUI app.
 
         Args:
             room_id: Optional room ID (bypasses room selection).
-            token: Optional room token (required with room_id).
-            otp_secret: Optional OTP secret for auto-authentication.
+            token: Optional room token (not required for JWT auth, but kept for compatibility).
         """
         super().__init__()
         self.room_id = room_id
         self.token = token
-        self.otp_secret = otp_secret
 
         # Will be set during connection
         self.bridge = None
 
     def on_mount(self) -> None:
         """Called when app is mounted. Determines initial screen based on state."""
-        # Check if room credentials provided directly (direct mode)
-        if self.room_id and self.token:
+        # Check if room ID provided directly (direct mode)
+        if self.room_id:
             # Skip login/room selection, go straight to browser
-            self._show_browser(self.room_id, self.token)
+            # Token is optional for JWT auth (server validates via membership)
+            self._show_browser(self.room_id, self.token or "")
             return
 
         # Check if user is logged in
@@ -99,56 +96,18 @@ class TUIApp(App):
         def on_room_selected(room_data: dict) -> None:
             """Called when a room is selected."""
             room_id = room_data.get("room_id")
-            room_name = room_data.get("name", room_id)
 
-            # Try to get token from room data or stored credentials
+            # For JWT auth, the server validates room access via membership,
+            # not via room token. The token field is ignored by the server
+            # when JWT is present. We pass an empty string for compatibility.
+            # The room_data may include a token if the user owns the room,
+            # but it's not required for connection.
             token = room_data.get("token", "")
-
-            if not token:
-                # Try to get token from stored credentials
-                from sleap_rtc.auth.credentials import get_credentials
-                creds = get_credentials()
-                tokens = creds.get("tokens", {})
-                room_token = tokens.get(room_id, {})
-                token = room_token.get("api_key", "")
-
-            if not token:
-                # Show token input screen
-                self._show_token_input(room_id, room_name)
-                return
 
             self._show_browser(room_id, token)
 
         room_screen = RoomSelectScreen(on_room_selected=on_room_selected)
         self.push_screen(room_screen)
-
-    def _show_token_input(self, room_id: str, room_name: str) -> None:
-        """Show the token input screen.
-
-        Args:
-            room_id: Room ID to connect to.
-            room_name: Display name for the room.
-        """
-        def on_token_entered(token: str) -> None:
-            """Called when token is entered and saved."""
-            # Pop the token input screen
-            self.pop_screen()
-            # Pop the room select screen
-            self.pop_screen()
-            # Show the browser
-            self._show_browser(room_id, token)
-
-        def on_cancel() -> None:
-            """Called when user cancels token input."""
-            self.pop_screen()
-
-        token_screen = TokenInputScreen(
-            room_id=room_id,
-            room_name=room_name,
-            on_token_entered=on_token_entered,
-            on_cancel=on_cancel,
-        )
-        self.push_screen(token_screen)
 
     def _show_browser(self, room_id: str, token: str) -> None:
         """Show the file browser screen.
@@ -160,7 +119,6 @@ class TUIApp(App):
         browser_screen = BrowserScreen(
             room_id=room_id,
             token=token,
-            otp_secret=self.otp_secret,
         )
         self.push_screen(browser_screen)
 
@@ -175,14 +133,12 @@ class TUIApp(App):
 def run_tui(
     room_id: Optional[str] = None,
     token: Optional[str] = None,
-    otp_secret: Optional[str] = None,
 ) -> None:
     """Run the TUI application.
 
     Args:
         room_id: Optional room ID to connect to directly.
-        token: Optional room token (required with room_id).
-        otp_secret: Optional OTP secret for auto-authentication.
+        token: Optional room token (not required for JWT auth).
     """
-    app = TUIApp(room_id=room_id, token=token, otp_secret=otp_secret)
+    app = TUIApp(room_id=room_id, token=token)
     app.run()

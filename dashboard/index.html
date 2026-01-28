@@ -47,12 +47,6 @@
                     Tokens
                     <span id="tokens-count" class="nav-badge">0</span>
                 </button>
-
-                <div class="nav-label" style="margin-top: 24px;">Testing</div>
-                <button class="nav-item" data-tab="verify-otp">
-                    <i data-lucide="shield-check"></i>
-                    Verify OTP
-                </button>
             </nav>
         </aside>
 
@@ -138,38 +132,6 @@
                     </div>
                 </div>
 
-                <!-- Verify OTP Tab -->
-                <div id="verify-otp-tab" class="tab-content">
-                    <div class="section-header">
-                        <h2 class="section-title">Verify OTP Code</h2>
-                    </div>
-
-                    <div class="otp-section">
-                        <div class="otp-card">
-                            <h3>Test OTP Verification</h3>
-                            <p>Enter the room ID and a 6-digit OTP code from your authenticator app to verify it's working correctly.</p>
-
-                            <form id="verify-otp-form">
-                                <div class="form-group">
-                                    <label class="form-label">Room ID</label>
-                                    <input type="text" class="form-input" id="otp-room-id" placeholder="abc123de-f456-7890-abcd-ef1234567890">
-                                </div>
-
-                                <div class="form-group">
-                                    <label class="form-label">OTP Code</label>
-                                    <input type="text" class="form-input" id="otp-code" placeholder="123456" maxlength="6">
-                                </div>
-
-                                <button type="submit" class="btn btn-primary" style="width: 100%;">
-                                    <i data-lucide="shield-check"></i>
-                                    Verify OTP
-                                </button>
-                            </form>
-
-                            <div class="otp-result" id="otp-result"></div>
-                        </div>
-                    </div>
-                </div>
             </div>
         </main>
     </div>
@@ -210,11 +172,6 @@
                     <button class="btn btn-secondary btn-sm" data-copy="new-room-token" title="Copy">
                         <i data-lucide="copy"></i>
                     </button>
-                </div>
-                <div class="otp-section">
-                    <label>OTP Setup (scan with authenticator app):</label>
-                    <div id="otp-qr-code" class="qr-code"></div>
-                    <code id="new-room-otp-secret" class="otp-secret"></code>
                 </div>
             </div>
             <div class="form-actions">

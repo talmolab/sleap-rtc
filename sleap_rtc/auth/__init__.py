@@ -3,7 +3,6 @@
 This module provides:
 - credentials: Load/save credentials from ~/.sleap-rtc/credentials.json
 - github: Browser-based GitHub OAuth flow for CLI
-- totp: TOTP validation for P2P authentication
 """
 
 from sleap_rtc.auth.credentials import (
@@ -16,7 +15,6 @@ from sleap_rtc.auth.credentials import (
     CREDENTIALS_PATH,
 )
 from sleap_rtc.auth.github import github_login, get_dashboard_url
-from sleap_rtc.auth.totp import validate_otp, generate_otp
 
 __all__ = [
     # Credentials
@@ -30,7 +28,4 @@ __all__ = [
     # GitHub OAuth
     "github_login",
     "get_dashboard_url",
-    # TOTP
-    "validate_otp",
-    "generate_otp",
 ]

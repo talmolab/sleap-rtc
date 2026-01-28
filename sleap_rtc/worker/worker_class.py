@@ -53,14 +53,6 @@ from sleap_rtc.protocol import (
     MSG_FS_PREFIX_PROPOSAL,
     MSG_FS_APPLY_PREFIX,
     MSG_FS_PREFIX_APPLIED,
-    # P2P Authentication messages
-    MSG_AUTH_REQUIRED,
-    MSG_AUTH_RESPONSE,
-    MSG_AUTH_SUCCESS,
-    MSG_AUTH_FAILURE,
-    AUTH_FAILURE_INVALID_OTP,
-    AUTH_FAILURE_RATE_LIMITED,
-    AUTH_FAILURE_MAX_ATTEMPTS,
 )
 from sleap_rtc.worker.capabilities import WorkerCapabilities
 from sleap_rtc.worker.job_executor import JobExecutor
@@ -143,14 +135,13 @@ class RTCWorkerClient:
         # Room credentials (set during run_worker, needed for re-registration)
         self.room_id = None
         self.room_token = None
-        self.id_token = None  # Cognito ID token for authentication
 
         # ICE server configuration (received from signaling server during registration)
         self.ice_servers: list = []  # For client-worker connections (STUN + TURN)
         self.mesh_ice_servers: list = []  # For worker-worker mesh connections (STUN only)
 
         # Mesh networking attributes (Phase 3-6)
-        self.cognito_username = None  # Set during run_worker
+        self.peer_id_for_cleanup = None  # Set during run_worker
         self.peer_id = None  # Our peer_id, set from signaling server
         self.mesh_initialized = False
         self.signaling_dns = None  # Signaling server DNS for mesh connections
@@ -178,62 +169,7 @@ class RTCWorkerClient:
         self.retry_tasks = {}  # peer_id -> asyncio.Task for reconnection attempts
         self.pending_status_updates = []  # Queued status updates during partition
 
-        # P2P Authentication attributes (TOTP)
-        self._authenticated = False  # Whether client has passed TOTP auth
-        self._auth_attempts = 0  # Failed authentication attempts
-        self._max_auth_attempts = 3  # Max attempts before rejecting
-        self._otp_secret = None  # Room's OTP secret (from signaling server)
-        self._auth_required = False  # Whether auth is required (API key mode)
         self.api_key = None  # API key for authentication
-
-    def _validate_otp(self, otp_code: str) -> tuple[bool, str]:
-        """Validate a TOTP code from the client.
-
-        Args:
-            otp_code: The 6-digit OTP code to validate.
-
-        Returns:
-            Tuple of (success: bool, error_reason: str or None).
-        """
-        # Check rate limiting
-        if self._auth_attempts >= self._max_auth_attempts:
-            return False, AUTH_FAILURE_MAX_ATTEMPTS
-
-        # Check if we have an OTP secret
-        if not self._otp_secret:
-            logging.error("OTP validation requested but no OTP secret configured")
-            return False, AUTH_FAILURE_INVALID_OTP
-
-        # Validate the OTP
-        try:
-            from sleap_rtc.auth.totp import validate_otp
-            is_valid = validate_otp(self._otp_secret, otp_code, window=1)
-
-            if is_valid:
-                self._authenticated = True
-                self._auth_attempts = 0  # Reset on success
-                return True, None
-            else:
-                self._auth_attempts += 1
-                remaining = self._max_auth_attempts - self._auth_attempts
-                logging.warning(
-                    f"Invalid OTP attempt {self._auth_attempts}/{self._max_auth_attempts}"
-                )
-                if remaining <= 0:
-                    return False, AUTH_FAILURE_MAX_ATTEMPTS
-                return False, AUTH_FAILURE_INVALID_OTP
-
-        except ImportError:
-            logging.error("pyotp not installed - cannot validate OTP")
-            return False, AUTH_FAILURE_INVALID_OTP
-        except Exception as e:
-            logging.error(f"OTP validation error: {e}")
-            return False, AUTH_FAILURE_INVALID_OTP
-
-    def _reset_auth_state(self):
-        """Reset authentication state for a new connection."""
-        self._authenticated = False
-        self._auth_attempts = 0
 
     async def clean_exit(self):
         """Handles cleanup and shutdown of the worker.
@@ -270,12 +206,12 @@ class RTCWorkerClient:
         if self.progress_reporter:
             self.progress_reporter.cleanup()
 
-        logging.info("Cleaning up Cognito and DynamoDB entries...")
-        if self.cognito_username and self.state_manager:
-            self.state_manager.request_peer_room_deletion(self.cognito_username)
-            self.cognito_username = None
+        logging.info("Cleaning up DynamoDB entries...")
+        if self.peer_id_for_cleanup and self.state_manager:
+            self.state_manager.request_peer_room_deletion(self.peer_id_for_cleanup)
+            self.peer_id_for_cleanup = None
 
-        logging.info("Client shutdown complete. Exiting...")
+        logging.info("Worker shutdown complete. Exiting...")
 
     # ===== RTCPeerConnection Factory Methods =====
 
@@ -1249,7 +1185,6 @@ class RTCWorkerClient:
                         "peer_id": self.peer_id,
                         "room_id": self.room_id,
                         "token": self.room_token,
-                        "id_token": self.id_token,
                         "role": "worker",
                         "is_admin": True,  # Declare admin status
                         "metadata": {
@@ -1484,13 +1419,6 @@ class RTCWorkerClient:
                         if self.state_manager:
                             self.state_manager.room_id = room_id
                             self.state_manager.room_token = token
-
-                    # Extract OTP secret for P2P authentication (from API key auth)
-                    otp_secret = data.get("otp_secret")
-                    if otp_secret:
-                        self._otp_secret = otp_secret
-                        self._auth_required = True
-                        logging.info("P2P TOTP authentication enabled for this room")
 
                     # Extract discovery info from signaling server (Phase 6)
                     discovered_admin = data.get("admin_peer_id")
@@ -2040,7 +1968,7 @@ class RTCWorkerClient:
 
         @channel.on("open")
         def on_channel_open():
-            """Handle channel open event - start authentication if required.
+            """Handle channel open event.
 
             Args:
                 None
@@ -2049,20 +1977,6 @@ class RTCWorkerClient:
             """
             asyncio.create_task(self.keep_ice_alive(channel))
             logging.info(f"{channel.label} channel is open")
-
-            # Reset auth state for new connection
-            self._reset_auth_state()
-
-            # If authentication is required, send AUTH_REQUIRED
-            if self._auth_required and self._otp_secret:
-                auth_msg = format_message(MSG_AUTH_REQUIRED, self.peer_id or "worker")
-                if channel.readyState == "open":
-                    channel.send(auth_msg)
-                    logging.info(f"Sent AUTH_REQUIRED to client")
-            else:
-                # No auth required - mark as authenticated
-                self._authenticated = True
-                logging.info("Authentication not required - client is pre-authenticated")
 
         @channel.on("message")
         async def on_message(message):
@@ -2080,32 +1994,6 @@ class RTCWorkerClient:
             if isinstance(message, str):
                 if message == b"KEEP_ALIVE":
                     logging.info("Keep alive message received.")
-                    return
-
-                # Handle authentication response (always allowed)
-                if message.startswith(MSG_AUTH_RESPONSE):
-                    msg_type, args = parse_message(message)
-                    otp_code = args[0] if args else ""
-
-                    success, error = self._validate_otp(otp_code)
-                    if success:
-                        response = MSG_AUTH_SUCCESS
-                        logging.info("Client authenticated successfully via TOTP")
-                    else:
-                        response = format_message(MSG_AUTH_FAILURE, error)
-                        logging.warning(f"Client authentication failed: {error}")
-
-                    if channel.readyState == "open":
-                        channel.send(response)
-                    return
-
-                # Reject all other messages if not authenticated
-                if self._auth_required and not self._authenticated:
-                    logging.warning(
-                        f"Rejected message from unauthenticated client: {message[:50]}..."
-                    )
-                    if channel.readyState == "open":
-                        channel.send(format_message(MSG_AUTH_FAILURE, "not_authenticated"))
                     return
 
                 # Handle filesystem browser messages (FS_*)
@@ -2444,55 +2332,22 @@ class RTCWorkerClient:
             # Store API key for later use
             self.api_key = api_key
 
-            # Authentication: API key (new) or Cognito (legacy)
-            if api_key:
-                # New API key authentication - room info comes from server lookup
-                logging.info("Using API key authentication...")
-                # Generate a worker peer ID based on API key prefix
-                peer_id = f"worker-{api_key[4:12]}-{socket.gethostname()[:8]}"
-                self.cognito_username = peer_id
-                id_token = None  # Not used with API key auth
-                # Room ID and token will be returned by server after API key validation
-                room_json = {"room_id": None, "token": None}  # Placeholder - server provides these
-            else:
-                # Legacy: Sign-in anonymously with AWS Cognito to get an ID token (str).
-                sign_in_json = StateManager.request_anonymous_signin()
-                id_token = sign_in_json["id_token"]
-                peer_id = sign_in_json["username"]
-                self.cognito_username = peer_id
+            # Authentication: API key required
+            if not api_key:
+                logging.error(
+                    "No API key provided. Workers require an API key. "
+                    "Create one with: sleap-rtc token create --room <id> --name <name>"
+                )
+                return
 
-                if not id_token:
-                    logging.error(
-                        "Failed to sign in anonymously. No ID token given. Exiting..."
-                    )
-                    return
-
-                logging.info(f"Anonymous sign-in successful. ID token: {id_token}")
-
-                # Create the room or use existing room credentials
-                if room_id and token:
-                    # Join existing room
-                    logging.info(f"Joining existing room with ID: {room_id}")
-                    room_json = {"room_id": room_id, "token": token}
-                else:
-                    # Create the room and get the room ID, token, and cognito username.
-                    room_json = StateManager.request_create_room(id_token)
-
-                    if (
-                        not room_json
-                        or "room_id" not in room_json
-                        or "token" not in room_json
-                    ):
-                        logging.error(
-                            "Failed to create room or get room ID/token. Exiting..."
-                        )
-                        return
-                    logging.info(
-                        f"Room created with ID: {room_json['room_id']} and token: {room_json['token']}"
-                    )
+            logging.info("Using API key authentication...")
+            # Generate a worker peer ID based on API key prefix
+            peer_id = f"worker-{api_key[4:12]}-{socket.gethostname()[:8]}"
+            self.peer_id_for_cleanup = peer_id
+            # Room ID and token will be returned by server after API key validation
+            room_json = {"room_id": None, "token": None}  # Placeholder - server provides these
 
             # Store credentials for re-registration after reset
-            self.id_token = id_token
             self.room_id = room_json.get("room_id")
             self.room_token = room_json.get("token")
 
@@ -2514,7 +2369,6 @@ class RTCWorkerClient:
                 self.state_manager.set_room_credentials(
                     room_id=self.room_id,
                     token=self.room_token,
-                    id_token=self.id_token,
                     api_key=api_key,
                 )
                 logging.info("StateManager initialized")
@@ -2567,16 +2421,9 @@ class RTCWorkerClient:
                     },
                 }
 
-                if api_key:
-                    # New API key authentication
-                    registration_msg["api_key"] = api_key
-                    logging.info("Registering with API key authentication")
-                else:
-                    # Legacy Cognito authentication
-                    registration_msg["room_id"] = room_json["room_id"]
-                    registration_msg["token"] = room_json["token"]
-                    registration_msg["id_token"] = id_token
-                    logging.info("Registering with Cognito authentication")
+                # API key authentication
+                registration_msg["api_key"] = api_key
+                logging.info("Registering with API key authentication")
 
                 await self.websocket.send(json.dumps(registration_msg))
                 logging.info(

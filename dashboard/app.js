@@ -234,9 +234,6 @@ class SleapRTCDashboard {
         document.getElementById('create-token-btn')?.addEventListener('click', () => this.showCreateTokenModal());
         document.getElementById('create-token-form')?.addEventListener('submit', (e) => this.handleCreateToken(e));
 
-        // Verify OTP
-        document.getElementById('verify-otp-form')?.addEventListener('submit', (e) => this.handleVerifyOTP(e));
-
         // Modal close buttons
         document.querySelectorAll('[data-close-modal]').forEach(btn => {
             btn.addEventListener('click', (e) => {
@@ -285,8 +282,7 @@ class SleapRTCDashboard {
         // Update page title
         const titles = {
             'rooms': 'Rooms',
-            'tokens': 'Worker Tokens',
-            'verify-otp': 'Verify OTP'
+            'tokens': 'Worker Tokens'
         };
         document.getElementById('page-title').textContent = titles[tabName] || tabName;
     }
@@ -560,39 +556,6 @@ class SleapRTCDashboard {
             document.getElementById('new-room-id').textContent = data.room_id;
             document.getElementById('new-room-token').textContent = data.room_token;
 
-            // Generate QR code if OTP secret provided
-            if (data.otp_secret) {
-                document.getElementById('new-room-otp-secret').textContent = data.otp_secret;
-                const qrContainer = document.getElementById('otp-qr-code');
-                qrContainer.innerHTML = '';
-                try {
-                    if (typeof QRCode !== 'undefined') {
-                        // Use toDataURL for better compatibility
-                        QRCode.toDataURL(data.otp_uri, {
-                            width: 200,
-                            margin: 2,
-                            color: { dark: '#000000', light: '#ffffff' }
-                        }, (err, url) => {
-                            if (err) {
-                                console.warn('QR code generation failed:', err);
-                                qrContainer.innerHTML = '<p style="color: var(--text-muted); font-size: 0.875rem;">QR code unavailable. Use the secret below.</p>';
-                            } else {
-                                const img = document.createElement('img');
-                                img.src = url;
-                                img.alt = 'OTP QR Code';
-                                img.style.display = 'block';
-                                qrContainer.appendChild(img);
-                            }
-                        });
-                    } else {
-                        qrContainer.innerHTML = '<p style="color: var(--text-muted); font-size: 0.875rem;">QR code unavailable. Use the secret below.</p>';
-                    }
-                } catch (qrError) {
-                    console.warn('QR code generation failed:', qrError);
-                    qrContainer.innerHTML = '<p style="color: var(--text-muted); font-size: 0.875rem;">QR code unavailable. Use the secret below.</p>';
-                }
-            }
-
             this.hideModal('create-room-modal');
             document.getElementById('room-modal-title').textContent = 'Room Created!';
             this.showModal('room-created-modal');
@@ -614,41 +577,6 @@ class SleapRTCDashboard {
             // Populate the room details modal (reuse the room-created-modal)
             document.getElementById('new-room-id').textContent = data.room_id;
             document.getElementById('new-room-token').textContent = data.room_token || 'N/A';
-
-            // Generate QR code if OTP secret provided
-            if (data.otp_secret) {
-                document.getElementById('new-room-otp-secret').textContent = data.otp_secret;
-                const qrContainer = document.getElementById('otp-qr-code');
-                qrContainer.innerHTML = '';
-                try {
-                    if (typeof QRCode !== 'undefined') {
-                        QRCode.toDataURL(data.otp_uri, {
-                            width: 200,
-                            margin: 2,
-                            color: { dark: '#000000', light: '#ffffff' }
-                        }, (err, url) => {
-                            if (err) {
-                                console.warn('QR code generation failed:', err);
-                                qrContainer.innerHTML = '<p style="color: var(--text-muted); font-size: 0.875rem;">QR code unavailable. Use the secret below.</p>';
-                            } else {
-                                const img = document.createElement('img');
-                                img.src = url;
-                                img.alt = 'OTP QR Code';
-                                img.style.display = 'block';
-                                qrContainer.appendChild(img);
-                            }
-                        });
-                    } else {
-                        qrContainer.innerHTML = '<p style="color: var(--text-muted); font-size: 0.875rem;">QR code unavailable. Use the secret below.</p>';
-                    }
-                } catch (qrError) {
-                    console.warn('QR code generation failed:', qrError);
-                    qrContainer.innerHTML = '<p style="color: var(--text-muted); font-size: 0.875rem;">QR code unavailable. Use the secret below.</p>';
-                }
-            } else {
-                document.getElementById('new-room-otp-secret').textContent = 'N/A';
-                document.getElementById('otp-qr-code').innerHTML = '';
-            }
 
             document.getElementById('room-modal-title').textContent = 'Room Details';
             this.showModal('room-created-modal');
@@ -992,48 +920,6 @@ class SleapRTCDashboard {
         } catch (e) {
             console.error('Failed to revoke token:', e);
             this.showToast(e.message, 'error');
-        }
-    }
-
-    // =========================================================================
-    // OTP Verification
-    // =========================================================================
-
-    async handleVerifyOTP(e) {
-        e.preventDefault();
-
-        const roomId = document.getElementById('otp-room-id').value.trim();
-        const code = document.getElementById('otp-code').value.trim();
-        const result = document.getElementById('otp-result');
-
-        if (!roomId || !code) {
-            result.className = 'otp-result error';
-            result.textContent = 'Please enter both Room ID and OTP code';
-            result.style.display = 'block';
-            return;
-        }
-
-        if (code.length !== 6 || !/^\d+$/.test(code)) {
-            result.className = 'otp-result error';
-            result.textContent = 'OTP code must be exactly 6 digits';
-            result.style.display = 'block';
-            return;
-        }
-
-        try {
-            const data = await this.apiRequest(`/api/auth/rooms/${roomId}/verify-otp`, {
-                method: 'POST',
-                body: JSON.stringify({ otp_code: code }),
-            });
-
-            result.className = 'otp-result success';
-            result.innerHTML = '<strong>Valid!</strong> OTP code verified successfully.';
-            result.style.display = 'block';
-
-        } catch (e) {
-            result.className = 'otp-result error';
-            result.textContent = e.message || 'Invalid OTP code. Please try again.';
-            result.style.display = 'block';
         }
     }
 }

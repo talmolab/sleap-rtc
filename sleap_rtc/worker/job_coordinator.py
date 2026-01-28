@@ -39,7 +39,7 @@ class JobCoordinator:
         """Initialize job coordinator.
 
         Args:
-            worker_id: Unique identifier for this worker (cognito username).
+            worker_id: Unique identifier for this worker.
             websocket: WebSocket connection to signaling server.
             capabilities: WorkerCapabilities instance for job evaluation.
             update_status_callback: Async callback to update worker status.
