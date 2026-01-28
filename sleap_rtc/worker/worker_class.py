@@ -24,6 +24,8 @@ from pathlib import Path
 from websockets.client import ClientConnection
 
 from sleap_rtc.config import get_config, MountConfig
+from sleap_rtc.auth.psk import generate_nonce, verify_hmac
+from sleap_rtc.auth.secret_resolver import resolve_secret
 from sleap_rtc.filesystem import safe_mkdir
 from sleap_rtc.protocol import (
     parse_message,
@@ -53,6 +55,11 @@ from sleap_rtc.protocol import (
     MSG_FS_PREFIX_PROPOSAL,
     MSG_FS_APPLY_PREFIX,
     MSG_FS_PREFIX_APPLIED,
+    # PSK P2P authentication
+    MSG_AUTH_CHALLENGE,
+    MSG_AUTH_RESPONSE,
+    MSG_AUTH_SUCCESS,
+    MSG_AUTH_FAILURE,
 )
 from sleap_rtc.worker.capabilities import WorkerCapabilities
 from sleap_rtc.worker.job_executor import JobExecutor
@@ -171,6 +178,12 @@ class RTCWorkerClient:
 
         self.api_key = None  # API key for authentication
 
+        # PSK P2P authentication (zero-trust layer)
+        self._room_secret: Optional[str] = None  # Set via CLI flag, env var, or config
+        self._pending_auth: dict[str, str] = {}  # channel_label -> nonce
+        self._authenticated_channels: set[str] = set()  # Set of authenticated channel labels
+        self._auth_timeout_tasks: dict[str, asyncio.Task] = {}  # channel_label -> timeout task
+
     async def clean_exit(self):
         """Handles cleanup and shutdown of the worker.
 
@@ -212,6 +225,99 @@ class RTCWorkerClient:
             self.peer_id_for_cleanup = None
 
         logging.info("Worker shutdown complete. Exiting...")
+
+    # ===== P2P PSK Authentication Methods =====
+
+    async def _handle_auth_response(self, channel: RTCDataChannel, message: str) -> None:
+        """Handle AUTH_RESPONSE message from client.
+
+        Verifies the HMAC against the pending nonce and marks the channel as
+        authenticated on success, or closes the connection on failure.
+
+        Args:
+            channel: The data channel that sent the response.
+            message: The AUTH_RESPONSE message (format: AUTH_RESPONSE::{hmac}).
+        """
+        channel_label = channel.label
+
+        # Check if we're expecting a response from this channel
+        if channel_label not in self._pending_auth:
+            logging.warning(f"Unexpected AUTH_RESPONSE from {channel_label} (no pending challenge)")
+            return
+
+        # Parse the HMAC from the message
+        parts = message.split(MSG_SEPARATOR, 1)
+        if len(parts) != 2:
+            logging.warning(f"Invalid AUTH_RESPONSE format from {channel_label}")
+            self._auth_failure(channel, "invalid")
+            return
+
+        received_hmac = parts[1]
+
+        # Handle "missing" response (client has no secret)
+        if received_hmac == "missing":
+            logging.warning(f"Client {channel_label} has no room secret configured")
+            self._auth_failure(channel, "missing")
+            return
+
+        # Get the nonce we sent
+        nonce = self._pending_auth[channel_label]
+
+        # Verify the HMAC
+        if verify_hmac(self._room_secret, nonce, received_hmac):
+            self._auth_success(channel)
+        else:
+            logging.warning(f"Invalid HMAC from {channel_label}")
+            self._auth_failure(channel, "invalid")
+
+    def _auth_success(self, channel: RTCDataChannel) -> None:
+        """Mark a channel as authenticated and clean up pending state.
+
+        Args:
+            channel: The authenticated channel.
+        """
+        channel_label = channel.label
+
+        # Clean up pending state
+        if channel_label in self._pending_auth:
+            del self._pending_auth[channel_label]
+        if channel_label in self._auth_timeout_tasks:
+            self._auth_timeout_tasks[channel_label].cancel()
+            del self._auth_timeout_tasks[channel_label]
+
+        # Mark as authenticated
+        self._authenticated_channels.add(channel_label)
+
+        # Send success message
+        if channel.readyState == "open":
+            channel.send(MSG_AUTH_SUCCESS)
+
+        logging.info(f"P2P authentication successful for {channel_label}")
+
+    def _auth_failure(self, channel: RTCDataChannel, reason: str) -> None:
+        """Handle authentication failure - send failure message and clean up.
+
+        Args:
+            channel: The channel that failed authentication.
+            reason: Failure reason ("invalid", "timeout", "missing").
+        """
+        channel_label = channel.label
+
+        # Clean up pending state
+        if channel_label in self._pending_auth:
+            del self._pending_auth[channel_label]
+        if channel_label in self._auth_timeout_tasks:
+            self._auth_timeout_tasks[channel_label].cancel()
+            del self._auth_timeout_tasks[channel_label]
+
+        # Send failure message
+        if channel.readyState == "open":
+            channel.send(format_message(MSG_AUTH_FAILURE, reason))
+
+        logging.warning(f"P2P authentication failed for {channel_label}: {reason}")
+
+        # Note: We don't close the channel here as aiortc doesn't support channel.close()
+        # The client should disconnect after receiving AUTH_FAILURE
 
     # ===== RTCPeerConnection Factory Methods =====
 
@@ -1970,6 +2076,10 @@ class RTCWorkerClient:
         def on_channel_open():
             """Handle channel open event.
 
+            If PSK authentication is configured, sends AUTH_CHALLENGE to the client
+            and starts a timeout task. The client must respond with a valid HMAC
+            within 10 seconds or the connection will be closed.
+
             Args:
                 None
             Returns:
@@ -1977,6 +2087,33 @@ class RTCWorkerClient:
             """
             asyncio.create_task(self.keep_ice_alive(channel))
             logging.info(f"{channel.label} channel is open")
+
+            # P2P PSK authentication: send challenge if secret configured
+            if self._room_secret:
+                nonce = generate_nonce()
+                self._pending_auth[channel.label] = nonce
+                challenge_msg = format_message(MSG_AUTH_CHALLENGE, nonce)
+                channel.send(challenge_msg)
+                logging.info(f"Sent AUTH_CHALLENGE to {channel.label}")
+
+                # Start timeout task (10 seconds)
+                async def auth_timeout():
+                    await asyncio.sleep(10.0)
+                    if channel.label in self._pending_auth:
+                        logging.warning(f"Auth timeout for {channel.label}")
+                        del self._pending_auth[channel.label]
+                        if channel.label in self._auth_timeout_tasks:
+                            del self._auth_timeout_tasks[channel.label]
+                        # Send failure and close
+                        if channel.readyState == "open":
+                            channel.send(format_message(MSG_AUTH_FAILURE, "timeout"))
+                            # Note: aiortc doesn't have channel.close(), connection will be reset
+
+                self._auth_timeout_tasks[channel.label] = asyncio.create_task(auth_timeout())
+            else:
+                # No secret configured - mark as authenticated immediately (legacy mode)
+                self._authenticated_channels.add(channel.label)
+                logging.info(f"{channel.label} authenticated (legacy mode - no secret configured)")
 
         @channel.on("message")
         async def on_message(message):
@@ -1988,12 +2125,24 @@ class RTCWorkerClient:
             Returns:
                 None
             """
-            # Log Client's message.
-            logging.info(f"Worker received: {message}")
+            # Log Client's message (truncate for readability)
+            log_msg = message if len(str(message)) < 100 else f"{str(message)[:100]}..."
+            logging.info(f"Worker received: {log_msg}")
 
             if isinstance(message, str):
                 if message == b"KEEP_ALIVE":
                     logging.info("Keep alive message received.")
+                    return
+
+                # Handle P2P PSK authentication response
+                if message.startswith(MSG_AUTH_RESPONSE):
+                    await self._handle_auth_response(channel, message)
+                    return
+
+                # Block commands if PSK authentication is required but not completed
+                if self._room_secret and channel.label not in self._authenticated_channels:
+                    logging.warning(f"Rejected command from unauthenticated channel {channel.label}: {log_msg}")
+                    # Don't send error to avoid leaking info - just ignore
                     return
 
                 # Handle filesystem browser messages (FS_*)
@@ -2302,7 +2451,7 @@ class RTCWorkerClient:
 
             logging.info("Ready for new client connection!")
 
-    async def run_worker(self, pc, DNS: str, port_number, api_key=None, room_id=None, token=None):
+    async def run_worker(self, pc, DNS: str, port_number, api_key=None, room_id=None, token=None, room_secret=None):
         """Main function to run the worker. Contains several event handlers for the WebRTC connection and data channel.
 
         Args:
@@ -2312,6 +2461,8 @@ class RTCWorkerClient:
             api_key: API key for authentication (slp_xxx...). New auth method.
             room_id: Optional room ID to join. If not provided, a new room will be created.
             token: Optional room token for authentication. Required if room_id is provided.
+            room_secret: Optional room secret for P2P PSK authentication. If not provided,
+                will try to resolve from SLEAP_ROOM_SECRET env var, filesystem, or config.
 
         Returns:
             None
@@ -2341,6 +2492,15 @@ class RTCWorkerClient:
                 return
 
             logging.info("Using API key authentication...")
+
+            # Load room secret for P2P PSK authentication
+            # Priority: CLI flag > env var > filesystem > config
+            self._room_secret = resolve_secret(room_id or "default", cli_secret=room_secret)
+            if self._room_secret:
+                logging.info("P2P PSK authentication enabled (room secret configured)")
+            else:
+                logging.info("P2P PSK authentication disabled (no room secret configured)")
+
             # Generate a worker peer ID based on API key prefix
             peer_id = f"worker-{api_key[4:12]}-{socket.gethostname()[:8]}"
             self.peer_id_for_cleanup = peer_id
