@@ -13,6 +13,9 @@ Stores credentials in ~/.sleap-rtc/credentials.json with the schema:
             "api_key": "slp_xxx...",
             "worker_name": "lab-gpu-1"
         }
+    },
+    "room_secrets": {
+        "<room_id>": "base64_encoded_secret..."
     }
 }
 """
@@ -212,3 +215,59 @@ def get_valid_jwt() -> Optional[str]:
     except Exception as e:
         logger.warning(f"Failed to decode JWT: {e}")
         return None
+
+
+# =============================================================================
+# Room Secret Management (PSK P2P Authentication)
+# =============================================================================
+
+
+def get_room_secret(room_id: str) -> Optional[str]:
+    """Get the stored room secret for P2P authentication.
+
+    Args:
+        room_id: The room ID to get the secret for.
+
+    Returns:
+        Base64-encoded secret string if stored, None otherwise.
+    """
+    creds = get_credentials()
+    room_secrets = creds.get("room_secrets", {})
+    return room_secrets.get(room_id)
+
+
+def save_room_secret(room_id: str, secret: str) -> None:
+    """Save a room secret for P2P authentication.
+
+    Args:
+        room_id: Room ID the secret is for.
+        secret: Base64-encoded secret string.
+    """
+    creds = get_credentials()
+    if "room_secrets" not in creds:
+        creds["room_secrets"] = {}
+
+    creds["room_secrets"][room_id] = secret
+    save_credentials(creds)
+    logger.debug(f"Saved room secret for room {room_id}")
+
+
+def remove_room_secret(room_id: str) -> bool:
+    """Remove a stored room secret.
+
+    Args:
+        room_id: Room ID to remove secret for.
+
+    Returns:
+        True if secret was removed, False if not found.
+    """
+    creds = get_credentials()
+    room_secrets = creds.get("room_secrets", {})
+
+    if room_id in room_secrets:
+        del room_secrets[room_id]
+        creds["room_secrets"] = room_secrets
+        save_credentials(creds)
+        logger.debug(f"Removed room secret for room {room_id}")
+        return True
+    return False
