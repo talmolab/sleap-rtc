@@ -136,15 +136,18 @@ class BrowseClient:
                 # Wait for data channel to open
                 await self._wait_for_channel()
 
-                # Wait for PSK authentication if secret is configured
-                if self._room_secret:
-                    logging.info("Waiting for PSK authentication...")
-                    auth_success = await self._wait_for_auth()
-                    if not auth_success:
-                        logging.error(f"PSK authentication failed: {self._auth_failed_reason}")
-                        print(f"\nAuthentication failed: {self._auth_failed_reason}")
+                # Wait for PSK authentication
+                # Always wait briefly - worker may require auth even if client has no secret
+                logging.info("Waiting for PSK authentication...")
+                auth_success = await self._wait_for_auth()
+                if not auth_success:
+                    logging.error(f"PSK authentication failed: {self._auth_failed_reason}")
+                    print(f"\nAuthentication failed: {self._auth_failed_reason}")
+                    if not self._room_secret:
+                        print("The worker requires a room secret. Configure it with --room-secret flag.")
+                    else:
                         print("Make sure the room secret matches the worker's secret.")
-                        return
+                    return
 
                 # Create and start viewer server
                 self.viewer_server = FSViewerServer(
@@ -363,6 +366,10 @@ class BrowseClient:
     async def _wait_for_auth(self, timeout: float = 15.0) -> bool:
         """Wait for PSK authentication to complete.
 
+        If client has a secret, waits for full auth handshake.
+        If client has no secret, waits briefly for potential AUTH_CHALLENGE
+        from worker - if none comes, assumes legacy mode.
+
         Args:
             timeout: Maximum time to wait for auth in seconds.
 
@@ -370,10 +377,22 @@ class BrowseClient:
             True if authenticated, False if failed or timed out.
         """
         if not self._room_secret:
-            # No secret configured, skip auth (legacy mode)
-            self._authenticated = True
-            return True
+            # No secret configured - wait briefly for potential challenge from worker
+            # If worker sends AUTH_CHALLENGE, we'll fail (handled in _handle_auth_challenge)
+            # If no challenge within 3 seconds, assume legacy mode
+            try:
+                await asyncio.wait_for(self._auth_event.wait(), timeout=3.0)
+                # Event was set - check if it was a failure (challenge received but no secret)
+                if self._auth_failed_reason:
+                    return False
+                return self._authenticated
+            except asyncio.TimeoutError:
+                # No challenge received - worker is in legacy mode too
+                logging.info("No AUTH_CHALLENGE received - legacy mode (no auth required)")
+                self._authenticated = True
+                return True
 
+        # Client has secret - wait for full auth handshake
         try:
             await asyncio.wait_for(self._auth_event.wait(), timeout=timeout)
         except asyncio.TimeoutError:
