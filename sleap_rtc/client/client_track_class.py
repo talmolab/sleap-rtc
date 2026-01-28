@@ -21,14 +21,6 @@ import requests
 
 from sleap_rtc.config import get_config
 from sleap_rtc.filesystem import safe_mkdir
-from sleap_rtc.protocol import (
-    parse_message,
-    format_message,
-    MSG_AUTH_REQUIRED,
-    MSG_AUTH_RESPONSE,
-    MSG_AUTH_SUCCESS,
-    MSG_AUTH_FAILURE,
-)
 
 logging.basicConfig(level=logging.INFO)
 
@@ -68,92 +60,7 @@ class RTCTrackClient:
         self.target_worker = None
         self.reconnecting = False
         self.reconnect_attempts = 0
-
-        # P2P Authentication state (TOTP)
-        self._authenticated = False  # Whether we've passed TOTP auth
-        self._auth_required = False  # Whether worker requires auth
-        self._auth_attempts = 0  # Number of failed attempts
-        self._max_auth_attempts = 3  # Max attempts before giving up
-        self._auth_event = None  # asyncio.Event to signal auth completion
-        self.otp_secret = None  # OTP secret for auto-authentication
-        self.room_id = None  # Room ID for credential lookup
-
-    async def _prompt_for_otp(self) -> str:
-        """Prompt user to enter OTP code from their authenticator app.
-
-        Returns:
-            6-digit OTP code string.
-        """
-        attempt_info = ""
-        if self._auth_attempts > 0:
-            remaining = self._max_auth_attempts - self._auth_attempts
-            attempt_info = f" ({remaining} attempts remaining)"
-
-        print(f"\n{'='*60}")
-        print("AUTHENTICATION REQUIRED")
-        print(f"{'='*60}")
-        print("Enter the 6-digit code from your authenticator app")
-        print(f"(e.g., Google Authenticator, Authy){attempt_info}")
-        print("")
-
-        loop = asyncio.get_event_loop()
-        otp_code = await loop.run_in_executor(
-            None, lambda: input("OTP Code: ").strip()
-        )
-        return otp_code
-
-    def _get_otp_secret(self) -> str:
-        """Get OTP secret from CLI option or stored credentials.
-
-        Returns:
-            Base32-encoded OTP secret string, or None if not available.
-        """
-        # CLI option takes precedence
-        if self.otp_secret:
-            return self.otp_secret
-
-        # Try to get stored secret for this room
-        if self.room_id:
-            from sleap_rtc.auth.credentials import get_stored_otp_secret
-            return get_stored_otp_secret(self.room_id)
-
-        return None
-
-    async def _handle_auth_required(self, worker_id: str):
-        """Handle AUTH_REQUIRED message from worker.
-
-        Args:
-            worker_id: ID of the worker requesting authentication.
-        """
-        self._auth_required = True
-        logging.info(f"Worker {worker_id} requires TOTP authentication")
-
-        while self._auth_attempts < self._max_auth_attempts:
-            # Check for OTP secret (CLI or stored)
-            otp_secret = self._get_otp_secret()
-            if otp_secret:
-                # Auto-generate OTP from secret
-                try:
-                    from sleap_rtc.auth.totp import generate_otp
-                    otp_code = generate_otp(otp_secret)
-                    logging.info("Auto-generated OTP from stored secret")
-                    print("\nAuto-authenticating with stored OTP secret...")
-                except Exception as e:
-                    logging.warning(f"Failed to generate OTP: {e}")
-                    otp_code = await self._prompt_for_otp()
-            else:
-                otp_code = await self._prompt_for_otp()
-
-            if not otp_code or len(otp_code) != 6 or not otp_code.isdigit():
-                print("Invalid code format. Please enter exactly 6 digits.")
-                self._auth_attempts += 1
-                continue
-
-            auth_response = format_message(MSG_AUTH_RESPONSE, otp_code)
-            if self.data_channel and self.data_channel.readyState == "open":
-                self.data_channel.send(auth_response)
-                logging.info("Sent OTP code to worker")
-            break
+        self.room_id = None
 
     def create_track_package(
         self,
@@ -326,18 +233,6 @@ sleap-nn track \\
         except Exception as e:
             raise ValueError(f"Failed to decode session string: {e}")
 
-    def request_anonymous_signin(self) -> str:
-        """Request an anonymous token from Signaling Server."""
-        config = get_config()
-        url = config.get_http_endpoint("/anonymous-signin")
-        response = requests.post(url)
-
-        if response.status_code == 200:
-            return response.json()
-        else:
-            logging.error(f"Failed to get anonymous token: {response.text}")
-            return None
-
     def request_peer_room_deletion(self, peer_id: str):
         """Requests the signaling server to delete the room and associated user/worker."""
         config = get_config()
@@ -396,41 +291,6 @@ sleap-nn track \\
             message: Message from worker (string or bytes)
         """
         if isinstance(message, str):
-            # Handle authentication messages (AUTH_*)
-            if message.startswith(MSG_AUTH_REQUIRED):
-                msg_type, args = parse_message(message)
-                worker_id = args[0] if args else "unknown"
-                asyncio.create_task(self._handle_auth_required(worker_id))
-                return
-
-            if message == MSG_AUTH_SUCCESS:
-                self._authenticated = True
-                self._auth_attempts = 0
-                print("\n" + "=" * 60)
-                print("AUTHENTICATION SUCCESSFUL")
-                print("=" * 60 + "\n")
-                logging.info("Successfully authenticated with worker via TOTP")
-                if self._auth_event:
-                    self._auth_event.set()
-                return
-
-            if message.startswith(MSG_AUTH_FAILURE):
-                msg_type, args = parse_message(message)
-                reason = args[0] if args else "unknown"
-                self._auth_attempts += 1
-
-                if reason == "max_attempts_exceeded" or self._auth_attempts >= self._max_auth_attempts:
-                    print("\n" + "=" * 60)
-                    print("AUTHENTICATION FAILED - Max attempts exceeded")
-                    print("=" * 60 + "\n")
-                    logging.error("Authentication failed - max attempts exceeded")
-                    if self._auth_event:
-                        self._auth_event.set()
-                else:
-                    print(f"\nInvalid OTP code. Please try again.")
-                    asyncio.create_task(self._handle_auth_required("worker"))
-                return
-
             if message == "END_OF_FILE":
                 # Save received predictions file
                 if self.predictions_data:
@@ -533,9 +393,6 @@ sleap-nn track \\
         worker_id: str = None,
         auto_select: bool = False,
         min_gpu_memory: int = None,
-        use_jwt: bool = False,
-        no_jwt: bool = False,
-        otp_secret: str = None,
         **kwargs,
     ):
         """Connects to worker and runs inference workflow.
@@ -549,9 +406,6 @@ sleap-nn track \\
             worker_id: Specific worker peer-id to connect to
             auto_select: Automatically select best worker
             min_gpu_memory: Minimum GPU memory filter
-            use_jwt: Require JWT authentication
-            no_jwt: Force Cognito auth
-            otp_secret: Base32-encoded OTP secret for auto-authentication
         """
         try:
             # Initialize data channel
@@ -562,8 +416,6 @@ sleap-nn track \\
             # Set local variables
             self.file_path = file_path
             self.output_dir = output_dir
-            # OTP auto-authentication
-            self.otp_secret = otp_secret
             self.room_id = room_id
 
             # Register event handlers for the data channel
@@ -573,43 +425,20 @@ sleap-nn track \\
             # Initialize reconnect attempts
             self.reconnect_attempts = 0
 
-            # Determine authentication method
-            jwt_token = None
-            id_token = None
+            # JWT authentication (required)
+            from sleap_rtc.auth.credentials import get_valid_jwt, get_user
 
-            if not no_jwt:
-                # Try to get JWT from stored credentials
-                from sleap_rtc.auth.credentials import get_valid_jwt, get_user
-                jwt_token = get_valid_jwt()
-
-                if jwt_token:
-                    user = get_user()
-                    self.peer_id = user.get("username", "unknown") if user else "unknown"
-                    self.cognito_username = self.peer_id
-                    logging.info(f"Using JWT authentication as: {self.peer_id}")
-
+            jwt_token = get_valid_jwt()
             if not jwt_token:
-                # Fall back to Cognito anonymous signin
-                if use_jwt:
-                    logging.error("JWT required but no valid JWT found. Run: sleap-rtc login")
-                    return
-
-                # Deprecation warning
-                logging.warning(
-                    "Using Cognito anonymous signin (deprecated). "
-                    "Run 'sleap-rtc login' for GitHub OAuth authentication."
+                logging.error(
+                    "No valid JWT found. Run 'sleap-rtc login' to authenticate."
                 )
+                return
 
-                sign_in_json = self.request_anonymous_signin()
-                id_token = sign_in_json["id_token"]
-                self.peer_id = sign_in_json["username"]
-                self.cognito_username = self.peer_id
-
-                if not id_token:
-                    logging.error("Failed to get anonymous ID token. Exiting client.")
-                    return
-
-                logging.info(f"Anonymous ID token received: {id_token}")
+            user = get_user()
+            self.peer_id = user.get("username", "unknown") if user else "unknown"
+            self.cognito_username = self.peer_id
+            logging.info(f"Using JWT authentication as: {self.peer_id}")
 
             # Connect to signaling server
             async with websockets.connect(self.DNS) as websocket:
@@ -647,11 +476,9 @@ sleap-nn track \\
                     "token": worker_token,
                 }
 
-                # Use JWT if available, otherwise fall back to id_token
+                # Add JWT authentication
                 if jwt_token:
                     register_data["jwt"] = jwt_token
-                elif id_token:
-                    register_data["id_token"] = id_token
 
                 # Register with signaling server
                 logging.info(f"Registering {self.peer_id} with signaling server...")
@@ -686,7 +513,7 @@ sleap-nn track \\
                 await self.handle_connection()
 
             # Cleanup
-            logging.info("Cleaning up Cognito and DynamoDB entries...")
+            logging.info("Cleaning up DynamoDB entries...")
             self.request_peer_room_deletion(self.peer_id)
 
         except Exception as e:

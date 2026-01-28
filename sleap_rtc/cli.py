@@ -436,10 +436,6 @@ def room_create(name):
         click.echo("")
         click.echo(f"  Room ID:    {data['room_id']}")
         click.echo(f"  Room Token: {data['room_token']}")
-        if data.get("otp_uri"):
-            click.echo("")
-            click.echo("  OTP Setup (scan with authenticator app):")
-            click.echo(f"  {data['otp_uri']}")
         click.echo("")
         click.echo("Next steps:")
         click.echo(f"  1. Create a worker token: sleap-rtc token create --room {data['room_id']} --name my-worker")
@@ -805,24 +801,6 @@ def worker(api_key, room_id, token, working_dir, name):
     default=None,
     help="Mount label to search (skips mount selection prompt). Use 'all' to search all mounts.",
 )
-@click.option(
-    "--use-jwt",
-    is_flag=True,
-    default=False,
-    help="Require JWT authentication (fail if not logged in).",
-)
-@click.option(
-    "--no-jwt",
-    is_flag=True,
-    default=False,
-    help="Force Cognito auth (skip JWT even if logged in).",
-)
-@click.option(
-    "--otp-secret",
-    type=str,
-    default=None,
-    help="Base32-encoded TOTP secret for auto-authentication with workers.",
-)
 def client_train(**kwargs):
     """Run remote training on a worker.
 
@@ -856,22 +834,6 @@ def client_train(**kwargs):
     worker_path = kwargs.pop("worker_path", None)
     non_interactive = kwargs.pop("non_interactive", False)
     mount_label = kwargs.pop("mount", None)
-
-    # Extract JWT options
-    use_jwt = kwargs.pop("use_jwt", False)
-    no_jwt = kwargs.pop("no_jwt", False)
-
-    # Validate JWT flags
-    if use_jwt and no_jwt:
-        logger.error("Cannot use both --use-jwt and --no-jwt")
-        sys.exit(1)
-
-    # Check for JWT if --use-jwt flag is set
-    if use_jwt:
-        from sleap_rtc.auth.credentials import get_valid_jwt
-        if not get_valid_jwt():
-            logger.error("No valid JWT found. Run: sleap-rtc login")
-            sys.exit(1)
 
     # Validation: Must provide either session string OR room credentials
     has_session = session_string is not None
@@ -945,8 +907,6 @@ def client_train(**kwargs):
         worker_path=worker_path,
         non_interactive=non_interactive,
         mount_label=mount_label,
-        use_jwt=use_jwt,
-        no_jwt=no_jwt,
         **kwargs,
     )
 
@@ -1018,24 +978,6 @@ def client_train(**kwargs):
     default=None,
     help="Minimum GPU memory in MB required for inference.",
 )
-@click.option(
-    "--use-jwt",
-    is_flag=True,
-    default=False,
-    help="Require JWT authentication (fail if not logged in).",
-)
-@click.option(
-    "--no-jwt",
-    is_flag=True,
-    default=False,
-    help="Force Cognito auth (skip JWT even if logged in).",
-)
-@click.option(
-    "--otp-secret",
-    type=str,
-    default=None,
-    help="Base32-encoded TOTP secret for auto-authentication with workers.",
-)
 def client_track(**kwargs):
     """Run remote inference on a worker with pre-trained models.
 
@@ -1058,22 +1000,6 @@ def client_track(**kwargs):
     worker_id = kwargs.pop("worker_id", None)
     auto_select = kwargs.pop("auto_select", False)
     min_gpu_memory = kwargs.pop("min_gpu_memory", None)
-
-    # Extract JWT options
-    use_jwt = kwargs.pop("use_jwt", False)
-    no_jwt = kwargs.pop("no_jwt", False)
-
-    # Validate JWT flags
-    if use_jwt and no_jwt:
-        logger.error("Cannot use both --use-jwt and --no-jwt")
-        sys.exit(1)
-
-    # Check for JWT if --use-jwt flag is set
-    if use_jwt:
-        from sleap_rtc.auth.credentials import get_valid_jwt
-        if not get_valid_jwt():
-            logger.error("No valid JWT found. Run: sleap-rtc login")
-            sys.exit(1)
 
     # Validation: Must provide either session string OR room credentials
     has_session = session_string is not None
@@ -1133,8 +1059,6 @@ def client_track(**kwargs):
         model_paths=list(kwargs.pop("model_paths")),
         output=kwargs.pop("output"),
         only_suggested_frames=kwargs.pop("only_suggested_frames"),
-        use_jwt=use_jwt,
-        no_jwt=no_jwt,
         **kwargs,
     )
 
@@ -1178,25 +1102,7 @@ def client_deprecated(ctx, **kwargs):
     default=False,
     help="Don't auto-open browser (just print URL).",
 )
-@click.option(
-    "--use-jwt",
-    is_flag=True,
-    default=False,
-    help="Require JWT authentication (fail if not logged in).",
-)
-@click.option(
-    "--no-jwt",
-    is_flag=True,
-    default=False,
-    help="Force Cognito auth (skip JWT even if logged in).",
-)
-@click.option(
-    "--otp-secret",
-    type=str,
-    default=None,
-    help="Base32-encoded TOTP secret for auto-authentication with workers.",
-)
-def browse(room, token, port, no_browser, use_jwt, no_jwt, otp_secret):
+def browse(room, token, port, no_browser):
     """Browse a Worker's filesystem via web UI.
 
     This command connects to a Worker in the specified room and starts
@@ -1207,10 +1113,7 @@ def browse(room, token, port, no_browser, use_jwt, no_jwt, otp_secret):
     - View file information (name, size, type)
     - Copy file paths for use with --worker-path
 
-    Authentication:
-    - By default, uses stored JWT if available, falls back to Cognito
-    - --use-jwt: Require JWT (fail if not logged in)
-    - --no-jwt: Force Cognito auth (skip JWT)
+    Requires JWT authentication. Run 'sleap-rtc login' first.
 
     Examples:
 
@@ -1222,24 +1125,9 @@ def browse(room, token, port, no_browser, use_jwt, no_jwt, otp_secret):
 
         # Print URL without opening browser (for remote access)
         sleap-rtc browse --room my-room --token secret123 --no-browser
-
-        # Require JWT authentication
-        sleap-rtc browse --room my-room --token secret123 --use-jwt
     """
     import asyncio
     from sleap_rtc.rtc_browse import run_browse_client
-
-    # Validate JWT flags
-    if use_jwt and no_jwt:
-        logger.error("Cannot use both --use-jwt and --no-jwt")
-        sys.exit(1)
-
-    # Check for JWT if --use-jwt flag is set
-    if use_jwt:
-        from sleap_rtc.auth.credentials import get_valid_jwt
-        if not get_valid_jwt():
-            logger.error("No valid JWT found. Run: sleap-rtc login")
-            sys.exit(1)
 
     logger.info(f"Starting filesystem browser for room: {room}")
     logger.info(f"Local server will run on port: {port}")
@@ -1251,9 +1139,6 @@ def browse(room, token, port, no_browser, use_jwt, no_jwt, otp_secret):
                 token=token,
                 port=port,
                 open_browser=not no_browser,
-                use_jwt=use_jwt,
-                no_jwt=no_jwt,
-                otp_secret=otp_secret,
             )
         )
     except KeyboardInterrupt:
@@ -1298,18 +1183,14 @@ def browse(room, token, port, no_browser, use_jwt, no_jwt, otp_secret):
     default=False,
     help="Don't auto-open browser (just print URL).",
 )
-@click.option(
-    "--use-jwt",
-    is_flag=True,
-    default=False,
-    help="Use JWT authentication (requires 'sleap-rtc login' first).",
-)
-def resolve_paths(room, token, slp, port, no_browser, use_jwt):
+def resolve_paths(room, token, slp, port, no_browser):
     """Resolve missing video paths in an SLP file on a Worker.
 
     This command connects to a Worker and checks if the video paths in an SLP
     file are accessible. If any videos are missing, it launches a web UI that
     allows you to browse the Worker's filesystem and resolve the paths.
+
+    Requires JWT authentication. Run 'sleap-rtc login' first.
 
     The resolution process:
     1. Worker checks if videos in the SLP are accessible
@@ -1336,16 +1217,6 @@ def resolve_paths(room, token, slp, port, no_browser, use_jwt):
     logger.info(f"Starting video path resolution for: {slp}")
     logger.info(f"Connecting to room: {room}")
 
-    # Check for JWT if --use-jwt flag is set
-    jwt_token = None
-    if use_jwt:
-        from sleap_rtc.auth.credentials import get_valid_jwt
-        jwt_token = get_valid_jwt()
-        if not jwt_token:
-            logger.error("No valid JWT found. Run: sleap-rtc login")
-            sys.exit(1)
-        logger.info("Using JWT authentication")
-
     try:
         result = asyncio.run(
             run_resolve_client(
@@ -1354,7 +1225,6 @@ def resolve_paths(room, token, slp, port, no_browser, use_jwt):
                 slp_path=slp,
                 port=port,
                 open_browser=not no_browser,
-                jwt_token=jwt_token,
             )
         )
         if result:

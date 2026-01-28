@@ -43,11 +43,6 @@ from sleap_rtc.protocol import (
     MSG_USE_WORKER_PATH,
     MSG_WORKER_PATH_OK,
     MSG_WORKER_PATH_ERROR,
-    # P2P Authentication messages
-    MSG_AUTH_REQUIRED,
-    MSG_AUTH_RESPONSE,
-    MSG_AUTH_SUCCESS,
-    MSG_AUTH_FAILURE,
 )
 from sleap_rtc.client.file_selector import (
     select_file_from_candidates,
@@ -106,13 +101,6 @@ class RTCClient:
         self.on_missing_videos_detected = None  # Callback(missing_videos_data) to launch UI
         self.pending_video_check_data = None  # Store FS_CHECK_VIDEOS_RESPONSE data
 
-        # P2P Authentication state (TOTP)
-        self._authenticated = False  # Whether we've passed TOTP auth
-        self._auth_required = False  # Whether worker requires auth
-        self._auth_attempts = 0  # Number of failed attempts
-        self._max_auth_attempts = 3  # Max attempts before giving up
-        self._auth_event = None  # asyncio.Event to signal auth completion
-        self.otp_secret = None  # OTP secret for auto-authentication
         self.room_id = None  # Room ID for credential lookup
 
     def parse_session_string(self, session_string: str):
@@ -132,96 +120,6 @@ class RTCClient:
         except jsonpickle.UnpicklingError as e:
             raise ValueError(f"Failed to decode session string: {e}")
 
-    async def _prompt_for_otp(self) -> str:
-        """Prompt user to enter OTP code from their authenticator app.
-
-        Returns:
-            6-digit OTP code string.
-        """
-        import sys
-
-        # Print prompt
-        attempt_info = ""
-        if self._auth_attempts > 0:
-            remaining = self._max_auth_attempts - self._auth_attempts
-            attempt_info = f" ({remaining} attempts remaining)"
-
-        print(f"\n{'='*60}")
-        print("AUTHENTICATION REQUIRED")
-        print(f"{'='*60}")
-        print("Enter the 6-digit code from your authenticator app")
-        print(f"(e.g., Google Authenticator, Authy){attempt_info}")
-        print("")
-
-        # Use asyncio to read input without blocking
-        loop = asyncio.get_event_loop()
-
-        # Read OTP code
-        otp_code = await loop.run_in_executor(
-            None, lambda: input("OTP Code: ").strip()
-        )
-
-        return otp_code
-
-    def _get_otp_secret(self) -> str:
-        """Get OTP secret from CLI option or stored credentials.
-
-        Returns:
-            Base32-encoded OTP secret string, or None if not available.
-        """
-        # CLI option takes precedence
-        if self.otp_secret:
-            return self.otp_secret
-
-        # Try to get stored secret for this room
-        if self.room_id:
-            from sleap_rtc.auth.credentials import get_stored_otp_secret
-            return get_stored_otp_secret(self.room_id)
-
-        return None
-
-    async def _handle_auth_required(self, worker_id: str):
-        """Handle AUTH_REQUIRED message from worker.
-
-        Args:
-            worker_id: ID of the worker requesting authentication.
-        """
-        self._auth_required = True
-        logging.info(f"Worker {worker_id} requires TOTP authentication")
-
-        while self._auth_attempts < self._max_auth_attempts:
-            # Check for OTP secret (CLI or stored)
-            otp_secret = self._get_otp_secret()
-            if otp_secret:
-                # Auto-generate OTP from secret
-                try:
-                    from sleap_rtc.auth.totp import generate_otp
-                    otp_code = generate_otp(otp_secret)
-                    logging.info("Auto-generated OTP from stored secret")
-                    print("\nAuto-authenticating with stored OTP secret...")
-                except Exception as e:
-                    logging.warning(f"Failed to generate OTP: {e}")
-                    otp_code = await self._prompt_for_otp()
-            else:
-                # Prompt user for OTP
-                otp_code = await self._prompt_for_otp()
-
-            # Validate input
-            if not otp_code or len(otp_code) != 6 or not otp_code.isdigit():
-                print("Invalid code format. Please enter exactly 6 digits.")
-                self._auth_attempts += 1
-                continue
-
-            # Send AUTH_RESPONSE
-            auth_response = format_message(MSG_AUTH_RESPONSE, otp_code)
-            if self.data_channel and self.data_channel.readyState == "open":
-                self.data_channel.send(auth_response)
-                logging.info("Sent OTP code to worker")
-
-            # Wait for response (handled in on_message)
-            # The auth response will set _authenticated or increment _auth_attempts
-            break
-
     def request_peer_room_deletion(self, peer_id: str):
         """Requests the signaling server to delete the room and associated user/worker."""
         config = get_config()
@@ -237,18 +135,6 @@ class RTCClient:
             return  # Success
         else:
             logging.error(f"Failed to delete room and peer: {response.text}")
-            return None
-
-    def request_anonymous_signin(self) -> str:
-        """Request an anonymous token from Signaling Server."""
-        config = get_config()
-        url = config.get_http_endpoint("/anonymous-signin")
-        response = requests.post(url)
-
-        if response.status_code == 200:
-            return response.json()  # should be string type
-        else:
-            logging.error(f"Failed to get anonymous token: {response.text}")
             return None
 
     async def start_zmq_listener(
@@ -345,7 +231,7 @@ class RTCClient:
         if self.websocket:
             await self.websocket.close()
 
-        logging.info("Cleaning up Cognito and DynamoDB entries...")
+        logging.info("Cleaning up DynamoDB entries...")
         if self.cognito_username:
             self.request_peer_room_deletion(self.cognito_username)
             self.cognito_username = None
@@ -1132,47 +1018,6 @@ class RTCClient:
 
         # Handle string and bytes messages differently.
         if isinstance(message, str):
-            # if message == b"KEEP_ALIVE":
-            #     logging.info("Keep alive message received.")
-            #     return
-
-            # Handle authentication messages (AUTH_*)
-            if message.startswith(MSG_AUTH_REQUIRED):
-                msg_type, args = parse_message(message)
-                worker_id = args[0] if args else "unknown"
-                # Run auth prompt in background to not block message handler
-                asyncio.create_task(self._handle_auth_required(worker_id))
-                return
-
-            if message == MSG_AUTH_SUCCESS:
-                self._authenticated = True
-                self._auth_attempts = 0
-                print("\n" + "=" * 60)
-                print("AUTHENTICATION SUCCESSFUL")
-                print("=" * 60 + "\n")
-                logging.info("Successfully authenticated with worker via TOTP")
-                if self._auth_event:
-                    self._auth_event.set()
-                return
-
-            if message.startswith(MSG_AUTH_FAILURE):
-                msg_type, args = parse_message(message)
-                reason = args[0] if args else "unknown"
-                self._auth_attempts += 1
-
-                if reason == "max_attempts_exceeded" or self._auth_attempts >= self._max_auth_attempts:
-                    print("\n" + "=" * 60)
-                    print("AUTHENTICATION FAILED - Max attempts exceeded")
-                    print("=" * 60 + "\n")
-                    logging.error("Authentication failed - max attempts exceeded")
-                    if self._auth_event:
-                        self._auth_event.set()
-                else:
-                    print(f"\nInvalid OTP code. Please try again.")
-                    # Prompt for retry
-                    asyncio.create_task(self._handle_auth_required("worker"))
-                return
-
             # Handle filesystem browser responses (FS_*)
             if message.startswith("FS_"):
                 logging.info(f"Received FS response: {message[:50]}...")
@@ -1490,14 +1335,13 @@ class RTCClient:
         logging.error("No workers discovered and no fallback peer_id available")
         return []
 
-    async def _register_with_room(self, room_id: str, token: str, id_token: str = None, jwt_token: str = None):
+    async def _register_with_room(self, room_id: str, token: str, jwt_token: str = None):
         """Register client with room on signaling server.
 
         Args:
             room_id: Room ID to join
             token: Room authentication token
-            id_token: Cognito ID token for this client (legacy)
-            jwt_token: JWT from GitHub OAuth (preferred)
+            jwt_token: JWT from GitHub OAuth
         """
         # Try to get SLEAP version
         try:
@@ -1526,11 +1370,9 @@ class RTCClient:
             },
         }
 
-        # Use JWT if available, otherwise fall back to id_token
+        # Add JWT authentication
         if jwt_token:
             register_data["jwt"] = jwt_token
-        elif id_token:
-            register_data["id_token"] = id_token
 
         # Send registration message
         await self.websocket.send(json.dumps(register_data))
@@ -1981,9 +1823,6 @@ class RTCClient:
         worker_path: str = None,
         non_interactive: bool = False,
         mount_label: str = None,
-        use_jwt: bool = False,
-        no_jwt: bool = False,
-        otp_secret: str = None,
     ):
         """Sends initial SDP offer to worker peer and establishes both connection & datachannel to be used by both parties.
 
@@ -2001,9 +1840,6 @@ class RTCClient:
             worker_path: Explicit path on worker filesystem (skips resolution)
             non_interactive: Auto-select best match without prompting (for CI/scripts)
             mount_label: Specific mount label to search (skips mount selection)
-            use_jwt: Require JWT authentication (fail if not logged in)
-            no_jwt: Force Cognito auth (skip JWT even if logged in)
-            otp_secret: Base32-encoded OTP secret for auto-authentication
         Returns:
             None
         """
@@ -2017,55 +1853,30 @@ class RTCClient:
             self.worker_path = worker_path
             self.non_interactive = non_interactive
             self.mount_label = mount_label
-            # OTP auto-authentication
-            self.otp_secret = otp_secret
             self.room_id = room_id
 
             # Initialize reconnect attempts.
             logging.info("Setting up RTC data channel reconnect attempts...")
             self.reconnect_attempts = 0
 
-            # Determine authentication method
-            jwt_token = None
-            id_token = None
+            # JWT authentication (required)
+            from sleap_rtc.auth.credentials import get_valid_jwt, get_user
 
-            if not no_jwt:
-                # Try to get JWT from stored credentials
-                from sleap_rtc.auth.credentials import get_valid_jwt, get_user
-                jwt_token = get_valid_jwt()
-
-                if jwt_token:
-                    user = get_user()
-                    self.peer_id = user.get("username", "unknown") if user else "unknown"
-                    self.cognito_username = self.peer_id
-                    logging.info(f"Using JWT authentication as: {self.peer_id}")
-
+            jwt_token = get_valid_jwt()
             if not jwt_token:
-                # Fall back to Cognito anonymous signin
-                if use_jwt:
-                    logging.error("JWT required but no valid JWT found. Run: sleap-rtc login")
-                    return
-
-                # Deprecation warning
-                logging.warning(
-                    "Using Cognito anonymous signin (deprecated). "
-                    "Run 'sleap-rtc login' for GitHub OAuth authentication."
+                logging.error(
+                    "No valid JWT found. Run 'sleap-rtc login' to authenticate."
                 )
+                return
 
-                sign_in_json = self.request_anonymous_signin()
-                id_token = sign_in_json["id_token"]
-                self.peer_id = sign_in_json["username"]
-                self.cognito_username = self.peer_id
+            user = get_user()
+            self.peer_id = user.get("username", "unknown") if user else "unknown"
+            self.cognito_username = self.peer_id
+            logging.info(f"Using JWT authentication as: {self.peer_id}")
 
-                if not id_token:
-                    logging.error("Failed to get anonymous ID token. Exiting client.")
-                    return
-
-                logging.info(f"Anonymous ID token received: {id_token}")
-
-            # Store auth tokens for registration
+            # Store auth token for registration
             self._jwt_token = jwt_token
-            self._id_token = id_token
+            self._id_token = None
 
             # Initiate the WebSocket connection to the signaling server.
             async with websockets.connect(self.DNS) as websocket:
@@ -2113,7 +1924,6 @@ class RTCClient:
                         await self._register_with_room(
                             room_id=worker_room_id,
                             token=worker_token,
-                            id_token=self._id_token,
                             jwt_token=self._jwt_token,
                         )
 
@@ -2136,7 +1946,6 @@ class RTCClient:
                         await self._register_with_room(
                             room_id=room_id,
                             token=token,
-                            id_token=self._id_token,
                             jwt_token=self._jwt_token,
                         )
 

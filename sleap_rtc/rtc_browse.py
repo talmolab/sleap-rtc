@@ -13,14 +13,6 @@ from aiortc import RTCPeerConnection, RTCSessionDescription
 
 from sleap_rtc.config import get_config
 from sleap_rtc.client.fs_viewer_server import FSViewerServer
-from sleap_rtc.protocol import (
-    MSG_AUTH_REQUIRED,
-    MSG_AUTH_RESPONSE,
-    MSG_AUTH_SUCCESS,
-    MSG_AUTH_FAILURE,
-    format_message,
-    parse_message,
-)
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -40,9 +32,6 @@ class BrowseClient:
         room_id: str,
         token: str,
         port: int = 8765,
-        use_jwt: bool = False,
-        no_jwt: bool = False,
-        otp_secret: str = None,
     ):
         """Initialize the browse client.
 
@@ -50,16 +39,10 @@ class BrowseClient:
             room_id: Room ID to connect to.
             token: Room token for authentication.
             port: Local port for the file browser server.
-            use_jwt: Require JWT authentication.
-            no_jwt: Force Cognito auth (skip JWT).
-            otp_secret: Base32-encoded OTP secret for auto-authentication.
         """
         self.room_id = room_id
         self.token = token
         self.port = port
-        self.use_jwt = use_jwt
-        self.no_jwt = no_jwt
-        self.otp_secret = otp_secret
 
         # Load config
         config = get_config()
@@ -77,11 +60,6 @@ class BrowseClient:
         # Shutdown flag
         self.shutting_down = False
 
-        # P2P Authentication state (TOTP)
-        self._authenticated = False  # Whether we've passed TOTP auth
-        self._auth_required = False  # Whether worker requires auth
-        self._auth_event = None  # asyncio.Event to signal auth completion
-
     async def run(self, open_browser: bool = True):
         """Run the browse client.
 
@@ -89,48 +67,26 @@ class BrowseClient:
             open_browser: Whether to auto-open the browser.
         """
         try:
-            # Determine authentication method
-            jwt_token = None
-            id_token = None
+            # JWT authentication (required)
+            from sleap_rtc.auth.credentials import get_valid_jwt, get_user
 
-            if not self.no_jwt:
-                # Try to get JWT from stored credentials
-                from sleap_rtc.auth.credentials import get_valid_jwt, get_user
-                jwt_token = get_valid_jwt()
-
-                if jwt_token:
-                    user = get_user()
-                    self.peer_id = user.get("username", "unknown") if user else "unknown"
-                    logging.info(f"Using JWT authentication as: {self.peer_id}")
-
+            jwt_token = get_valid_jwt()
             if not jwt_token:
-                # Fall back to Cognito anonymous signin
-                if self.use_jwt:
-                    logging.error("JWT required but no valid JWT found. Run: sleap-rtc login")
-                    return
-
-                # Deprecation warning
-                logging.warning(
-                    "Using Cognito anonymous signin (deprecated). "
-                    "Run 'sleap-rtc login' for GitHub OAuth authentication."
+                logging.error(
+                    "No valid JWT found. Run 'sleap-rtc login' to authenticate."
                 )
+                return
 
-                sign_in_json = self._request_anonymous_signin()
-                id_token = sign_in_json.get("id_token")
-                self.peer_id = sign_in_json.get("username")
-
-                if not id_token:
-                    logging.error("Failed to get anonymous ID token")
-                    return
-
-            logging.info(f"Signed in as: {self.peer_id}")
+            user = get_user()
+            self.peer_id = user.get("username", "unknown") if user else "unknown"
+            logging.info(f"Using JWT authentication as: {self.peer_id}")
 
             # Connect to signaling server
             async with websockets.connect(self.dns) as websocket:
                 self.websocket = websocket
 
                 # Register with room
-                await self._register_with_room(jwt_token=jwt_token, id_token=id_token)
+                await self._register_with_room(jwt_token=jwt_token)
 
                 # Discover workers
                 workers = await self._discover_workers()
@@ -181,27 +137,11 @@ class BrowseClient:
         finally:
             await self._cleanup()
 
-    def _request_anonymous_signin(self) -> dict:
-        """Request anonymous sign-in from Cognito."""
-        import requests
-        from sleap_rtc.config import get_config
-
-        config = get_config()
-        url = config.get_http_endpoint("/anonymous-signin")
-
-        response = requests.post(url)
-        if response.status_code == 200:
-            return response.json()
-        else:
-            logging.error(f"Anonymous sign-in failed: {response.status_code}")
-            return {}
-
-    async def _register_with_room(self, jwt_token: str = None, id_token: str = None):
+    async def _register_with_room(self, jwt_token: str):
         """Register with the signaling server room.
 
         Args:
-            jwt_token: JWT token from GitHub OAuth (preferred).
-            id_token: Cognito ID token (legacy fallback).
+            jwt_token: JWT token from GitHub OAuth.
         """
         import platform
         import os
@@ -212,6 +152,7 @@ class BrowseClient:
             "room_id": self.room_id,
             "token": self.token,
             "role": "client",
+            "jwt": jwt_token,
             "metadata": {
                 "tags": ["sleap-rtc", "browse-client"],
                 "properties": {
@@ -220,12 +161,6 @@ class BrowseClient:
                 },
             },
         }
-
-        # Use JWT if available, otherwise fall back to id_token
-        if jwt_token:
-            register_data["jwt"] = jwt_token
-        elif id_token:
-            register_data["id_token"] = id_token
 
         register_msg = json.dumps(register_data)
 
@@ -336,139 +271,16 @@ class BrowseClient:
         logging.info("Data channel ready")
 
     def _send_to_worker(self, message: str):
-        """Send message to Worker via data channel.
-
-        Note: FS_* commands are gated on authentication state.
-        """
+        """Send message to Worker via data channel."""
         if not self.data_channel or self.data_channel.readyState != "open":
             logging.warning("Data channel not open, cannot send message")
             return
 
-        # Gate FS_* commands on authentication state
-        if message.startswith("FS_") and self._auth_required and not self._authenticated:
-            logging.warning("Cannot send FS command before authentication")
-            return
-
         self.data_channel.send(message)
-
-    async def _prompt_for_otp(self) -> str:
-        """Prompt user to enter OTP code from their authenticator app.
-
-        Returns:
-            6-digit OTP code string.
-        """
-        print(f"\n{'='*60}")
-        print("AUTHENTICATION REQUIRED")
-        print(f"{'='*60}")
-        print("Enter the 6-digit code from your authenticator app")
-        print("(e.g., Google Authenticator, Authy)")
-        print("")
-
-        # Use asyncio to read input without blocking
-        loop = asyncio.get_event_loop()
-
-        # Read OTP code
-        otp_code = await loop.run_in_executor(
-            None, lambda: input("OTP Code: ").strip()
-        )
-
-        return otp_code
-
-    def _get_otp_secret(self) -> str:
-        """Get OTP secret from CLI option or stored credentials.
-
-        Returns:
-            Base32-encoded OTP secret string, or None if not available.
-        """
-        # CLI option takes precedence
-        if self.otp_secret:
-            return self.otp_secret
-
-        # Try to get stored secret for this room
-        from sleap_rtc.auth.credentials import get_stored_otp_secret
-        return get_stored_otp_secret(self.room_id)
-
-    async def _handle_auth_required(self, worker_id: str):
-        """Handle AUTH_REQUIRED message from worker.
-
-        Args:
-            worker_id: ID of the worker requesting authentication.
-        """
-        self._auth_required = True
-        logging.info(f"Worker {worker_id} requires TOTP authentication")
-
-        # Check for OTP secret (CLI or stored)
-        otp_secret = self._get_otp_secret()
-        if otp_secret:
-            # Auto-generate OTP from secret
-            try:
-                from sleap_rtc.auth.totp import generate_otp
-                otp_code = generate_otp(otp_secret)
-                logging.info("Auto-generated OTP from stored secret")
-                print("\nAuto-authenticating with stored OTP secret...")
-            except Exception as e:
-                logging.warning(f"Failed to generate OTP: {e}")
-                otp_code = await self._prompt_for_otp()
-        else:
-            # Prompt user for OTP
-            otp_code = await self._prompt_for_otp()
-
-        # Validate input
-        if not otp_code or len(otp_code) != 6 or not otp_code.isdigit():
-            print("Invalid code format. Please enter exactly 6 digits.")
-            # Re-prompt (unlimited retries)
-            asyncio.create_task(self._handle_auth_required(worker_id))
-            return
-
-        # Send AUTH_RESPONSE
-        auth_response = format_message(MSG_AUTH_RESPONSE, otp_code)
-        if self.data_channel and self.data_channel.readyState == "open":
-            self.data_channel.send(auth_response)
-            logging.info("Sent OTP code to worker")
-
-    def _handle_auth_success(self):
-        """Handle AUTH_SUCCESS message from worker."""
-        self._authenticated = True
-        print("\n" + "=" * 60)
-        print("AUTHENTICATION SUCCESSFUL")
-        print("=" * 60 + "\n")
-        logging.info("Successfully authenticated with worker via TOTP")
-        if self._auth_event:
-            self._auth_event.set()
-
-    def _handle_auth_failure(self, reason: str):
-        """Handle AUTH_FAILURE message from worker.
-
-        Args:
-            reason: Failure reason from worker.
-        """
-        print(f"\nAuthentication failed: {reason}")
-        print("Please try again.\n")
-        logging.warning(f"Authentication failed: {reason}")
-        # Re-prompt (unlimited retries)
-        asyncio.create_task(self._handle_auth_required("worker"))
 
     async def _handle_worker_message(self, message):
         """Handle message from Worker."""
         if isinstance(message, str):
-            # Handle authentication messages (AUTH_*)
-            if message.startswith(MSG_AUTH_REQUIRED):
-                msg_type, args = parse_message(message)
-                worker_id = args[0] if args else "unknown"
-                # Run auth prompt in background to not block message handler
-                asyncio.create_task(self._handle_auth_required(worker_id))
-                return
-
-            if message == MSG_AUTH_SUCCESS:
-                self._handle_auth_success()
-                return
-
-            if message.startswith(MSG_AUTH_FAILURE):
-                msg_type, args = parse_message(message)
-                reason = args[0] if args else "unknown"
-                self._handle_auth_failure(reason)
-                return
-
             # Forward FS_* messages to viewer server
             if message.startswith("FS_"):
                 if self.viewer_server:
@@ -529,9 +341,6 @@ async def run_browse_client(
     token: str,
     port: int = 8765,
     open_browser: bool = True,
-    use_jwt: bool = False,
-    no_jwt: bool = False,
-    otp_secret: str = None,
 ):
     """Run the browse client.
 
@@ -540,16 +349,10 @@ async def run_browse_client(
         token: Room token for authentication.
         port: Local port for the file browser server.
         open_browser: Whether to auto-open the browser.
-        use_jwt: Require JWT authentication.
-        no_jwt: Force Cognito auth (skip JWT).
-        otp_secret: Base32-encoded OTP secret for auto-authentication.
     """
     client = BrowseClient(
         room_id=room_id,
         token=token,
         port=port,
-        use_jwt=use_jwt,
-        no_jwt=no_jwt,
-        otp_secret=otp_secret,
     )
     await client.run(open_browser=open_browser)
