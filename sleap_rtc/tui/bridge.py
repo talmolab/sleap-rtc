@@ -28,9 +28,15 @@ from sleap_rtc.protocol import (
     MSG_FS_WRITE_SLP,
     MSG_FS_WRITE_SLP_OK,
     MSG_FS_WRITE_SLP_ERROR,
+    MSG_AUTH_CHALLENGE,
+    MSG_AUTH_RESPONSE,
+    MSG_AUTH_SUCCESS,
+    MSG_AUTH_FAILURE,
     format_message,
     parse_message,
 )
+from sleap_rtc.auth.psk import compute_hmac
+from sleap_rtc.auth.secret_resolver import resolve_secret
 
 
 class WebRTCBridge:
@@ -52,6 +58,8 @@ class WebRTCBridge:
         on_message: Optional[Callable[[str], Any]] = None,
         on_connected: Optional[Callable[[], Any]] = None,
         on_disconnected: Optional[Callable[[], Any]] = None,
+        on_auth_status: Optional[Callable[[str], Any]] = None,
+        room_secret: Optional[str] = None,
     ):
         """Initialize the WebRTC bridge.
 
@@ -61,6 +69,8 @@ class WebRTCBridge:
             on_message: Callback for incoming messages from worker.
             on_connected: Callback when data channel opens.
             on_disconnected: Callback when connection is lost.
+            on_auth_status: Callback for authentication status updates.
+            room_secret: Optional room secret for PSK authentication (CLI override).
         """
         self.room_id = room_id
         self.token = token
@@ -69,6 +79,7 @@ class WebRTCBridge:
         self._on_message = on_message
         self._on_connected = on_connected
         self._on_disconnected = on_disconnected
+        self._on_auth_status = on_auth_status
 
         # Load config
         config = get_config()
@@ -89,6 +100,17 @@ class WebRTCBridge:
         # Shutdown flag
         self._running = False
 
+        # PSK authentication state
+        self._room_secret = resolve_secret(room_id, cli_secret=room_secret)
+        self._authenticated = False
+        self._auth_event = asyncio.Event()
+        self._auth_failed_reason: Optional[str] = None
+
+        if self._room_secret:
+            logging.info("Room secret loaded for PSK authentication")
+        else:
+            logging.debug(f"No room secret configured for room {room_id}")
+
     @property
     def is_connected(self) -> bool:
         """Check if data channel is open and ready."""
@@ -96,6 +118,21 @@ class WebRTCBridge:
             self.data_channel is not None
             and self.data_channel.readyState == "open"
         )
+
+    @property
+    def is_authenticated(self) -> bool:
+        """Check if PSK authentication is complete."""
+        return self._authenticated
+
+    @property
+    def auth_failed_reason(self) -> Optional[str]:
+        """Get the reason for authentication failure, if any."""
+        return self._auth_failed_reason
+
+    @property
+    def requires_auth(self) -> bool:
+        """Check if this connection requires PSK authentication."""
+        return self._room_secret is not None
 
     async def connect(self, worker_id: str) -> bool:
         """Connect to a specific worker.
@@ -113,9 +150,35 @@ class WebRTCBridge:
         self.worker_id = worker_id
         self._running = True
 
+        # Reset auth state for new connection
+        self._authenticated = False
+        self._auth_event.clear()
+        self._auth_failed_reason = None
+
         try:
             await self._connect_to_worker(worker_id)
             await self._wait_for_channel()
+
+            # Wait for PSK authentication if secret is configured
+            if self._room_secret:
+                if self._on_auth_status:
+                    await self._call_async(self._on_auth_status, "Authenticating...")
+
+                auth_success = await self._wait_for_auth()
+                if not auth_success:
+                    if self._on_auth_status:
+                        await self._call_async(
+                            self._on_auth_status,
+                            f"Auth failed: {self._auth_failed_reason}"
+                        )
+                    return False
+
+                if self._on_auth_status:
+                    await self._call_async(self._on_auth_status, "Authenticated")
+            else:
+                # No secret configured - mark as authenticated (legacy mode)
+                self._authenticated = True
+
             return True
         except Exception as e:
             logging.error(f"Failed to connect to worker: {e}")
@@ -487,6 +550,80 @@ class WebRTCBridge:
                     logging.error("Failed to parse write SLP response")
         return None
 
+    def _handle_auth_challenge(self, message: str) -> None:
+        """Handle PSK authentication challenge from worker.
+
+        Computes HMAC response and sends AUTH_RESPONSE.
+
+        Args:
+            message: The AUTH_CHALLENGE message containing the nonce.
+        """
+        # Parse nonce from challenge message
+        if "::" in message:
+            _, nonce = message.split("::", 1)
+        else:
+            logging.error("Invalid AUTH_CHALLENGE format")
+            self._auth_failed_reason = "Invalid challenge format"
+            self._auth_event.set()
+            return
+
+        if not self._room_secret:
+            logging.error("Received AUTH_CHALLENGE but no room secret configured")
+            self._auth_failed_reason = "No room secret configured"
+            self._auth_event.set()
+            return
+
+        # Compute HMAC response
+        response_hmac = compute_hmac(self._room_secret, nonce)
+
+        # Send AUTH_RESPONSE
+        if self.data_channel and self.data_channel.readyState == "open":
+            self.data_channel.send(f"{MSG_AUTH_RESPONSE}::{response_hmac}")
+            logging.debug("Sent AUTH_RESPONSE")
+
+    def _handle_auth_success(self) -> None:
+        """Handle successful PSK authentication."""
+        logging.info("PSK authentication successful")
+        self._authenticated = True
+        self._auth_event.set()
+
+    def _handle_auth_failure(self, message: str) -> None:
+        """Handle PSK authentication failure.
+
+        Args:
+            message: The AUTH_FAILURE message with reason.
+        """
+        reason = "Unknown"
+        if "::" in message:
+            _, reason = message.split("::", 1)
+
+        logging.error(f"PSK authentication failed: {reason}")
+        self._auth_failed_reason = reason
+        self._auth_event.set()
+
+    async def _wait_for_auth(self, timeout: float = 15.0) -> bool:
+        """Wait for PSK authentication to complete.
+
+        Args:
+            timeout: Maximum time to wait for auth in seconds.
+
+        Returns:
+            True if authenticated, False if failed or timed out.
+        """
+        if not self._room_secret:
+            # No secret configured, skip auth (legacy mode)
+            self._authenticated = True
+            return True
+
+        try:
+            await asyncio.wait_for(self._auth_event.wait(), timeout=timeout)
+        except asyncio.TimeoutError:
+            logging.error("PSK authentication timed out")
+            self._auth_failed_reason = "Timeout"
+            return False
+
+        return self._authenticated
+
     async def disconnect(self):
         """Disconnect from worker and signaling server."""
         self._running = False
@@ -609,6 +746,17 @@ class WebRTCBridge:
 
     async def _handle_message(self, message: str):
         """Handle incoming message from worker."""
+        # PSK authentication messages (handle first, before anything else)
+        if message.startswith(MSG_AUTH_CHALLENGE):
+            self._handle_auth_challenge(message)
+            return
+        elif message.startswith(MSG_AUTH_SUCCESS):
+            self._handle_auth_success()
+            return
+        elif message.startswith(MSG_AUTH_FAILURE):
+            self._handle_auth_failure(message)
+            return
+
         # Check for pending request responses
         for prefix, future in list(self._pending_requests.items()):
             if message.startswith(prefix) and not future.done():

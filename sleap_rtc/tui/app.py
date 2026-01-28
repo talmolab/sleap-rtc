@@ -47,16 +47,19 @@ class TUIApp(App):
         self,
         room_id: Optional[str] = None,
         token: Optional[str] = None,
+        room_secret: Optional[str] = None,
     ):
         """Initialize the TUI app.
 
         Args:
             room_id: Optional room ID (bypasses room selection).
             token: Optional room token (not required for JWT auth, but kept for compatibility).
+            room_secret: Optional room secret for PSK authentication (CLI override).
         """
         super().__init__()
         self.room_id = room_id
         self.token = token
+        self.room_secret = room_secret
 
         # Will be set during connection
         self.bridge = None
@@ -67,7 +70,7 @@ class TUIApp(App):
         if self.room_id:
             # Skip login/room selection, go straight to browser
             # Token is optional for JWT auth (server validates via membership)
-            self._show_browser(self.room_id, self.token or "")
+            self._show_browser(self.room_id, self.token or "", self.room_secret)
             return
 
         # Check if user is logged in
@@ -104,21 +107,31 @@ class TUIApp(App):
             # but it's not required for connection.
             token = room_data.get("token", "")
 
-            self._show_browser(room_id, token)
+            # Pass room_secret for PSK authentication
+            # Note: room_secret from CLI only applies when room_id is specified directly
+            # When using room selection, secret is resolved from credentials/env/filesystem
+            self._show_browser(room_id, token, room_secret=None)
 
         room_screen = RoomSelectScreen(on_room_selected=on_room_selected)
         self.push_screen(room_screen)
 
-    def _show_browser(self, room_id: str, token: str) -> None:
+    def _show_browser(
+        self,
+        room_id: str,
+        token: str,
+        room_secret: Optional[str] = None,
+    ) -> None:
         """Show the file browser screen.
 
         Args:
             room_id: Room ID to browse.
             token: Room token for authentication.
+            room_secret: Optional room secret for PSK authentication (CLI override).
         """
         browser_screen = BrowserScreen(
             room_id=room_id,
             token=token,
+            room_secret=room_secret,
         )
         self.push_screen(browser_screen)
 
@@ -133,12 +146,14 @@ class TUIApp(App):
 def run_tui(
     room_id: Optional[str] = None,
     token: Optional[str] = None,
+    room_secret: Optional[str] = None,
 ) -> None:
     """Run the TUI application.
 
     Args:
         room_id: Optional room ID to connect to directly.
         token: Optional room token (not required for JWT auth).
+        room_secret: Optional room secret for PSK authentication (CLI override).
     """
-    app = TUIApp(room_id=room_id, token=token)
+    app = TUIApp(room_id=room_id, token=token, room_secret=room_secret)
     app.run()
