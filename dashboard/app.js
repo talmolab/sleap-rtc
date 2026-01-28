@@ -989,6 +989,7 @@ class SleapRTCDashboard {
             content.innerHTML = `
                 <div class="success-details">
                     <p>This room has a P2P authentication secret configured.</p>
+                    <p class="security-note"><i data-lucide="shield-check"></i> This secret is stored only in your browser. The server never sees it.</p>
                     <div class="detail-row">
                         <label>Secret:</label>
                         <code id="room-secret-value" class="api-key">${existingSecret}</code>
@@ -998,7 +999,8 @@ class SleapRTCDashboard {
                     </div>
                 </div>
                 <div class="help-text">
-                    <p><strong>How to use this secret:</strong></p>
+                    <p><strong>How to distribute this secret:</strong></p>
+                    <p>Both workers and clients need this secret to communicate. Share it securely with your team.</p>
                     <ul>
                         <li><strong>CLI flag:</strong> <code>--room-secret ${existingSecret}</code></li>
                         <li><strong>Environment variable:</strong> <code>SLEAP_RTC_ROOM_SECRET_${roomId.replace(/-/g, '_').toUpperCase()}=${existingSecret}</code></li>
@@ -1017,7 +1019,8 @@ class SleapRTCDashboard {
             content.innerHTML = `
                 <div class="info-banner">
                     <p>P2P authentication adds an extra layer of security for direct worker-client communication.</p>
-                    <p>When enabled, both the worker and client must have the same secret to communicate.</p>
+                    <p>When enabled, both the worker and client must have the same secret to authorize connections.</p>
+                    <p><strong><i data-lucide="shield-check"></i> Privacy:</strong> This secret is generated in your browser and stored locally. The server never sees it.</p>
                 </div>
                 <div class="form-actions" style="margin-top: 1rem;">
                     <button type="button" class="btn btn-primary" onclick="app.generateAndSaveRoomSecret('${roomId}')">
