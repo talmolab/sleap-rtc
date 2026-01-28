@@ -514,6 +514,10 @@ class SleapRTCDashboard {
                             View
                         </button>
                         ${room.role === 'owner' ? `
+                            <button class="btn btn-secondary btn-sm" onclick="app.handleRoomSecret('${room.room_id}')">
+                                <i data-lucide="key"></i>
+                                Secret
+                            </button>
                             <button class="btn btn-secondary btn-sm" onclick="app.handleInvite('${room.room_id}')">
                                 <i data-lucide="user-plus"></i>
                                 Invite
@@ -921,6 +925,145 @@ class SleapRTCDashboard {
             console.error('Failed to revoke token:', e);
             this.showToast(e.message, 'error');
         }
+    }
+
+    // =========================================================================
+    // Room Secrets (PSK P2P Authentication)
+    // =========================================================================
+
+    /**
+     * Get the localStorage key for a room's secret
+     * @param {string} roomId - The room ID
+     * @returns {string} The localStorage key
+     */
+    getRoomSecretKey(roomId) {
+        return `sleap_rtc_room_secret_${roomId}`;
+    }
+
+    /**
+     * Get stored room secret from localStorage
+     * @param {string} roomId - The room ID
+     * @returns {string|null} The stored secret or null
+     */
+    getStoredRoomSecret(roomId) {
+        return localStorage.getItem(this.getRoomSecretKey(roomId));
+    }
+
+    /**
+     * Save room secret to localStorage
+     * @param {string} roomId - The room ID
+     * @param {string} secret - The secret to store
+     */
+    saveRoomSecret(roomId, secret) {
+        localStorage.setItem(this.getRoomSecretKey(roomId), secret);
+    }
+
+    /**
+     * Delete room secret from localStorage
+     * @param {string} roomId - The room ID
+     */
+    deleteRoomSecret(roomId) {
+        localStorage.removeItem(this.getRoomSecretKey(roomId));
+    }
+
+    /**
+     * Generate a cryptographically secure room secret using Web Crypto API
+     * @returns {Promise<string>} A 64-character hex string (32 bytes)
+     */
+    async generateRoomSecret() {
+        const bytes = new Uint8Array(32);
+        crypto.getRandomValues(bytes);
+        return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
+    }
+
+    /**
+     * Handle room secret button click - show modal with generate/view options
+     * @param {string} roomId - The room ID
+     */
+    async handleRoomSecret(roomId) {
+        const existingSecret = this.getStoredRoomSecret(roomId);
+        const content = document.getElementById('room-secret-content');
+
+        if (existingSecret) {
+            // Show existing secret with options to copy or regenerate
+            content.innerHTML = `
+                <div class="success-details">
+                    <p>This room has a P2P authentication secret configured.</p>
+                    <div class="detail-row">
+                        <label>Secret:</label>
+                        <code id="room-secret-value" class="api-key">${existingSecret}</code>
+                        <button class="btn btn-secondary btn-sm" onclick="app.copyToClipboard('${existingSecret}')">
+                            <i data-lucide="copy"></i>
+                        </button>
+                    </div>
+                </div>
+                <div class="help-text">
+                    <p><strong>How to use this secret:</strong></p>
+                    <ul>
+                        <li><strong>CLI flag:</strong> <code>--room-secret ${existingSecret}</code></li>
+                        <li><strong>Environment variable:</strong> <code>SLEAP_RTC_ROOM_SECRET_${roomId.replace(/-/g, '_').toUpperCase()}=${existingSecret}</code></li>
+                        <li><strong>Filesystem:</strong> Save to <code>~/.sleap-rtc/secrets/${roomId}</code></li>
+                    </ul>
+                </div>
+                <div class="form-actions" style="margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--border-color);">
+                    <button type="button" class="btn btn-danger btn-sm" onclick="app.regenerateRoomSecret('${roomId}')">
+                        <i data-lucide="refresh-cw"></i>
+                        Regenerate Secret
+                    </button>
+                </div>
+            `;
+        } else {
+            // No secret yet - offer to generate one
+            content.innerHTML = `
+                <div class="info-banner">
+                    <p>P2P authentication adds an extra layer of security for direct worker-client communication.</p>
+                    <p>When enabled, both the worker and client must have the same secret to communicate.</p>
+                </div>
+                <div class="form-actions" style="margin-top: 1rem;">
+                    <button type="button" class="btn btn-primary" onclick="app.generateAndSaveRoomSecret('${roomId}')">
+                        <i data-lucide="key"></i>
+                        Generate Secret
+                    </button>
+                </div>
+            `;
+        }
+
+        this.showModal('room-secret-modal');
+
+        // Initialize Lucide icons in modal
+        if (typeof lucide !== 'undefined') {
+            lucide.createIcons();
+        }
+    }
+
+    /**
+     * Generate a new secret and save it
+     * @param {string} roomId - The room ID
+     */
+    async generateAndSaveRoomSecret(roomId) {
+        try {
+            const secret = await this.generateRoomSecret();
+            this.saveRoomSecret(roomId, secret);
+            this.showToast('Room secret generated and saved');
+
+            // Refresh the modal content to show the new secret
+            await this.handleRoomSecret(roomId);
+        } catch (e) {
+            console.error('Failed to generate room secret:', e);
+            this.showToast('Failed to generate secret', 'error');
+        }
+    }
+
+    /**
+     * Regenerate room secret (with confirmation)
+     * @param {string} roomId - The room ID
+     */
+    async regenerateRoomSecret(roomId) {
+        if (!confirm('Are you sure you want to regenerate the room secret?\n\nAll workers and clients using the old secret will need to be updated.')) {
+            return;
+        }
+
+        await this.generateAndSaveRoomSecret(roomId);
     }
 }
 
