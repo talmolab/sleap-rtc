@@ -13,9 +13,6 @@ Stores credentials in ~/.sleap-rtc/credentials.json with the schema:
             "api_key": "slp_xxx...",
             "worker_name": "lab-gpu-1"
         }
-    },
-    "otp_secrets": {
-        "<room_id>": "BASE32SECRET..."
     }
 }
 """
@@ -215,54 +212,3 @@ def get_valid_jwt() -> Optional[str]:
     except Exception as e:
         logger.warning(f"Failed to decode JWT: {e}")
         return None
-
-
-def get_stored_otp_secret(room_id: str) -> Optional[str]:
-    """Get the stored OTP secret for a specific room.
-
-    Args:
-        room_id: The room ID to get the OTP secret for.
-
-    Returns:
-        Base32-encoded OTP secret string if stored, None otherwise.
-    """
-    creds = get_credentials()
-    otp_secrets = creds.get("otp_secrets", {})
-    return otp_secrets.get(room_id)
-
-
-def save_otp_secret(room_id: str, secret: str) -> None:
-    """Save an OTP secret for a room.
-
-    Args:
-        room_id: Room ID the secret is for.
-        secret: Base32-encoded OTP secret.
-    """
-    creds = get_credentials()
-    if "otp_secrets" not in creds:
-        creds["otp_secrets"] = {}
-
-    creds["otp_secrets"][room_id] = secret
-    save_credentials(creds)
-    logger.debug(f"Saved OTP secret for room {room_id}")
-
-
-def remove_otp_secret(room_id: str) -> bool:
-    """Remove a stored OTP secret for a room.
-
-    Args:
-        room_id: Room ID to remove OTP secret for.
-
-    Returns:
-        True if secret was removed, False if not found.
-    """
-    creds = get_credentials()
-    otp_secrets = creds.get("otp_secrets", {})
-
-    if room_id in otp_secrets:
-        del otp_secrets[room_id]
-        creds["otp_secrets"] = otp_secrets
-        save_credentials(creds)
-        logger.debug(f"Removed OTP secret for room {room_id}")
-        return True
-    return False
