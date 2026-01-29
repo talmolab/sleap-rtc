@@ -98,6 +98,9 @@ class SleapRTCDashboard {
         this.tokens = [];
         this.tokenWorkers = {}; // Cache of connected workers by token_id
         this.searchQuery = ''; // Current search query
+        this.roomsDisplayCount = 10; // Number of rooms to display initially
+        this.tokensDisplayCount = 10; // Number of tokens to display initially
+        this.ITEMS_PER_PAGE = 10; // Items to load per "show more" click
 
         this.init();
     }
@@ -109,6 +112,9 @@ class SleapRTCDashboard {
     init() {
         // Load stored credentials
         this.loadStoredCredentials();
+
+        // Load theme preference
+        this.loadTheme();
 
         // Setup event listeners
         this.setupEventListeners();
@@ -123,6 +129,34 @@ class SleapRTCDashboard {
 
         // Check auth state and render
         this.updateUI();
+    }
+
+    // =========================================================================
+    // Theme Management
+    // =========================================================================
+
+    loadTheme() {
+        const savedTheme = localStorage.getItem('sleap_rtc_theme') || 'dark';
+        this.setTheme(savedTheme);
+    }
+
+    setTheme(theme) {
+        document.documentElement.setAttribute('data-theme', theme);
+        const label = document.getElementById('theme-label');
+        if (label) {
+            label.textContent = theme === 'dark' ? 'Dark' : 'Light';
+        }
+        localStorage.setItem('sleap_rtc_theme', theme);
+    }
+
+    toggleTheme() {
+        const currentTheme = document.documentElement.getAttribute('data-theme') || 'dark';
+        const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+        this.setTheme(newTheme);
+        // Refresh Lucide icons after theme change
+        if (typeof lucide !== 'undefined') {
+            lucide.createIcons();
+        }
     }
 
     loadStoredCredentials() {
@@ -302,6 +336,9 @@ class SleapRTCDashboard {
 
         // Settings button
         document.getElementById('settings-btn')?.addEventListener('click', () => this.showModal('settings-modal'));
+
+        // Theme toggle
+        document.getElementById('theme-toggle')?.addEventListener('click', () => this.toggleTheme());
 
         // Mobile menu toggle
         document.getElementById('mobile-menu-btn')?.addEventListener('click', () => this.toggleMobileMenu());
@@ -602,7 +639,11 @@ class SleapRTCDashboard {
             return;
         }
 
-        container.innerHTML = filteredRooms.map(room => `
+        // Paginate rooms
+        const displayedRooms = filteredRooms.slice(0, this.roomsDisplayCount);
+        const hasMore = filteredRooms.length > this.roomsDisplayCount;
+
+        container.innerHTML = displayedRooms.map(room => `
             <div class="room-card">
                 <div class="room-header">
                     <div class="room-main">
@@ -657,12 +698,24 @@ class SleapRTCDashboard {
                     </div>
                 </div>
             </div>
-        `).join('');
+        `).join('') + (hasMore ? `
+            <div class="show-more-container">
+                <button class="btn btn-secondary" onclick="app.showMoreRooms()">
+                    <i data-lucide="chevrons-down"></i>
+                    Show more (${filteredRooms.length - this.roomsDisplayCount} remaining)
+                </button>
+            </div>
+        ` : '');
 
         // Initialize Lucide icons
         if (typeof lucide !== 'undefined') {
             lucide.createIcons();
         }
+    }
+
+    showMoreRooms() {
+        this.roomsDisplayCount += this.ITEMS_PER_PAGE;
+        this.renderRooms();
     }
 
     escapeHtml(text) {
@@ -997,7 +1050,11 @@ class SleapRTCDashboard {
             return;
         }
 
-        container.innerHTML = filteredTokens.map(token => {
+        // Pagination
+        const displayedTokens = filteredTokens.slice(0, this.tokensDisplayCount);
+        const hasMore = filteredTokens.length > this.tokensDisplayCount;
+
+        container.innerHTML = displayedTokens.map(token => {
             const isRevoked = !!token.revoked_at;
             const expiresAt = token.expires_at ? new Date(token.expires_at) : null;
             const now = new Date();
@@ -1072,12 +1129,24 @@ class SleapRTCDashboard {
                 ` : ''}
             </div>
         `;
-        }).join('');
+        }).join('') + (hasMore ? `
+            <div class="show-more-container">
+                <button class="btn btn-secondary" onclick="app.showMoreTokens()">
+                    <i data-lucide="chevrons-down"></i>
+                    Show more (${filteredTokens.length - this.tokensDisplayCount} remaining)
+                </button>
+            </div>
+        ` : '');
 
         // Initialize Lucide icons
         if (typeof lucide !== 'undefined') {
             lucide.createIcons();
         }
+    }
+
+    showMoreTokens() {
+        this.tokensDisplayCount += this.ITEMS_PER_PAGE;
+        this.renderTokens();
     }
 
     async showCreateTokenModal() {

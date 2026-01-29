@@ -1,7 +1,7 @@
 /* SLEAP-RTC Dashboard Styles - Modern UI */
 
 :root {
-    /* Dark theme base */
+    /* Dark theme base (default) */
     --bg-primary: #0a0a0b;
     --bg-secondary: #111113;
     --bg-tertiary: #18181b;
@@ -35,6 +35,28 @@
     --radius: 8px;
 }
 
+/* Light theme */
+[data-theme="light"] {
+    --bg-primary: #f8fafc;
+    --bg-secondary: #ffffff;
+    --bg-tertiary: #f1f5f9;
+    --bg-elevated: #e2e8f0;
+    --bg-hover: #cbd5e1;
+
+    --accent-primary: #7c3aed;
+    --accent-secondary: #6d28d9;
+    --accent-muted: rgba(124, 58, 237, 0.15);
+    --accent-subtle: rgba(124, 58, 237, 0.08);
+    --accent-glow: rgba(124, 58, 237, 0.25);
+
+    --text-primary: #0f172a;
+    --text-secondary: #475569;
+    --text-muted: #64748b;
+
+    --border-subtle: #e2e8f0;
+    --border-default: #cbd5e1;
+}
+
 * {
     box-sizing: border-box;
     margin: 0;
@@ -64,6 +86,10 @@ body::before {
     pointer-events: none;
     opacity: 0.5;
     z-index: 0;
+}
+
+[data-theme="light"] body::before {
+    opacity: 0.3;
 }
 
 /* Layout */
@@ -1281,6 +1307,18 @@ body::before {
     margin-bottom: 20px;
 }
 
+/* Show More Container */
+.show-more-container {
+    display: flex;
+    justify-content: center;
+    padding: 16px;
+    margin-top: 8px;
+}
+
+.show-more-container .btn {
+    gap: 8px;
+}
+
 /* Members List */
 .members-list {
     margin-bottom: 20px;
@@ -1408,6 +1446,51 @@ kbd {
     border: 1px solid var(--border-default);
     border-radius: 4px;
     color: var(--text-secondary);
+}
+
+/* Theme Toggle */
+.theme-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-default);
+    border-radius: 6px;
+    color: var(--text-primary);
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.theme-toggle:hover {
+    background: var(--bg-hover);
+    border-color: var(--accent-primary);
+}
+
+.theme-toggle svg {
+    width: 16px;
+    height: 16px;
+}
+
+.theme-icon-light {
+    display: none;
+}
+
+.theme-icon-dark {
+    display: block;
+}
+
+[data-theme="light"] .theme-icon-light {
+    display: block;
+}
+
+[data-theme="light"] .theme-icon-dark {
+    display: none;
+}
+
+.theme-toggle-label {
+    font-size: 13px;
+    font-weight: 500;
 }
 
 /* Scrollbar */
