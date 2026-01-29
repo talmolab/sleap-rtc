@@ -365,6 +365,42 @@ MSG_FS_PREFIX_PROPOSAL = "FS_PREFIX_PROPOSAL"
 MSG_FS_APPLY_PREFIX = "FS_APPLY_PREFIX"
 MSG_FS_PREFIX_APPLIED = "FS_PREFIX_APPLIED"
 
+# =============================================================================
+# P2P Pre-Shared Key (PSK) Authentication Messages
+# =============================================================================
+#
+# These messages implement zero-trust P2P authentication using a pre-shared
+# secret. The signaling server never sees the secret - it's distributed
+# out-of-band (shared filesystem, env var, config file).
+#
+# Message Flow:
+#
+# 1. WebRTC data channel opens
+# 2. Worker (if secret configured) → Client: AUTH_CHALLENGE::{nonce}
+#    Nonce is 32 bytes, base64-encoded
+# 3. Client computes HMAC-SHA256(secret, nonce) and responds:
+#    Client → Worker: AUTH_RESPONSE::{hmac}
+#    HMAC is base64-encoded
+# 4. Worker verifies HMAC:
+#    - If valid: Worker → Client: AUTH_SUCCESS
+#    - If invalid: Worker → Client: AUTH_FAILURE::{reason}
+#
+# Reasons for AUTH_FAILURE:
+#   - "invalid": HMAC doesn't match (wrong secret)
+#   - "timeout": No response within 10 seconds
+#   - "missing": Client has no secret configured
+#
+# Legacy Mode:
+#   Workers without a secret configured skip the challenge and accept
+#   commands immediately (backward compatible).
+#
+
+# P2P PSK authentication messages
+MSG_AUTH_CHALLENGE = "AUTH_CHALLENGE"
+MSG_AUTH_RESPONSE = "AUTH_RESPONSE"
+MSG_AUTH_SUCCESS = "AUTH_SUCCESS"
+MSG_AUTH_FAILURE = "AUTH_FAILURE"
+
 # Message separators
 MSG_SEPARATOR = "::"
 

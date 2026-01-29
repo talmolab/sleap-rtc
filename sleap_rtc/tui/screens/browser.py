@@ -163,6 +163,7 @@ class BrowserScreen(Screen):
         room_id: str,
         token: str,
         name: Optional[str] = None,
+        room_secret: Optional[str] = None,
     ):
         """Initialize browser screen.
 
@@ -170,10 +171,12 @@ class BrowserScreen(Screen):
             room_id: Room ID to connect to.
             token: Room token for authentication.
             name: Screen name.
+            room_secret: Optional room secret for PSK authentication (CLI override).
         """
         super().__init__(name=name)
         self.room_id = room_id
         self.token = token
+        self.room_secret = room_secret
 
         # WebRTC bridge (one per worker connection)
         self.bridge: Optional[WebRTCBridge] = None
@@ -310,6 +313,8 @@ class BrowserScreen(Screen):
                 token=self.token,
                 on_connected=self._on_connected,
                 on_disconnected=self._on_disconnected,
+                on_auth_status=self._on_auth_status,
+                room_secret=self.room_secret,
             )
 
             # Connect to signaling server
@@ -373,6 +378,8 @@ class BrowserScreen(Screen):
                 token=self.token,
                 on_connected=self._on_connected,
                 on_disconnected=self._on_disconnected,
+                on_auth_status=self._on_auth_status,
+                room_secret=self.room_secret,
             )
             await self.bridge.connect_signaling()
 
@@ -401,8 +408,23 @@ class BrowserScreen(Screen):
             self.set_timer(0.5, self._try_load_root)
 
         else:
-            self.connection_status = "Connection failed"
-            connecting_status.update(f"Failed to connect to {worker_info.display_name}")
+            # Check if authentication failed
+            if self.bridge and self.bridge.auth_failed_reason:
+                reason = self.bridge.auth_failed_reason
+                self.connection_status = f"Auth failed: {reason}"
+                connecting_status.update(f"Authentication failed: {reason}")
+
+                # Show helpful error message
+                self.notify(
+                    f"PSK authentication failed: {reason}\n"
+                    "Check that your room secret matches the worker's secret.\n"
+                    "Use 'sleap-rtc room create-secret --room ROOM' to generate a new secret.",
+                    severity="error",
+                    timeout=15,
+                )
+            else:
+                self.connection_status = "Connection failed"
+                connecting_status.update(f"Failed to connect to {worker_info.display_name}")
 
             # Update tab connection status
             worker_tabs = self.query_one("#worker-tabs", WorkerTabs)
@@ -503,6 +525,27 @@ class BrowserScreen(Screen):
         worker_tabs.set_worker_connected(self.current_worker_index, False)
 
         self.notify("Connection to worker lost", severity="warning")
+
+    def _on_auth_status(self, status: str):
+        """Called when PSK authentication status changes.
+
+        Args:
+            status: Status message (e.g., "Authenticating...", "Authenticated", "Auth failed: reason")
+        """
+        # Update the connecting status display
+        try:
+            connecting_status = self.query_one("#connecting-status", Static)
+            connecting_status.update(status)
+        except Exception:
+            pass
+
+        # Also update header status during auth
+        if status == "Authenticated":
+            self.connection_status = "Connected"
+        elif status.startswith("Auth failed"):
+            self.connection_status = status
+        else:
+            self.connection_status = status
 
     def on_worker_tabs_worker_selected(self, event: WorkerTabs.WorkerSelected):
         """Handle worker selection from sidebar."""

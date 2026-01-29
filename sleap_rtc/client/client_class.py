@@ -43,7 +43,14 @@ from sleap_rtc.protocol import (
     MSG_USE_WORKER_PATH,
     MSG_WORKER_PATH_OK,
     MSG_WORKER_PATH_ERROR,
+    # PSK P2P authentication
+    MSG_AUTH_CHALLENGE,
+    MSG_AUTH_RESPONSE,
+    MSG_AUTH_SUCCESS,
+    MSG_AUTH_FAILURE,
 )
+from sleap_rtc.auth.psk import compute_hmac
+from sleap_rtc.auth.secret_resolver import resolve_secret
 from sleap_rtc.client.file_selector import (
     select_file_from_candidates,
     MountSelector,
@@ -103,6 +110,12 @@ class RTCClient:
 
         self.room_id = None  # Room ID for credential lookup
         self.cognito_username = None  # Legacy field for cleanup compatibility
+
+        # PSK P2P authentication (zero-trust layer)
+        self._room_secret: Optional[str] = None  # Set via CLI flag, env var, or config
+        self._authenticated = False  # Whether PSK authentication completed
+        self._auth_event = asyncio.Event()  # Signaled when auth completes (success or failure)
+        self._auth_failed_reason: Optional[str] = None  # Reason if auth failed
 
     def parse_session_string(self, session_string: str):
         prefix = "sleap-session:"
@@ -943,6 +956,17 @@ class RTCClient:
         asyncio.create_task(self.keep_ice_alive())
         logging.info(f"{self.data_channel.label} is open")
 
+        # Wait for P2P PSK authentication if configured
+        if self._room_secret:
+            logging.info("Waiting for P2P PSK authentication...")
+            auth_success = await self._wait_for_auth(timeout=15.0)
+            if not auth_success:
+                reason = self._auth_failed_reason or "timeout"
+                logging.error(f"P2P authentication failed: {reason}")
+                print(f"\nError: P2P authentication failed: {reason}")
+                print("Check that the room secret matches the worker's configuration.")
+                return
+
         # Determine the worker path to use
         resolved_path = None
 
@@ -1005,6 +1029,85 @@ class RTCClient:
             logging.info("No file path provided")
         return
 
+    # ===== P2P PSK Authentication Methods =====
+
+    def _handle_auth_challenge(self, message: str) -> None:
+        """Handle AUTH_CHALLENGE message from worker.
+
+        Computes HMAC response using the room secret and sends AUTH_RESPONSE.
+
+        Args:
+            message: The AUTH_CHALLENGE message (format: AUTH_CHALLENGE::{nonce}).
+        """
+        # Parse the nonce from the message
+        parts = message.split(MSG_SEPARATOR, 1)
+        if len(parts) != 2:
+            logging.warning("Invalid AUTH_CHALLENGE format")
+            return
+
+        nonce = parts[1]
+        logging.info("Received AUTH_CHALLENGE from worker")
+
+        # Check if we have a secret
+        if not self._room_secret:
+            logging.warning("No room secret configured, sending AUTH_RESPONSE::missing")
+            if self.data_channel and self.data_channel.readyState == "open":
+                self.data_channel.send(format_message(MSG_AUTH_RESPONSE, "missing"))
+            return
+
+        # Compute HMAC and send response
+        hmac_response = compute_hmac(self._room_secret, nonce)
+        if self.data_channel and self.data_channel.readyState == "open":
+            self.data_channel.send(format_message(MSG_AUTH_RESPONSE, hmac_response))
+            logging.info("Sent AUTH_RESPONSE to worker")
+
+    def _handle_auth_success(self) -> None:
+        """Handle AUTH_SUCCESS message from worker.
+
+        Marks the connection as authenticated and signals waiting tasks.
+        """
+        logging.info("P2P authentication successful")
+        self._authenticated = True
+        self._auth_failed_reason = None
+        self._auth_event.set()
+
+    def _handle_auth_failure(self, message: str) -> None:
+        """Handle AUTH_FAILURE message from worker.
+
+        Logs the failure reason and signals waiting tasks.
+
+        Args:
+            message: The AUTH_FAILURE message (format: AUTH_FAILURE::{reason}).
+        """
+        # Parse the reason from the message
+        parts = message.split(MSG_SEPARATOR, 1)
+        reason = parts[1] if len(parts) > 1 else "unknown"
+
+        logging.error(f"P2P authentication failed: {reason}")
+        self._authenticated = False
+        self._auth_failed_reason = reason
+        self._auth_event.set()
+
+    async def _wait_for_auth(self, timeout: float = 15.0) -> bool:
+        """Wait for PSK authentication to complete.
+
+        Args:
+            timeout: Maximum time to wait in seconds.
+
+        Returns:
+            True if authenticated successfully, False otherwise.
+        """
+        if not self._room_secret:
+            # No secret configured, consider authenticated (legacy mode)
+            return True
+
+        try:
+            await asyncio.wait_for(self._auth_event.wait(), timeout=timeout)
+            return self._authenticated
+        except asyncio.TimeoutError:
+            logging.error("P2P authentication timed out waiting for response")
+            return False
+
     async def on_message(self, message):
         """Event handler function for when a message is received on the datachannel from Worker.
 
@@ -1014,11 +1117,23 @@ class RTCClient:
         Returns:
             None
         """
-        # Log the received message.
-        logging.info(f"Client received: {message}")
+        # Log the received message (truncate for readability).
+        log_msg = message if len(str(message)) < 100 else f"{str(message)[:100]}..."
+        logging.info(f"Client received: {log_msg}")
 
         # Handle string and bytes messages differently.
         if isinstance(message, str):
+            # Handle P2P PSK authentication messages (highest priority)
+            if message.startswith(MSG_AUTH_CHALLENGE):
+                self._handle_auth_challenge(message)
+                return
+            if message == MSG_AUTH_SUCCESS:
+                self._handle_auth_success()
+                return
+            if message.startswith(MSG_AUTH_FAILURE):
+                self._handle_auth_failure(message)
+                return
+
             # Handle filesystem browser responses (FS_*)
             if message.startswith("FS_"):
                 logging.info(f"Received FS response: {message[:50]}...")
@@ -1824,6 +1939,7 @@ class RTCClient:
         worker_path: str = None,
         non_interactive: bool = False,
         mount_label: str = None,
+        room_secret: str = None,
     ):
         """Sends initial SDP offer to worker peer and establishes both connection & datachannel to be used by both parties.
 
@@ -1841,6 +1957,8 @@ class RTCClient:
             worker_path: Explicit path on worker filesystem (skips resolution)
             non_interactive: Auto-select best match without prompting (for CI/scripts)
             mount_label: Specific mount label to search (skips mount selection)
+            room_secret: Optional room secret for P2P PSK authentication. If not provided,
+                will try to resolve from SLEAP_ROOM_SECRET env var, filesystem, or config.
         Returns:
             None
         """
@@ -1878,6 +1996,14 @@ class RTCClient:
             # Store auth token for registration
             self._jwt_token = jwt_token
             self._id_token = None
+
+            # Load room secret for P2P PSK authentication
+            # Priority: CLI flag > env var > filesystem > credentials
+            self._room_secret = resolve_secret(room_id or "default", cli_secret=room_secret)
+            if self._room_secret:
+                logging.info("P2P PSK authentication enabled (room secret configured)")
+            else:
+                logging.info("P2P PSK authentication disabled (no room secret configured)")
 
             # Initiate the WebSocket connection to the signaling server.
             async with websockets.connect(self.DNS) as websocket:

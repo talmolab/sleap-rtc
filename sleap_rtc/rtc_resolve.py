@@ -20,7 +20,13 @@ from sleap_rtc.protocol import (
     MSG_WORKER_PATH_ERROR,
     MSG_FS_CHECK_VIDEOS_RESPONSE,
     MSG_SEPARATOR,
+    MSG_AUTH_CHALLENGE,
+    MSG_AUTH_RESPONSE,
+    MSG_AUTH_SUCCESS,
+    MSG_AUTH_FAILURE,
 )
+from sleap_rtc.auth.psk import compute_hmac
+from sleap_rtc.auth.secret_resolver import resolve_secret
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -36,7 +42,15 @@ class ResolveClient:
     - Relays messages between browser and Worker for path resolution
     """
 
-    def __init__(self, room_id: str, token: str, slp_path: str, port: int = 8765):
+    def __init__(
+        self,
+        room_id: str,
+        token: str,
+        slp_path: str,
+        port: int = 8765,
+        room_secret: str = None,
+        use_jwt: bool = True,
+    ):
         """Initialize the resolve client.
 
         Args:
@@ -44,11 +58,14 @@ class ResolveClient:
             token: Room token for authentication.
             slp_path: Path to SLP file on Worker filesystem.
             port: Local port for the resolution UI server.
+            room_secret: Optional room secret for PSK authentication (CLI override).
+            use_jwt: Whether to use JWT authentication (default: True).
         """
         self.room_id = room_id
         self.token = token
         self.slp_path = slp_path
         self.port = port
+        self.use_jwt = use_jwt
 
         # Load config
         config = get_config()
@@ -75,6 +92,17 @@ class ResolveClient:
         # Response queue for waiting on Worker responses
         self.response_queue = asyncio.Queue()
 
+        # PSK authentication state
+        self._room_secret = resolve_secret(room_id, cli_secret=room_secret)
+        self._authenticated = False
+        self._auth_event = asyncio.Event()
+        self._auth_failed_reason: str = None
+
+        if self._room_secret:
+            logging.info("Room secret loaded for PSK authentication")
+        else:
+            logging.debug(f"No room secret configured for room {room_id}")
+
     async def run(self, open_browser: bool = True):
         """Run the resolve client.
 
@@ -85,19 +113,26 @@ class ResolveClient:
             The resolved SLP path if videos were resolved, None otherwise.
         """
         try:
-            # JWT authentication (required)
+            # JWT authentication (optional for testing)
             from sleap_rtc.auth.credentials import get_valid_jwt, get_user
+            import os
 
-            jwt_token = get_valid_jwt()
-            if not jwt_token:
-                logging.error(
-                    "No valid JWT found. Run 'sleap-rtc login' to authenticate."
-                )
-                return None
+            jwt_token = None
+            if self.use_jwt:
+                jwt_token = get_valid_jwt()
+                if not jwt_token:
+                    logging.error(
+                        "No valid JWT found. Run 'sleap-rtc login' to authenticate."
+                    )
+                    return None
 
-            user = get_user()
-            self.peer_id = user.get("username", "unknown") if user else "unknown"
-            logging.info(f"Using JWT authentication as: {self.peer_id}")
+                user = get_user()
+                self.peer_id = user.get("username", "unknown") if user else "unknown"
+                logging.info(f"Using JWT authentication as: {self.peer_id}")
+            else:
+                # No JWT - use environment user as peer_id
+                self.peer_id = os.environ.get("USER", "resolve-client")
+                logging.info(f"JWT disabled, using peer_id: {self.peer_id}")
 
             # Connect to signaling server
             async with websockets.connect(self.dns) as websocket:
@@ -132,6 +167,16 @@ class ResolveClient:
 
                 # Wait for data channel to open
                 await self._wait_for_channel()
+
+                # Wait for PSK authentication if secret is configured
+                if self._room_secret:
+                    logging.info("Waiting for PSK authentication...")
+                    auth_success = await self._wait_for_auth()
+                    if not auth_success:
+                        logging.error(f"PSK authentication failed: {self._auth_failed_reason}")
+                        print(f"\nAuthentication failed: {self._auth_failed_reason}")
+                        print("Make sure the room secret matches the worker's secret.")
+                        return None
 
                 # Send SLP path to Worker for video check
                 print(f"\nChecking video accessibility for: {self.slp_path}")
@@ -396,9 +441,94 @@ class ResolveClient:
             logging.error(f"Failed to parse video check response: {e}")
             return None
 
+    def _handle_auth_challenge(self, message: str) -> None:
+        """Handle PSK authentication challenge from worker.
+
+        Computes HMAC response and sends AUTH_RESPONSE.
+
+        Args:
+            message: The AUTH_CHALLENGE message containing the nonce.
+        """
+        # Parse nonce from challenge message
+        if "::" in message:
+            _, nonce = message.split("::", 1)
+        else:
+            logging.error("Invalid AUTH_CHALLENGE format")
+            self._auth_failed_reason = "Invalid challenge format"
+            self._auth_event.set()
+            return
+
+        if not self._room_secret:
+            logging.error("Received AUTH_CHALLENGE but no room secret configured")
+            self._auth_failed_reason = "No room secret configured"
+            self._auth_event.set()
+            return
+
+        # Compute HMAC response
+        response_hmac = compute_hmac(self._room_secret, nonce)
+
+        # Send AUTH_RESPONSE
+        if self.data_channel and self.data_channel.readyState == "open":
+            self.data_channel.send(f"{MSG_AUTH_RESPONSE}::{response_hmac}")
+            logging.debug("Sent AUTH_RESPONSE")
+
+    def _handle_auth_success(self) -> None:
+        """Handle successful PSK authentication."""
+        logging.info("PSK authentication successful")
+        self._authenticated = True
+        self._auth_event.set()
+
+    def _handle_auth_failure(self, message: str) -> None:
+        """Handle PSK authentication failure.
+
+        Args:
+            message: The AUTH_FAILURE message with reason.
+        """
+        reason = "Unknown"
+        if "::" in message:
+            _, reason = message.split("::", 1)
+
+        logging.error(f"PSK authentication failed: {reason}")
+        self._auth_failed_reason = reason
+        self._auth_event.set()
+
+    async def _wait_for_auth(self, timeout: float = 15.0) -> bool:
+        """Wait for PSK authentication to complete.
+
+        Args:
+            timeout: Maximum time to wait for auth in seconds.
+
+        Returns:
+            True if authenticated, False if failed or timed out.
+        """
+        if not self._room_secret:
+            # No secret configured, skip auth (legacy mode)
+            self._authenticated = True
+            return True
+
+        try:
+            await asyncio.wait_for(self._auth_event.wait(), timeout=timeout)
+        except asyncio.TimeoutError:
+            logging.error("PSK authentication timed out")
+            self._auth_failed_reason = "Timeout"
+            return False
+
+        return self._authenticated
+
     async def _handle_worker_message(self, message):
         """Handle message from Worker."""
         if isinstance(message, str):
+            # PSK authentication messages
+            if message.startswith(MSG_AUTH_CHALLENGE):
+                self._handle_auth_challenge(message)
+                return
+            elif message.startswith(MSG_AUTH_SUCCESS):
+                self._handle_auth_success()
+                return
+            elif message.startswith(MSG_AUTH_FAILURE):
+                self._handle_auth_failure(message)
+                return
+
             # Forward specific messages to response queue
             if (message.startswith(MSG_WORKER_PATH_OK) or
                 message.startswith(MSG_WORKER_PATH_ERROR) or
@@ -465,6 +595,8 @@ async def run_resolve_client(
     slp_path: str,
     port: int = 8765,
     open_browser: bool = True,
+    room_secret: str = None,
+    use_jwt: bool = True,
 ) -> str:
     """Run the resolve client.
 
@@ -474,6 +606,8 @@ async def run_resolve_client(
         slp_path: Path to SLP file on Worker filesystem.
         port: Local port for the resolution UI server.
         open_browser: Whether to auto-open the browser.
+        room_secret: Optional room secret for PSK authentication (CLI override).
+        use_jwt: Whether to use JWT authentication (default: True).
 
     Returns:
         The resolved SLP path if successful, None otherwise.
@@ -483,5 +617,7 @@ async def run_resolve_client(
         token=token,
         slp_path=slp_path,
         port=port,
+        room_secret=room_secret,
+        use_jwt=use_jwt,
     )
     return await client.run(open_browser=open_browser)

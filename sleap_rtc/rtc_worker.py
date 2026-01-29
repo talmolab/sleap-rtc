@@ -15,6 +15,7 @@ def run_RTCworker(
     token=None,
     working_dir=None,
     name=None,
+    room_secret=None,
 ):
     """Create RTCWorkerClient and start it.
 
@@ -24,6 +25,7 @@ def run_RTCworker(
         token: Optional room token for authentication. Required if room_id is provided.
         working_dir: Optional working directory. CLI option overrides config file.
         name: Optional human-readable name for this worker.
+        room_secret: Optional room secret for P2P authentication (CLI override).
     """
     # Get configuration
     config = get_config()
@@ -62,6 +64,7 @@ def run_RTCworker(
                 api_key=api_key,
                 room_id=room_id,
                 token=token,
+                room_secret=room_secret,
             )
         )
     except KeyboardInterrupt:

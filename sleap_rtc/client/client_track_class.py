@@ -21,6 +21,14 @@ import requests
 
 from sleap_rtc.config import get_config
 from sleap_rtc.filesystem import safe_mkdir
+from sleap_rtc.auth.psk import compute_hmac
+from sleap_rtc.auth.secret_resolver import resolve_secret
+from sleap_rtc.protocol import (
+    MSG_AUTH_CHALLENGE,
+    MSG_AUTH_RESPONSE,
+    MSG_AUTH_SUCCESS,
+    MSG_AUTH_FAILURE,
+)
 
 logging.basicConfig(level=logging.INFO)
 
@@ -61,6 +69,12 @@ class RTCTrackClient:
         self.reconnecting = False
         self.reconnect_attempts = 0
         self.room_id = None
+
+        # PSK authentication state
+        self._room_secret: Optional[str] = None
+        self._authenticated = False
+        self._auth_event = asyncio.Event()
+        self._auth_failed_reason: Optional[str] = None
 
     def create_track_package(
         self,
@@ -279,6 +293,15 @@ sleap-nn track \\
         asyncio.create_task(self.keep_ice_alive())
         logging.info(f"{self.data_channel.label} is open")
 
+        # Wait for PSK authentication if secret is configured
+        if self._room_secret:
+            logging.info("Waiting for PSK authentication...")
+            auth_success = await self._wait_for_auth()
+            if not auth_success:
+                logging.error(f"PSK authentication failed: {self._auth_failed_reason}")
+                await self.clean_exit()
+                return
+
         # Send track package to worker
         await self.send_track_package(
             self.data_channel, self.file_path, self.output_dir
@@ -291,6 +314,17 @@ sleap-nn track \\
             message: Message from worker (string or bytes)
         """
         if isinstance(message, str):
+            # PSK authentication messages
+            if message.startswith(MSG_AUTH_CHALLENGE):
+                self._handle_auth_challenge(message)
+                return
+            elif message.startswith(MSG_AUTH_SUCCESS):
+                self._handle_auth_success()
+                return
+            elif message.startswith(MSG_AUTH_FAILURE):
+                self._handle_auth_failure(message)
+                return
+
             if message == "END_OF_FILE":
                 # Save received predictions file
                 if self.predictions_data:
@@ -325,6 +359,80 @@ sleap-nn track \\
             # Accumulate predictions file data
             if message != b"KEEP_ALIVE":
                 self.predictions_data.extend(message)
+
+    def _handle_auth_challenge(self, message: str) -> None:
+        """Handle PSK authentication challenge from worker.
+
+        Computes HMAC response and sends AUTH_RESPONSE.
+
+        Args:
+            message: The AUTH_CHALLENGE message containing the nonce.
+        """
+        # Parse nonce from challenge message
+        if "::" in message:
+            _, nonce = message.split("::", 1)
+        else:
+            logging.error("Invalid AUTH_CHALLENGE format")
+            self._auth_failed_reason = "Invalid challenge format"
+            self._auth_event.set()
+            return
+
+        if not self._room_secret:
+            logging.error("Received AUTH_CHALLENGE but no room secret configured")
+            self._auth_failed_reason = "No room secret configured"
+            self._auth_event.set()
+            return
+
+        # Compute HMAC response
+        response_hmac = compute_hmac(self._room_secret, nonce)
+
+        # Send AUTH_RESPONSE
+        if self.data_channel and self.data_channel.readyState == "open":
+            self.data_channel.send(f"{MSG_AUTH_RESPONSE}::{response_hmac}")
+            logging.debug("Sent AUTH_RESPONSE")
+
+    def _handle_auth_success(self) -> None:
+        """Handle successful PSK authentication."""
+        logging.info("PSK authentication successful")
+        self._authenticated = True
+        self._auth_event.set()
+
+    def _handle_auth_failure(self, message: str) -> None:
+        """Handle PSK authentication failure.
+
+        Args:
+            message: The AUTH_FAILURE message with reason.
+        """
+        reason = "Unknown"
+        if "::" in message:
+            _, reason = message.split("::", 1)
+
+        logging.error(f"PSK authentication failed: {reason}")
+        self._auth_failed_reason = reason
+        self._auth_event.set()
+
+    async def _wait_for_auth(self, timeout: float = 15.0) -> bool:
+        """Wait for PSK authentication to complete.
+
+        Args:
+            timeout: Maximum time to wait for auth in seconds.
+
+        Returns:
+            True if authenticated, False if failed or timed out.
+        """
+        if not self._room_secret:
+            # No secret configured, skip auth (legacy mode)
+            self._authenticated = True
+            return True
+
+        try:
+            await asyncio.wait_for(self._auth_event.wait(), timeout=timeout)
+        except asyncio.TimeoutError:
+            logging.error("PSK authentication timed out")
+            self._auth_failed_reason = "Timeout"
+            return False
+
+        return self._authenticated
 
     async def on_iceconnectionstatechange(self):
         """Event handler function for when the ICE connection state changes."""
@@ -393,6 +501,7 @@ sleap-nn track \\
         worker_id: str = None,
         auto_select: bool = False,
         min_gpu_memory: int = None,
+        room_secret: Optional[str] = None,
         **kwargs,
     ):
         """Connects to worker and runs inference workflow.
@@ -467,6 +576,13 @@ sleap-nn track \\
                 worker_room_id = session_str_json.get("room_id")
                 worker_token = session_str_json.get("token")
                 worker_peer_id = session_str_json.get("peer_id")
+
+                # Load room secret for PSK authentication
+                self._room_secret = resolve_secret(worker_room_id, cli_secret=room_secret)
+                if self._room_secret:
+                    logging.info(f"Room secret loaded for PSK authentication")
+                else:
+                    logging.debug(f"No room secret configured for room {worker_room_id}")
 
                 # Build registration message
                 register_data = {

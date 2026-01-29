@@ -451,3 +451,60 @@ Sent busy rejection to client peer_xyz789
 4. **Check worker status**: Room-based discovery only shows "available" workers
 5. **Multi-worker for availability**: Deploy multiple workers to handle concurrent jobs
 6. **GPU filtering**: Use `--min-gpu-memory` to ensure workers have sufficient resources
+
+## P2P Authentication (PSK)
+
+SLEAP-RTC supports optional Pre-Shared Key (PSK) authentication for secure peer-to-peer communication between workers and clients. When enabled, the worker challenges connecting clients to prove they possess the shared secret before accepting commands.
+
+### Quick Start
+
+1. **Generate a room secret** (on the machine that will run the worker):
+   ```bash
+   sleap-rtc room create-secret --room <room_id>
+   ```
+
+2. **Start the worker** with the secret:
+   ```bash
+   sleap-rtc worker --room-id <room_id> --token <token> --room-secret <secret>
+   ```
+
+3. **Connect clients** with the same secret:
+   ```bash
+   sleap-rtc client-train --room-id <room_id> --token <token> --room-secret <secret> --pkg-path package.zip
+   ```
+
+### Secret Configuration Options
+
+The secret can be provided via multiple methods (checked in this order):
+
+| Method | Example |
+|--------|---------|
+| CLI flag | `--room-secret <secret>` |
+| Environment variable | `SLEAP_RTC_ROOM_SECRET_<ROOM_ID>=<secret>` |
+| Filesystem | `~/.sleap-rtc/secrets/<room_id>` |
+| Credentials file | Stored via `sleap-rtc room create-secret --save` |
+
+### Dashboard Integration
+
+Room owners can generate and manage secrets from the web dashboard:
+
+1. Log in to the SLEAP-RTC dashboard
+2. Click "Secret" on any room you own
+3. Generate a new secret or view an existing one
+4. Copy the secret and distribute to workers/clients
+
+### How It Works
+
+1. Worker starts with a configured secret
+2. Client connects via WebRTC
+3. Worker sends `AUTH_CHALLENGE` with a random nonce
+4. Client computes HMAC-SHA256 of the nonce using the secret
+5. Client sends `AUTH_RESPONSE` with the HMAC
+6. Worker verifies the HMAC and sends `AUTH_SUCCESS` or `AUTH_FAILURE`
+7. Commands are only accepted after successful authentication
+
+### Legacy Mode
+
+If no secret is configured on the worker, clients connect immediately without authentication (backward compatible). This allows gradual adoption of PSK authentication.
+
+For detailed setup instructions, see [docs/authentication.md](docs/authentication.md)
