@@ -30,6 +30,9 @@
 
     <!-- Dashboard Section (shown when logged in) -->
     <div id="dashboard-section" class="app-container hidden">
+        <!-- Sidebar Overlay (for mobile) -->
+        <div class="sidebar-overlay" id="sidebar-overlay"></div>
+
         <!-- Sidebar -->
         <aside class="sidebar">
             <div class="sidebar-header">
@@ -63,7 +66,12 @@
         <main class="main-content">
             <!-- Top Bar -->
             <header class="top-bar">
-                <h1 class="page-title" id="page-title">Rooms</h1>
+                <div class="top-bar-left">
+                    <button class="btn btn-ghost mobile-menu-btn" id="mobile-menu-btn">
+                        <i data-lucide="menu"></i>
+                    </button>
+                    <h1 class="page-title" id="page-title">Rooms</h1>
+                </div>
                 <div class="top-bar-actions">
                     <!-- User dropdown -->
                     <div id="user-info" class="user-dropdown">

@@ -302,6 +302,29 @@ class SleapRTCDashboard {
 
         // Settings button
         document.getElementById('settings-btn')?.addEventListener('click', () => this.showModal('settings-modal'));
+
+        // Mobile menu toggle
+        document.getElementById('mobile-menu-btn')?.addEventListener('click', () => this.toggleMobileMenu());
+        document.getElementById('sidebar-overlay')?.addEventListener('click', () => this.closeMobileMenu());
+
+        // Close mobile menu when clicking nav items
+        document.querySelectorAll('.nav-item').forEach(item => {
+            item.addEventListener('click', () => this.closeMobileMenu());
+        });
+    }
+
+    toggleMobileMenu() {
+        const sidebar = document.querySelector('.sidebar');
+        const overlay = document.getElementById('sidebar-overlay');
+        sidebar?.classList.toggle('open');
+        overlay?.classList.toggle('active');
+    }
+
+    closeMobileMenu() {
+        const sidebar = document.querySelector('.sidebar');
+        const overlay = document.getElementById('sidebar-overlay');
+        sidebar?.classList.remove('open');
+        overlay?.classList.remove('active');
     }
 
     toggleUserMenu() {
@@ -488,9 +511,27 @@ class SleapRTCDashboard {
     // Rooms
     // =========================================================================
 
+    renderSkeletonCards(count = 3) {
+        return Array(count).fill(0).map(() => `
+            <div class="skeleton-card">
+                <div class="skeleton-header">
+                    <div class="skeleton skeleton-icon"></div>
+                    <div class="skeleton-content">
+                        <div class="skeleton skeleton-title"></div>
+                        <div class="skeleton skeleton-meta"></div>
+                    </div>
+                    <div class="skeleton-actions">
+                        <div class="skeleton skeleton-btn"></div>
+                        <div class="skeleton skeleton-btn"></div>
+                    </div>
+                </div>
+            </div>
+        `).join('');
+    }
+
     async loadRooms() {
         const container = document.getElementById('rooms-list');
-        container.innerHTML = '<p class="loading">Loading rooms...</p>';
+        container.innerHTML = this.renderSkeletonCards(3);
 
         try {
             const data = await this.apiRequest('/api/auth/rooms');
@@ -839,7 +880,7 @@ class SleapRTCDashboard {
 
     async loadTokens() {
         const container = document.getElementById('tokens-list');
-        container.innerHTML = '<p class="loading">Loading tokens...</p>';
+        container.innerHTML = this.renderSkeletonCards(3);
 
         try {
             const data = await this.apiRequest('/api/auth/tokens');
@@ -958,17 +999,29 @@ class SleapRTCDashboard {
 
         container.innerHTML = filteredTokens.map(token => {
             const isRevoked = !!token.revoked_at;
-            const isExpiringSoon = token.expires_at && new Date(token.expires_at) - new Date() < 3 * 24 * 60 * 60 * 1000;
+            const expiresAt = token.expires_at ? new Date(token.expires_at) : null;
+            const now = new Date();
+            const msUntilExpiry = expiresAt ? expiresAt - now : Infinity;
+            const isExpired = expiresAt && msUntilExpiry < 0;
+            const isExpiringSoon = expiresAt && !isExpired && msUntilExpiry < 3 * 24 * 60 * 60 * 1000; // 3 days
+
+            // Determine expiration badge
+            let expirationBadge = '';
+            if (!isRevoked && isExpired) {
+                expirationBadge = `<span class="badge badge-expired"><i data-lucide="alert-circle"></i> Expired</span>`;
+            } else if (!isRevoked && isExpiringSoon) {
+                expirationBadge = `<span class="badge badge-expiring"><i data-lucide="alert-triangle"></i> Expiring Soon</span>`;
+            }
 
             return `
             <div class="token-card">
                 <div class="token-header">
                     <div class="token-main">
-                        <div class="token-icon" ${isRevoked ? 'style="opacity: 0.5;"' : ''}>
+                        <div class="token-icon" ${isRevoked || isExpired ? 'style="opacity: 0.5;"' : ''}>
                             <i data-lucide="key-round"></i>
                         </div>
                         <div class="token-info">
-                            <h3>${token.worker_name}</h3>
+                            <h3>${token.worker_name} ${expirationBadge}</h3>
                             <div class="token-meta">
                                 <span class="token-meta-item">
                                     <i data-lucide="home"></i>
@@ -979,9 +1032,9 @@ class SleapRTCDashboard {
                                     Created ${formatRelativeTime(token.created_at)}
                                 </span>
                                 ${token.expires_at ? `
-                                    <span class="token-meta-item" ${isExpiringSoon && !isRevoked ? 'style="color: var(--status-warning);"' : ''} title="${formatExactDate(token.expires_at)}">
-                                        <i data-lucide="${isExpiringSoon && !isRevoked ? 'alert-triangle' : 'clock'}"></i>
-                                        Expires ${formatRelativeTime(token.expires_at)}
+                                    <span class="token-meta-item" ${isExpiringSoon || isExpired ? 'style="color: var(--status-warning);"' : ''} title="${formatExactDate(token.expires_at)}">
+                                        <i data-lucide="${isExpiringSoon || isExpired ? 'alert-triangle' : 'clock'}"></i>
+                                        ${isExpired ? 'Expired' : 'Expires'} ${formatRelativeTime(token.expires_at)}
                                     </span>
                                 ` : ''}
                                 ${isRevoked ? `
