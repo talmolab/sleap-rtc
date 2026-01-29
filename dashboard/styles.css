@@ -100,14 +100,8 @@ body::before {
 .logo-mark {
     width: 36px;
     height: 36px;
-    background: linear-gradient(135deg, var(--accent-primary), #6366f1);
     border-radius: 8px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-weight: 700;
-    font-size: 16px;
-    color: white;
+    object-fit: contain;
 }
 
 .logo-text {
@@ -751,6 +745,30 @@ body::before {
     border: 1px solid var(--border-subtle);
     border-radius: 16px;
     text-align: center;
+}
+
+.login-logo {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    margin-bottom: 24px;
+}
+
+.login-logo-img {
+    width: 48px;
+    height: 48px;
+    border-radius: 10px;
+}
+
+.login-logo-text {
+    font-size: 24px;
+    font-weight: 600;
+    letter-spacing: -0.5px;
+}
+
+.login-logo-text span {
+    color: var(--accent-primary);
 }
 
 .login-card h2 {
