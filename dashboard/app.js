@@ -97,6 +97,7 @@ class SleapRTCDashboard {
         this.rooms = [];
         this.tokens = [];
         this.tokenWorkers = {}; // Cache of connected workers by token_id
+        this.searchQuery = ''; // Current search query
 
         this.init();
     }
@@ -230,6 +231,9 @@ class SleapRTCDashboard {
         // Join room
         document.getElementById('join-room-form')?.addEventListener('submit', (e) => this.handleJoinRoom(e));
 
+        // Edit room name
+        document.getElementById('edit-room-form')?.addEventListener('submit', (e) => this.handleSaveRoomName(e));
+
         // Create token
         document.getElementById('create-token-btn')?.addEventListener('click', () => this.showCreateTokenModal());
         document.getElementById('create-token-form')?.addEventListener('submit', (e) => this.handleCreateToken(e));
@@ -261,6 +265,43 @@ class SleapRTCDashboard {
                 }
             });
         });
+
+        // Search functionality
+        document.getElementById('rooms-search')?.addEventListener('input', (e) => {
+            this.searchQuery = e.target.value.toLowerCase();
+            this.renderRooms();
+        });
+        document.getElementById('tokens-search')?.addEventListener('input', (e) => {
+            this.searchQuery = e.target.value.toLowerCase();
+            this.renderTokens();
+            this.updateWorkerBadges();
+        });
+
+        // Keyboard shortcuts
+        document.addEventListener('keydown', (e) => {
+            // "/" to focus search (when not in an input)
+            if (e.key === '/' && !['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) {
+                e.preventDefault();
+                const activeTab = document.querySelector('.tab-content.active');
+                if (activeTab?.id === 'rooms-tab') {
+                    document.getElementById('rooms-search')?.focus();
+                } else if (activeTab?.id === 'tokens-tab') {
+                    document.getElementById('tokens-search')?.focus();
+                }
+            }
+            // Escape to close modals
+            if (e.key === 'Escape') {
+                document.querySelectorAll('.modal:not(.hidden)').forEach(modal => {
+                    modal.classList.add('hidden');
+                });
+            }
+        });
+
+        // Join room button (will be added to sidebar)
+        document.getElementById('join-room-btn')?.addEventListener('click', () => this.showModal('join-room-modal'));
+
+        // Settings button
+        document.getElementById('settings-btn')?.addEventListener('click', () => this.showModal('settings-modal'));
     }
 
     toggleUserMenu() {
@@ -288,7 +329,16 @@ class SleapRTCDashboard {
     }
 
     showModal(modalId) {
-        document.getElementById(modalId)?.classList.remove('hidden');
+        const modal = document.getElementById(modalId);
+        if (!modal) return;
+
+        // Populate settings modal with user info
+        if (modalId === 'settings-modal' && this.user) {
+            document.getElementById('settings-username').textContent = this.user.username || '-';
+            document.getElementById('settings-user-id').textContent = this.user.id || '-';
+        }
+
+        modal.classList.remove('hidden');
         // Refresh Lucide icons in modal
         if (typeof lucide !== 'undefined') {
             lucide.createIcons();
@@ -466,6 +516,15 @@ class SleapRTCDashboard {
     renderRooms() {
         const container = document.getElementById('rooms-list');
 
+        // Filter rooms by search query
+        const filteredRooms = this.searchQuery
+            ? this.rooms.filter(room =>
+                (room.name || '').toLowerCase().includes(this.searchQuery) ||
+                room.room_id.toLowerCase().includes(this.searchQuery) ||
+                room.role.toLowerCase().includes(this.searchQuery)
+            )
+            : this.rooms;
+
         if (this.rooms.length === 0) {
             container.innerHTML = `
                 <div class="empty-state">
@@ -486,7 +545,23 @@ class SleapRTCDashboard {
             return;
         }
 
-        container.innerHTML = this.rooms.map(room => `
+        if (filteredRooms.length === 0) {
+            container.innerHTML = `
+                <div class="empty-state">
+                    <div class="empty-icon">
+                        <i data-lucide="search"></i>
+                    </div>
+                    <h3>No matching rooms</h3>
+                    <p>No rooms match your search "${this.searchQuery}"</p>
+                </div>
+            `;
+            if (typeof lucide !== 'undefined') {
+                lucide.createIcons();
+            }
+            return;
+        }
+
+        container.innerHTML = filteredRooms.map(room => `
             <div class="room-card">
                 <div class="room-header">
                     <div class="room-main">
@@ -494,7 +569,14 @@ class SleapRTCDashboard {
                             <i data-lucide="home"></i>
                         </div>
                         <div class="room-info">
-                            <h3>${room.name || 'Unnamed Room'}</h3>
+                            <h3>
+                                ${room.name || 'Unnamed Room'}
+                                ${room.role === 'owner' ? `
+                                    <button class="btn-edit-inline" onclick="app.handleEditRoomName('${room.room_id}', '${this.escapeHtml(room.name || '')}')">
+                                        <i data-lucide="pencil"></i>
+                                    </button>
+                                ` : ''}
+                            </h3>
                             <div class="room-meta">
                                 <span class="room-meta-item">
                                     <i data-lucide="hash"></i>
@@ -521,6 +603,10 @@ class SleapRTCDashboard {
                             <button class="btn btn-secondary btn-sm" onclick="app.handleInvite('${room.room_id}')">
                                 <i data-lucide="user-plus"></i>
                                 Invite
+                            </button>
+                            <button class="btn btn-secondary btn-sm" onclick="app.handleViewMembers('${room.room_id}')">
+                                <i data-lucide="users"></i>
+                                Members
                             </button>
                             <button class="btn btn-danger btn-sm" onclick="app.handleDeleteRoom('${room.room_id}', '${this.escapeHtml(room.name || room.room_id)}')">
                                 <i data-lucide="trash-2"></i>
@@ -630,6 +716,104 @@ class SleapRTCDashboard {
         }
     }
 
+    handleEditRoomName(roomId, currentName) {
+        document.getElementById('edit-room-id').value = roomId;
+        document.getElementById('edit-room-name').value = currentName;
+        this.showModal('edit-room-modal');
+    }
+
+    async handleSaveRoomName(e) {
+        e.preventDefault();
+
+        const roomId = document.getElementById('edit-room-id').value;
+        const newName = document.getElementById('edit-room-name').value.trim();
+
+        try {
+            await this.apiRequest(`/api/auth/rooms/${roomId}`, {
+                method: 'PATCH',
+                body: JSON.stringify({ name: newName || null }),
+            });
+
+            this.hideModal('edit-room-modal');
+            this.showToast('Room name updated');
+            this.loadRooms();
+
+        } catch (e) {
+            console.error('Failed to update room name:', e);
+            this.showToast(e.message, 'error');
+        }
+    }
+
+    async handleViewMembers(roomId) {
+        const container = document.getElementById('members-list');
+        container.innerHTML = '<p class="loading">Loading members...</p>';
+        this.showModal('members-modal');
+
+        try {
+            const data = await this.apiRequest(`/api/auth/rooms/${roomId}/members`);
+            const members = data.members || [];
+            const currentRoom = this.rooms.find(r => r.room_id === roomId);
+            const isOwner = currentRoom?.role === 'owner';
+
+            if (members.length === 0) {
+                container.innerHTML = '<p class="loading">No members in this room.</p>';
+                return;
+            }
+
+            container.innerHTML = members.map(member => `
+                <div class="member-row">
+                    <div class="member-info">
+                        <img class="member-avatar" src="${member.avatar_url || ''}" alt="">
+                        <div class="member-details">
+                            <span class="member-name">${member.username}</span>
+                            <span class="member-joined">
+                                <span class="role-badge ${member.role}">${member.role}</span>
+                                · Joined ${formatRelativeTime(member.joined_at)}
+                            </span>
+                        </div>
+                    </div>
+                    <div class="member-actions">
+                        ${isOwner && member.role !== 'owner' ? `
+                            <button class="btn btn-danger btn-sm" onclick="app.handleRemoveMember('${roomId}', '${member.user_id}', '${this.escapeHtml(member.username)}')">
+                                <i data-lucide="user-minus"></i>
+                                Remove
+                            </button>
+                        ` : ''}
+                    </div>
+                </div>
+            `).join('');
+
+            // Refresh Lucide icons
+            if (typeof lucide !== 'undefined') {
+                lucide.createIcons();
+            }
+
+        } catch (e) {
+            console.error('Failed to load members:', e);
+            container.innerHTML = `<p class="loading" style="color: var(--status-error);">Failed to load members: ${e.message}</p>`;
+        }
+    }
+
+    async handleRemoveMember(roomId, userId, username) {
+        if (!confirm(`Are you sure you want to remove ${username} from this room?`)) {
+            return;
+        }
+
+        try {
+            await this.apiRequest(`/api/auth/rooms/${roomId}/members/${userId}`, {
+                method: 'DELETE',
+            });
+
+            this.showToast(`${username} removed from room`);
+            // Refresh the members list
+            this.handleViewMembers(roomId);
+
+        } catch (e) {
+            console.error('Failed to remove member:', e);
+            this.showToast(e.message, 'error');
+        }
+    }
+
     async handleDeleteRoom(roomId, roomName) {
         if (!confirm(`Are you sure you want to delete room "${roomName}"?\n\nThis will also delete all worker tokens and memberships for this room. This action cannot be undone.`)) {
             return;
@@ -726,6 +910,16 @@ class SleapRTCDashboard {
     renderTokens() {
         const container = document.getElementById('tokens-list');
 
+        // Filter tokens by search query
+        const filteredTokens = this.searchQuery
+            ? this.tokens.filter(token =>
+                token.worker_name.toLowerCase().includes(this.searchQuery) ||
+                token.room_id.toLowerCase().includes(this.searchQuery) ||
+                (token.room_name || '').toLowerCase().includes(this.searchQuery) ||
+                token.token_id.toLowerCase().includes(this.searchQuery)
+            )
+            : this.tokens;
+
         if (this.tokens.length === 0) {
             container.innerHTML = `
                 <div class="empty-state">
@@ -746,7 +940,23 @@ class SleapRTCDashboard {
             return;
         }
 
-        container.innerHTML = this.tokens.map(token => {
+        if (filteredTokens.length === 0) {
+            container.innerHTML = `
+                <div class="empty-state">
+                    <div class="empty-icon">
+                        <i data-lucide="search"></i>
+                    </div>
+                    <h3>No matching tokens</h3>
+                    <p>No tokens match your search "${this.searchQuery}"</p>
+                </div>
+            `;
+            if (typeof lucide !== 'undefined') {
+                lucide.createIcons();
+            }
+            return;
+        }
+
+        container.innerHTML = filteredTokens.map(token => {
             const isRevoked = !!token.revoked_at;
             const isExpiringSoon = token.expires_at && new Date(token.expires_at) - new Date() < 3 * 24 * 60 * 60 * 1000;
 
