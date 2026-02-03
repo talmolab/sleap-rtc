@@ -191,6 +191,17 @@
                     <label for="room-name">Room Name (optional)</label>
                     <input type="text" id="room-name" placeholder="My Training Room">
                 </div>
+                <div class="form-group">
+                    <label for="room-expires">Expires In</label>
+                    <select id="room-expires">
+                        <option value="1">1 day</option>
+                        <option value="5">5 days</option>
+                        <option value="10">10 days</option>
+                        <option value="15">15 days</option>
+                        <option value="30" selected>30 days</option>
+                        <option value="never">Never</option>
+                    </select>
+                </div>
                 <div class="form-actions">
                     <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
                     <button type="submit" class="btn btn-primary">Create</button>

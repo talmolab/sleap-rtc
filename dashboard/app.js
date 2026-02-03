@@ -721,8 +721,15 @@ class SleapRTCDashboard {
         const displayedRooms = filteredRooms.slice(0, this.roomsDisplayCount);
         const hasMore = filteredRooms.length > this.roomsDisplayCount;
 
-        container.innerHTML = displayedRooms.map(room => `
-            <div class="room-card">
+        container.innerHTML = displayedRooms.map(room => {
+            // Check if room is expiring soon (< 3 days)
+            const isExpiringSoon = room.expires_at &&
+                new Date(room.expires_at) - new Date() < 3 * 24 * 60 * 60 * 1000 &&
+                new Date(room.expires_at) > new Date();
+            const isExpired = room.expires_at && new Date(room.expires_at) < new Date();
+
+            return `
+            <div class="room-card ${isExpired ? 'expired' : ''} ${isExpiringSoon ? 'expiring-soon' : ''}">`
                 <div class="room-header">
                     <div class="room-main">
                         <div class="room-icon">
@@ -746,6 +753,17 @@ class SleapRTCDashboard {
                                     <i data-lucide="calendar"></i>
                                     Joined ${formatRelativeTime(room.joined_at)}
                                 </span>
+                                ${room.expires_at ? `
+                                    <span class="room-meta-item ${isExpiringSoon ? 'warning' : ''} ${isExpired ? 'error' : ''}" title="${formatExactDate(room.expires_at)}">
+                                        <i data-lucide="${isExpiringSoon || isExpired ? 'alert-triangle' : 'clock'}"></i>
+                                        ${isExpired ? 'Expired' : `Expires ${formatRelativeTime(room.expires_at)}`}
+                                    </span>
+                                ` : `
+                                    <span class="room-meta-item">
+                                        <i data-lucide="infinity"></i>
+                                        Never expires
+                                    </span>
+                                `}
                             </div>
                         </div>
                     </div>
@@ -776,7 +794,7 @@ class SleapRTCDashboard {
                     </div>
                 </div>
             </div>
-        `).join('') + (hasMore ? `
+        `}).join('') + (hasMore ? `
             <div class="show-more-container">
                 <button class="btn btn-secondary" onclick="app.showMoreRooms()">
                     <i data-lucide="chevrons-down"></i>
@@ -806,12 +824,23 @@ class SleapRTCDashboard {
         e.preventDefault();
 
         const nameInput = document.getElementById('room-name');
+        const expiresInput = document.getElementById('room-expires');
         const name = nameInput.value.trim();
+        const expiresValue = expiresInput.value;
+
+        // Build request body
+        const body = {};
+        if (name) body.name = name;
+        if (expiresValue !== 'never') {
+            body.expires_in_days = parseInt(expiresValue);
+        } else {
+            body.expires_in_days = null;  // Never expires
+        }
 
         try {
             const data = await this.apiRequest('/api/auth/rooms', {
                 method: 'POST',
-                body: JSON.stringify({ name: name || undefined }),
+                body: JSON.stringify(body),
             });
 
             // Show success modal
@@ -822,8 +851,9 @@ class SleapRTCDashboard {
             document.getElementById('room-modal-title').textContent = 'Room Created!';
             this.showModal('room-created-modal');
 
-            // Refresh rooms list
+            // Refresh rooms list and reset form
             nameInput.value = '';
+            expiresInput.value = '30';  // Reset to default
             this.loadRooms();
 
         } catch (e) {

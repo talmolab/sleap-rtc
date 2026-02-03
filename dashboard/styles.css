@@ -657,6 +657,23 @@ body::before {
     height: 14px;
 }
 
+.room-meta-item.warning, .token-meta-item.warning {
+    color: var(--status-warning);
+}
+
+.room-meta-item.error, .token-meta-item.error {
+    color: var(--status-error);
+}
+
+.room-card.expiring-soon {
+    border-color: rgba(234, 179, 8, 0.3);
+}
+
+.room-card.expired {
+    opacity: 0.6;
+    border-color: rgba(239, 68, 68, 0.3);
+}
+
 .token-actions, .room-actions {
     display: flex;
     align-items: center;
