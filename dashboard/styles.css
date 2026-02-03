@@ -497,6 +497,65 @@ body::before {
     height: 16px;
 }
 
+/* Filter dropdowns */
+.filter-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.filter-select {
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius);
+    color: var(--text-secondary);
+    padding: 8px 12px;
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.15s;
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2371717a' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+    padding-right: 30px;
+}
+
+.filter-select:hover {
+    border-color: var(--accent-primary);
+    background-color: var(--bg-elevated);
+}
+
+.filter-select:focus {
+    outline: none;
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+.checkbox-filter {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--text-secondary);
+    font-size: 13px;
+    cursor: pointer;
+    padding: 8px 12px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius);
+    transition: all 0.15s;
+}
+
+.checkbox-filter:hover {
+    border-color: var(--accent-primary);
+    background-color: var(--bg-elevated);
+}
+
+.checkbox-filter input[type="checkbox"] {
+    accent-color: var(--accent-primary);
+    width: 14px;
+    height: 14px;
+}
+
 /* Token/Room card list */
 .card-list {
     display: flex;
@@ -1561,6 +1620,16 @@ kbd {
 
     .section-actions {
         flex-wrap: wrap;
+    }
+
+    .filter-group {
+        width: 100%;
+        flex-wrap: wrap;
+    }
+
+    .filter-select {
+        flex: 1;
+        min-width: 120px;
     }
 
     .search-box {

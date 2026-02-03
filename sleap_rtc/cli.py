@@ -331,10 +331,35 @@ def token_create(room, name, expires, save):
 
 
 @token.command(name="list")
-def token_list():
+@click.option(
+    "--room", "-r",
+    help="Filter by room ID.",
+)
+@click.option(
+    "--sort", "-s",
+    type=click.Choice(["name", "created", "expires", "room"]),
+    default="created",
+    help="Sort by field.",
+)
+@click.option(
+    "--reverse",
+    is_flag=True,
+    help="Reverse sort order.",
+)
+@click.option(
+    "--active-only", "-a",
+    is_flag=True,
+    help="Hide revoked and expired tokens.",
+)
+def token_list(room, sort, reverse, active_only):
     """List your API tokens.
 
     Shows all tokens you've created, their status, and expiration.
+
+    Examples:
+        sleap-rtc token list --room abc123
+        sleap-rtc token list --active-only
+        sleap-rtc token list --sort expires
     """
     from sleap_rtc.auth.credentials import get_jwt
     from sleap_rtc.config import get_config
@@ -347,10 +372,21 @@ def token_list():
     config = get_config()
     endpoint = f"{config.get_http_url()}/api/auth/tokens"
 
+    # Build query params
+    params = {}
+    if room:
+        params["room_id"] = room
+    if active_only:
+        params["active_only"] = "true"
+    sort_map = {"name": "worker_name", "created": "created_at", "expires": "expires_at", "room": "room_name"}
+    params["sort_by"] = sort_map.get(sort, "created_at")
+    params["sort_order"] = "asc" if reverse else "desc"
+
     try:
         response = requests.get(
             endpoint,
             headers={"Authorization": f"Bearer {jwt_token}"},
+            params=params,
             timeout=30,
         )
 
@@ -372,10 +408,17 @@ def token_list():
 
         for t in tokens:
             name = t.get("worker_name", "unknown")[:20]
-            room = t.get("room_id", "?")[:12]
-            status = "revoked" if t.get("revoked_at") else "active"
-            expires = t.get("expires_at", "never")[:20]
-            click.echo(f"{name:<20} {room:<12} {status:<10} {expires:<20}")
+            room_display = (t.get("room_name") or t.get("room_id", "?"))[:12]
+            if t.get("revoked_at"):
+                status = "revoked"
+            elif not t.get("is_active"):
+                status = "expired"
+            else:
+                status = "active"
+            expires = t.get("expires_at", "never")
+            if expires and expires != "never":
+                expires = expires[:20]
+            click.echo(f"{name:<20} {room_display:<12} {status:<10} {expires:<20}")
 
         click.echo("")
 
@@ -447,10 +490,37 @@ def room():
 
 
 @room.command(name="list")
-def room_list():
+@click.option(
+    "--filter", "-f",
+    "role_filter",
+    type=click.Choice(["all", "owned", "member"]),
+    default="all",
+    help="Filter by ownership role.",
+)
+@click.option(
+    "--sort", "-s",
+    type=click.Choice(["name", "created", "expires", "role"]),
+    default="created",
+    help="Sort by field.",
+)
+@click.option(
+    "--reverse", "-r",
+    is_flag=True,
+    help="Reverse sort order.",
+)
+@click.option(
+    "--search",
+    help="Search by room name (case-insensitive substring match).",
+)
+def room_list(role_filter, sort, reverse, search):
     """List rooms you have access to.
 
     Shows all rooms where you are an owner or member.
+
+    Examples:
+        sleap-rtc room list --filter owned
+        sleap-rtc room list --sort name
+        sleap-rtc room list --search "lab"
     """
     from sleap_rtc.auth.credentials import get_jwt
     from sleap_rtc.config import get_config
@@ -463,10 +533,21 @@ def room_list():
     config = get_config()
     endpoint = f"{config.get_http_url()}/api/auth/rooms"
 
+    # Build query params
+    params = {}
+    if role_filter != "all":
+        params["role"] = role_filter.replace("owned", "owner")  # Map 'owned' to 'owner'
+    sort_map = {"name": "name", "created": "joined_at", "expires": "expires_at", "role": "role"}
+    params["sort_by"] = sort_map.get(sort, "joined_at")
+    params["sort_order"] = "asc" if reverse else "desc"
+    if search:
+        params["search"] = search
+
     try:
         response = requests.get(
             endpoint,
             headers={"Authorization": f"Bearer {jwt_token}"},
+            params=params,
             timeout=30,
         )
 

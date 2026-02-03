@@ -112,6 +112,19 @@
                                 <i data-lucide="refresh-cw"></i>
                                 Refresh
                             </button>
+                            <div class="filter-group">
+                                <select id="rooms-filter" class="filter-select">
+                                    <option value="all">All Rooms</option>
+                                    <option value="owner">Owned</option>
+                                    <option value="member">Member</option>
+                                </select>
+                                <select id="rooms-sort" class="filter-select">
+                                    <option value="joined_at">Sort: Recent</option>
+                                    <option value="name">Sort: Name</option>
+                                    <option value="expires_at">Sort: Expiry</option>
+                                    <option value="role">Sort: Role</option>
+                                </select>
+                            </div>
                             <div class="search-box">
                                 <i data-lucide="search"></i>
                                 <input type="text" id="rooms-search" placeholder="Search rooms...">
@@ -137,6 +150,21 @@
                                 <i data-lucide="refresh-cw"></i>
                                 Refresh
                             </button>
+                            <div class="filter-group">
+                                <select id="tokens-room-filter" class="filter-select">
+                                    <option value="">All Rooms</option>
+                                </select>
+                                <select id="tokens-sort" class="filter-select">
+                                    <option value="created_at">Sort: Recent</option>
+                                    <option value="worker_name">Sort: Name</option>
+                                    <option value="expires_at">Sort: Expiry</option>
+                                    <option value="room_name">Sort: Room</option>
+                                </select>
+                                <label class="checkbox-filter">
+                                    <input type="checkbox" id="tokens-active-only">
+                                    <span>Active only</span>
+                                </label>
+                            </div>
                             <div class="search-box">
                                 <i data-lucide="search"></i>
                                 <input type="text" id="tokens-search" placeholder="Search tokens...">

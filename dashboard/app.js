@@ -102,6 +102,16 @@ class SleapRTCDashboard {
         this.tokensDisplayCount = 10; // Number of tokens to display initially
         this.ITEMS_PER_PAGE = 10; // Items to load per "show more" click
 
+        // Filter/sort state with localStorage persistence
+        this.roomsFilter = localStorage.getItem('sleap_rooms_filter') || 'all';
+        this.roomsSort = localStorage.getItem('sleap_rooms_sort') || 'joined_at';
+        this.roomsSearch = '';
+        this.tokensRoomFilter = localStorage.getItem('sleap_tokens_room') || '';
+        this.tokensSort = localStorage.getItem('sleap_tokens_sort') || 'created_at';
+        this.tokensActiveOnly = localStorage.getItem('sleap_tokens_active') === 'true';
+        this.tokensSearch = '';
+        this.searchDebounceTimer = null;
+
         this.init();
     }
 
@@ -300,15 +310,41 @@ class SleapRTCDashboard {
             });
         });
 
-        // Search functionality
+        // Room filter/sort event listeners
+        document.getElementById('rooms-filter')?.addEventListener('change', (e) => {
+            this.roomsFilter = e.target.value;
+            localStorage.setItem('sleap_rooms_filter', this.roomsFilter);
+            this.loadRooms();
+        });
+        document.getElementById('rooms-sort')?.addEventListener('change', (e) => {
+            this.roomsSort = e.target.value;
+            localStorage.setItem('sleap_rooms_sort', this.roomsSort);
+            this.loadRooms();
+        });
         document.getElementById('rooms-search')?.addEventListener('input', (e) => {
-            this.searchQuery = e.target.value.toLowerCase();
-            this.renderRooms();
+            this.roomsSearch = e.target.value;
+            this.debounceSearch(() => this.loadRooms());
+        });
+
+        // Token filter/sort event listeners
+        document.getElementById('tokens-room-filter')?.addEventListener('change', (e) => {
+            this.tokensRoomFilter = e.target.value;
+            localStorage.setItem('sleap_tokens_room', this.tokensRoomFilter);
+            this.loadTokens();
+        });
+        document.getElementById('tokens-sort')?.addEventListener('change', (e) => {
+            this.tokensSort = e.target.value;
+            localStorage.setItem('sleap_tokens_sort', this.tokensSort);
+            this.loadTokens();
+        });
+        document.getElementById('tokens-active-only')?.addEventListener('change', (e) => {
+            this.tokensActiveOnly = e.target.checked;
+            localStorage.setItem('sleap_tokens_active', this.tokensActiveOnly);
+            this.loadTokens();
         });
         document.getElementById('tokens-search')?.addEventListener('input', (e) => {
-            this.searchQuery = e.target.value.toLowerCase();
-            this.renderTokens();
-            this.updateWorkerBadges();
+            this.tokensSearch = e.target.value;
+            this.debounceSearch(() => this.loadTokens());
         });
 
         // Keyboard shortcuts
@@ -350,6 +386,11 @@ class SleapRTCDashboard {
         });
     }
 
+    debounceSearch(callback) {
+        clearTimeout(this.searchDebounceTimer);
+        this.searchDebounceTimer = setTimeout(callback, 300);
+    }
+
     toggleMobileMenu() {
         const sidebar = document.querySelector('.sidebar');
         const overlay = document.getElementById('sidebar-overlay');
@@ -361,7 +402,7 @@ class SleapRTCDashboard {
         const sidebar = document.querySelector('.sidebar');
         const overlay = document.getElementById('sidebar-overlay');
         sidebar?.classList.remove('open');
-        overlay?.classList.remove('active');
+        overlay?.classList.remove('active')
     }
 
     toggleUserMenu() {
@@ -570,15 +611,52 @@ class SleapRTCDashboard {
         const container = document.getElementById('rooms-list');
         container.innerHTML = this.renderSkeletonCards(3);
 
+        // Restore filter UI state
+        const filterEl = document.getElementById('rooms-filter');
+        const sortEl = document.getElementById('rooms-sort');
+        const searchEl = document.getElementById('rooms-search');
+        if (filterEl) filterEl.value = this.roomsFilter;
+        if (sortEl) sortEl.value = this.roomsSort;
+        if (searchEl && searchEl.value !== this.roomsSearch) searchEl.value = this.roomsSearch;
+
+        // Build query params
+        const params = new URLSearchParams();
+        if (this.roomsFilter && this.roomsFilter !== 'all') {
+            params.set('role', this.roomsFilter);
+        }
+        if (this.roomsSort) {
+            params.set('sort_by', this.roomsSort);
+        }
+        if (this.roomsSearch) {
+            params.set('search', this.roomsSearch);
+        }
+        const queryString = params.toString();
+        const url = '/api/auth/rooms' + (queryString ? `?${queryString}` : '');
+
         try {
-            const data = await this.apiRequest('/api/auth/rooms');
+            const data = await this.apiRequest(url);
             this.rooms = data.rooms || [];
             this.renderRooms();
             this.updateCounts();
+            this.updateTokensRoomFilter();
         } catch (e) {
             console.error('Failed to load rooms:', e);
             container.innerHTML = `<p class="loading" style="color: var(--status-error);">Failed to load rooms: ${e.message}</p>`;
         }
+    }
+
+    updateTokensRoomFilter() {
+        // Update the room dropdown in tokens filter
+        const select = document.getElementById('tokens-room-filter');
+        if (!select) return;
+
+        const currentValue = this.tokensRoomFilter;
+        select.innerHTML = '<option value="">All Rooms</option>' +
+            this.rooms.map(room => `
+                <option value="${room.room_id}" ${room.room_id === currentValue ? 'selected' : ''}>
+                    ${room.name || room.room_id.substring(0, 8) + '...'}
+                </option>
+            `).join('');
     }
 
     updateCounts() {
@@ -935,9 +1013,43 @@ class SleapRTCDashboard {
         const container = document.getElementById('tokens-list');
         container.innerHTML = this.renderSkeletonCards(3);
 
+        // Restore filter UI state
+        const sortEl = document.getElementById('tokens-sort');
+        const activeEl = document.getElementById('tokens-active-only');
+        const searchEl = document.getElementById('tokens-search');
+        if (sortEl) sortEl.value = this.tokensSort;
+        if (activeEl) activeEl.checked = this.tokensActiveOnly;
+        if (searchEl && searchEl.value !== this.tokensSearch) searchEl.value = this.tokensSearch;
+
+        // Build query params
+        const params = new URLSearchParams();
+        if (this.tokensRoomFilter) {
+            params.set('room_id', this.tokensRoomFilter);
+        }
+        if (this.tokensSort) {
+            params.set('sort_by', this.tokensSort);
+        }
+        if (this.tokensActiveOnly) {
+            params.set('active_only', 'true');
+        }
+        const queryString = params.toString();
+        const url = '/api/auth/tokens' + (queryString ? `?${queryString}` : '');
+
         try {
-            const data = await this.apiRequest('/api/auth/tokens');
-            this.tokens = data.tokens || [];
+            const data = await this.apiRequest(url);
+            let tokens = data.tokens || [];
+
+            // Client-side search filtering (API doesn't support search for tokens)
+            if (this.tokensSearch) {
+                const search = this.tokensSearch.toLowerCase();
+                tokens = tokens.filter(t =>
+                    t.worker_name.toLowerCase().includes(search) ||
+                    (t.room_name && t.room_name.toLowerCase().includes(search)) ||
+                    t.room_id.toLowerCase().includes(search)
+                );
+            }
+
+            this.tokens = tokens;
             this.renderTokens();
             this.updateCounts();
 
