@@ -757,6 +757,56 @@ body::before {
     color: var(--text-muted);
 }
 
+/* API key available section */
+.api-key-available {
+    border-top: 1px solid var(--border-subtle);
+    background: rgba(234, 179, 8, 0.08);
+    padding: 16px 20px;
+}
+
+.api-key-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--status-warning);
+    font-size: 12px;
+    font-weight: 600;
+    margin-bottom: 12px;
+}
+
+.api-key-header svg {
+    width: 16px;
+    height: 16px;
+}
+
+.api-key-content {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.api-key-content .worker-command {
+    display: block;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius);
+    padding: 12px 14px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    color: var(--text-primary);
+    word-break: break-all;
+    white-space: pre-wrap;
+}
+
+.api-key-actions {
+    display: flex;
+    gap: 8px;
+}
+
+.token-card.has-key {
+    border-color: rgba(234, 179, 8, 0.3);
+}
+
 /* Nested workers */
 .nested-workers {
     border-top: 1px solid var(--border-subtle);

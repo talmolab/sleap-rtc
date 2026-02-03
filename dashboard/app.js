@@ -965,8 +965,12 @@ class SleapRTCDashboard {
             new Date(token.expires_at) - new Date() < 3 * 24 * 60 * 60 * 1000 &&
             new Date(token.expires_at) > new Date();
 
+        // Check if API key is available in session storage
+        const storedKey = this.getStoredApiKey(token.token_id);
+        const workerCommand = storedKey ? this.buildWorkerCommand(storedKey.api_key, storedKey.room_secret) : null;
+
         return `
-        <div class="token-card ${isInactive ? 'inactive' : ''}">
+        <div class="token-card ${isInactive ? 'inactive' : ''} ${storedKey ? 'has-key' : ''}">
             <div class="token-header">
                 <div class="token-main">
                     <div class="token-icon" ${isInactive ? 'style="opacity: 0.5;"' : ''}>
@@ -1016,6 +1020,27 @@ class SleapRTCDashboard {
                     `}
                 </div>
             </div>
+            ${storedKey && !isInactive ? `
+                <div class="api-key-available">
+                    <div class="api-key-header">
+                        <i data-lucide="alert-circle"></i>
+                        <span>API key available for this session only</span>
+                    </div>
+                    <div class="api-key-content">
+                        <code class="worker-command">${workerCommand}</code>
+                        <div class="api-key-actions">
+                            <button class="btn btn-secondary btn-sm" onclick="app.copyToClipboard('${workerCommand}')">
+                                <i data-lucide="copy"></i>
+                                Copy Command
+                            </button>
+                            <button class="btn btn-ghost btn-sm" onclick="app.dismissApiKey('${token.token_id}')">
+                                <i data-lucide="check"></i>
+                                I've copied it
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            ` : ''}
             ${!isInactive ? `
                 <div class="nested-workers">
                     <div class="nested-header" onclick="app.toggleWorkersList('${token.token_id}', this)">
@@ -1118,10 +1143,22 @@ class SleapRTCDashboard {
                 }),
             });
 
+            // Look up room info
+            const room = this.rooms.find(r => r.room_id === roomId);
+            const isOwner = room && room.role === 'owner';
+            const storedSecret = this.getStoredRoomSecret(roomId);
+
+            // Store API key in sessionStorage for this session
+            this.storeApiKey(data.token_id, {
+                api_key: data.token_id,
+                room_secret: isOwner && storedSecret ? storedSecret : null,
+                room_id: roomId,
+                worker_name: workerName,
+                created_at: Date.now(),
+            });
+
             // Show success modal
             document.getElementById('new-token-id').textContent = data.token_id;
-            // Look up room name from our rooms list
-            const room = this.rooms.find(r => r.room_id === roomId);
             const roomDisplay = room && room.name
                 ? `${room.name} (${roomId.substring(0, 8)}...)`
                 : roomId;
@@ -1130,8 +1167,6 @@ class SleapRTCDashboard {
 
             // Build worker command - include room secret if owner has one stored locally
             let workerCommand = `sleap-rtc worker --api-key ${data.token_id}`;
-            const isOwner = room && room.role === 'owner';
-            const storedSecret = this.getStoredRoomSecret(roomId);
             if (isOwner && storedSecret) {
                 workerCommand += ` --room-secret ${storedSecret}`;
             }
@@ -1240,6 +1275,59 @@ class SleapRTCDashboard {
      */
     deleteRoomSecret(roomId) {
         localStorage.removeItem(this.getRoomSecretKey(roomId));
+    }
+
+    // =========================================================================
+    // API Key Session Storage (for newly created tokens)
+    // =========================================================================
+
+    /**
+     * Store API key in sessionStorage (cleared when tab closes)
+     * @param {string} tokenId - The token ID
+     * @param {object} keyData - { api_key, room_secret, room_id, worker_name, created_at }
+     */
+    storeApiKey(tokenId, keyData) {
+        const pendingKeys = JSON.parse(sessionStorage.getItem('pendingApiKeys') || '{}');
+        pendingKeys[tokenId] = keyData;
+        sessionStorage.setItem('pendingApiKeys', JSON.stringify(pendingKeys));
+    }
+
+    /**
+     * Get stored API key from sessionStorage
+     * @param {string} tokenId - The token ID
+     * @returns {object|null} The key data or null if not found
+     */
+    getStoredApiKey(tokenId) {
+        const pendingKeys = JSON.parse(sessionStorage.getItem('pendingApiKeys') || '{}');
+        return pendingKeys[tokenId] || null;
+    }
+
+    /**
+     * Remove API key from sessionStorage (user confirmed they copied it)
+     * @param {string} tokenId - The token ID
+     */
+    dismissApiKey(tokenId) {
+        const pendingKeys = JSON.parse(sessionStorage.getItem('pendingApiKeys') || '{}');
+        delete pendingKeys[tokenId];
+        sessionStorage.setItem('pendingApiKeys', JSON.stringify(pendingKeys));
+        // Re-render tokens to update UI
+        this.renderTokens();
+        // Re-initialize worker badges
+        this.updateWorkerBadges();
+    }
+
+    /**
+     * Build the worker command string for a token
+     * @param {string} apiKey - The API key
+     * @param {string|null} roomSecret - Optional room secret
+     * @returns {string} The worker command
+     */
+    buildWorkerCommand(apiKey, roomSecret) {
+        let cmd = `sleap-rtc worker --api-key ${apiKey}`;
+        if (roomSecret) {
+            cmd += ` --room-secret ${roomSecret}`;
+        }
+        return cmd;
     }
 
     /**
