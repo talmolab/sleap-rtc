@@ -576,6 +576,60 @@ body::before {
     border-color: var(--border-default);
 }
 
+.token-card.inactive {
+    opacity: 0.7;
+    border-color: var(--border-subtle);
+}
+
+.token-card.inactive:hover {
+    opacity: 0.85;
+}
+
+/* Token section headers */
+.tokens-section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 0;
+    margin-bottom: 8px;
+}
+
+.tokens-section-header h3 {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    margin: 0;
+}
+
+.tokens-section-header.inactive-section {
+    background: var(--bg-tertiary);
+    border-radius: var(--radius);
+    padding: 12px 16px;
+    margin-top: 24px;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.tokens-section-header.inactive-section:hover {
+    background: var(--bg-elevated);
+}
+
+.tokens-section-header .section-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.tokens-section-header .section-toggle svg {
+    width: 16px;
+    height: 16px;
+    color: var(--text-muted);
+}
+
+.inactive-tokens-list {
+    margin-top: 8px;
+}
+
 .token-header, .room-header {
     display: flex;
     align-items: center;

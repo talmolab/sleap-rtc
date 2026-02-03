@@ -97,10 +97,6 @@ class SleapRTCDashboard {
         this.rooms = [];
         this.tokens = [];
         this.tokenWorkers = {}; // Cache of connected workers by token_id
-        this.searchQuery = ''; // Current search query
-        this.roomsDisplayCount = 10; // Number of rooms to display initially
-        this.tokensDisplayCount = 10; // Number of tokens to display initially
-        this.ITEMS_PER_PAGE = 10; // Items to load per "show more" click
 
         // Filter/sort state with localStorage persistence
         this.roomsFilter = localStorage.getItem('sleap_rooms_filter') || 'all';
@@ -123,9 +119,6 @@ class SleapRTCDashboard {
         // Load stored credentials
         this.loadStoredCredentials();
 
-        // Load theme preference
-        this.loadTheme();
-
         // Setup event listeners
         this.setupEventListeners();
 
@@ -139,34 +132,6 @@ class SleapRTCDashboard {
 
         // Check auth state and render
         this.updateUI();
-    }
-
-    // =========================================================================
-    // Theme Management
-    // =========================================================================
-
-    loadTheme() {
-        const savedTheme = localStorage.getItem('sleap_rtc_theme') || 'dark';
-        this.setTheme(savedTheme);
-    }
-
-    setTheme(theme) {
-        document.documentElement.setAttribute('data-theme', theme);
-        const label = document.getElementById('theme-label');
-        if (label) {
-            label.textContent = theme === 'dark' ? 'Dark' : 'Light';
-        }
-        localStorage.setItem('sleap_rtc_theme', theme);
-    }
-
-    toggleTheme() {
-        const currentTheme = document.documentElement.getAttribute('data-theme') || 'dark';
-        const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
-        this.setTheme(newTheme);
-        // Refresh Lucide icons after theme change
-        if (typeof lucide !== 'undefined') {
-            lucide.createIcons();
-        }
     }
 
     loadStoredCredentials() {
@@ -275,9 +240,6 @@ class SleapRTCDashboard {
         // Join room
         document.getElementById('join-room-form')?.addEventListener('submit', (e) => this.handleJoinRoom(e));
 
-        // Edit room name
-        document.getElementById('edit-room-form')?.addEventListener('submit', (e) => this.handleSaveRoomName(e));
-
         // Create token
         document.getElementById('create-token-btn')?.addEventListener('click', () => this.showCreateTokenModal());
         document.getElementById('create-token-form')?.addEventListener('submit', (e) => this.handleCreateToken(e));
@@ -346,63 +308,11 @@ class SleapRTCDashboard {
             this.tokensSearch = e.target.value;
             this.debounceSearch(() => this.loadTokens());
         });
-
-        // Keyboard shortcuts
-        document.addEventListener('keydown', (e) => {
-            // "/" to focus search (when not in an input)
-            if (e.key === '/' && !['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) {
-                e.preventDefault();
-                const activeTab = document.querySelector('.tab-content.active');
-                if (activeTab?.id === 'rooms-tab') {
-                    document.getElementById('rooms-search')?.focus();
-                } else if (activeTab?.id === 'tokens-tab') {
-                    document.getElementById('tokens-search')?.focus();
-                }
-            }
-            // Escape to close modals
-            if (e.key === 'Escape') {
-                document.querySelectorAll('.modal:not(.hidden)').forEach(modal => {
-                    modal.classList.add('hidden');
-                });
-            }
-        });
-
-        // Join room button (will be added to sidebar)
-        document.getElementById('join-room-btn')?.addEventListener('click', () => this.showModal('join-room-modal'));
-
-        // Settings button
-        document.getElementById('settings-btn')?.addEventListener('click', () => this.showModal('settings-modal'));
-
-        // Theme toggle
-        document.getElementById('theme-toggle')?.addEventListener('click', () => this.toggleTheme());
-
-        // Mobile menu toggle
-        document.getElementById('mobile-menu-btn')?.addEventListener('click', () => this.toggleMobileMenu());
-        document.getElementById('sidebar-overlay')?.addEventListener('click', () => this.closeMobileMenu());
-
-        // Close mobile menu when clicking nav items
-        document.querySelectorAll('.nav-item').forEach(item => {
-            item.addEventListener('click', () => this.closeMobileMenu());
-        });
     }
 
     debounceSearch(callback) {
         clearTimeout(this.searchDebounceTimer);
         this.searchDebounceTimer = setTimeout(callback, 300);
-    }
-
-    toggleMobileMenu() {
-        const sidebar = document.querySelector('.sidebar');
-        const overlay = document.getElementById('sidebar-overlay');
-        sidebar?.classList.toggle('open');
-        overlay?.classList.toggle('active');
-    }
-
-    closeMobileMenu() {
-        const sidebar = document.querySelector('.sidebar');
-        const overlay = document.getElementById('sidebar-overlay');
-        sidebar?.classList.remove('open');
-        overlay?.classList.remove('active')
     }
 
     toggleUserMenu() {
@@ -430,16 +340,7 @@ class SleapRTCDashboard {
     }
 
     showModal(modalId) {
-        const modal = document.getElementById(modalId);
-        if (!modal) return;
-
-        // Populate settings modal with user info
-        if (modalId === 'settings-modal' && this.user) {
-            document.getElementById('settings-username').textContent = this.user.username || '-';
-            document.getElementById('settings-user-id').textContent = this.user.id || '-';
-        }
-
-        modal.classList.remove('hidden');
+        document.getElementById(modalId)?.classList.remove('hidden');
         // Refresh Lucide icons in modal
         if (typeof lucide !== 'undefined') {
             lucide.createIcons();
@@ -589,27 +490,9 @@ class SleapRTCDashboard {
     // Rooms
     // =========================================================================
 
-    renderSkeletonCards(count = 3) {
-        return Array(count).fill(0).map(() => `
-            <div class="skeleton-card">
-                <div class="skeleton-header">
-                    <div class="skeleton skeleton-icon"></div>
-                    <div class="skeleton-content">
-                        <div class="skeleton skeleton-title"></div>
-                        <div class="skeleton skeleton-meta"></div>
-                    </div>
-                    <div class="skeleton-actions">
-                        <div class="skeleton skeleton-btn"></div>
-                        <div class="skeleton skeleton-btn"></div>
-                    </div>
-                </div>
-            </div>
-        `).join('');
-    }
-
     async loadRooms() {
         const container = document.getElementById('rooms-list');
-        container.innerHTML = this.renderSkeletonCards(3);
+        container.innerHTML = '<p class="loading">Loading rooms...</p>';
 
         // Restore filter UI state
         const filterEl = document.getElementById('rooms-filter');
@@ -672,15 +555,6 @@ class SleapRTCDashboard {
     renderRooms() {
         const container = document.getElementById('rooms-list');
 
-        // Filter rooms by search query
-        const filteredRooms = this.searchQuery
-            ? this.rooms.filter(room =>
-                (room.name || '').toLowerCase().includes(this.searchQuery) ||
-                room.room_id.toLowerCase().includes(this.searchQuery) ||
-                room.role.toLowerCase().includes(this.searchQuery)
-            )
-            : this.rooms;
-
         if (this.rooms.length === 0) {
             container.innerHTML = `
                 <div class="empty-state">
@@ -701,27 +575,7 @@ class SleapRTCDashboard {
             return;
         }
 
-        if (filteredRooms.length === 0) {
-            container.innerHTML = `
-                <div class="empty-state">
-                    <div class="empty-icon">
-                        <i data-lucide="search"></i>
-                    </div>
-                    <h3>No matching rooms</h3>
-                    <p>No rooms match your search "${this.searchQuery}"</p>
-                </div>
-            `;
-            if (typeof lucide !== 'undefined') {
-                lucide.createIcons();
-            }
-            return;
-        }
-
-        // Paginate rooms
-        const displayedRooms = filteredRooms.slice(0, this.roomsDisplayCount);
-        const hasMore = filteredRooms.length > this.roomsDisplayCount;
-
-        container.innerHTML = displayedRooms.map(room => {
+        container.innerHTML = this.rooms.map(room => {
             // Check if room is expiring soon (< 3 days)
             const isExpiringSoon = room.expires_at &&
                 new Date(room.expires_at) - new Date() < 3 * 24 * 60 * 60 * 1000 &&
@@ -729,21 +583,14 @@ class SleapRTCDashboard {
             const isExpired = room.expires_at && new Date(room.expires_at) < new Date();
 
             return `
-            <div class="room-card ${isExpired ? 'expired' : ''} ${isExpiringSoon ? 'expiring-soon' : ''}">`
+            <div class="room-card ${isExpired ? 'expired' : ''} ${isExpiringSoon ? 'expiring-soon' : ''}">
                 <div class="room-header">
                     <div class="room-main">
                         <div class="room-icon">
                             <i data-lucide="home"></i>
                         </div>
                         <div class="room-info">
-                            <h3>
-                                ${room.name || 'Unnamed Room'}
-                                ${room.role === 'owner' ? `
-                                    <button class="btn-edit-inline" onclick="app.handleEditRoomName('${room.room_id}', '${this.escapeHtml(room.name || '')}')">
-                                        <i data-lucide="pencil"></i>
-                                    </button>
-                                ` : ''}
-                            </h3>
+                            <h3>${room.name || 'Unnamed Room'}</h3>
                             <div class="room-meta">
                                 <span class="room-meta-item">
                                     <i data-lucide="hash"></i>
@@ -782,10 +629,6 @@ class SleapRTCDashboard {
                                 <i data-lucide="user-plus"></i>
                                 Invite
                             </button>
-                            <button class="btn btn-secondary btn-sm" onclick="app.handleViewMembers('${room.room_id}')">
-                                <i data-lucide="users"></i>
-                                Members
-                            </button>
                             <button class="btn btn-danger btn-sm" onclick="app.handleDeleteRoom('${room.room_id}', '${this.escapeHtml(room.name || room.room_id)}')">
                                 <i data-lucide="trash-2"></i>
                                 Delete
@@ -794,24 +637,12 @@ class SleapRTCDashboard {
                     </div>
                 </div>
             </div>
-        `}).join('') + (hasMore ? `
-            <div class="show-more-container">
-                <button class="btn btn-secondary" onclick="app.showMoreRooms()">
-                    <i data-lucide="chevrons-down"></i>
-                    Show more (${filteredRooms.length - this.roomsDisplayCount} remaining)
-                </button>
-            </div>
-        ` : '');
+        `}).join('');
 
         // Initialize Lucide icons
         if (typeof lucide !== 'undefined') {
             lucide.createIcons();
         }
-    }
-
-    showMoreRooms() {
-        this.roomsDisplayCount += this.ITEMS_PER_PAGE;
-        this.renderRooms();
     }
 
     escapeHtml(text) {
@@ -918,104 +749,6 @@ class SleapRTCDashboard {
         }
     }
 
-    handleEditRoomName(roomId, currentName) {
-        document.getElementById('edit-room-id').value = roomId;
-        document.getElementById('edit-room-name').value = currentName;
-        this.showModal('edit-room-modal');
-    }
-
-    async handleSaveRoomName(e) {
-        e.preventDefault();
-
-        const roomId = document.getElementById('edit-room-id').value;
-        const newName = document.getElementById('edit-room-name').value.trim();
-
-        try {
-            await this.apiRequest(`/api/auth/rooms/${roomId}`, {
-                method: 'PATCH',
-                body: JSON.stringify({ name: newName || null }),
-            });
-
-            this.hideModal('edit-room-modal');
-            this.showToast('Room name updated');
-            this.loadRooms();
-
-        } catch (e) {
-            console.error('Failed to update room name:', e);
-            this.showToast(e.message, 'error');
-        }
-    }
-
-    async handleViewMembers(roomId) {
-        const container = document.getElementById('members-list');
-        container.innerHTML = '<p class="loading">Loading members...</p>';
-        this.showModal('members-modal');
-
-        try {
-            const data = await this.apiRequest(`/api/auth/rooms/${roomId}/members`);
-            const members = data.members || [];
-            const currentRoom = this.rooms.find(r => r.room_id === roomId);
-            const isOwner = currentRoom?.role === 'owner';
-
-            if (members.length === 0) {
-                container.innerHTML = '<p class="loading">No members in this room.</p>';
-                return;
-            }
-
-            container.innerHTML = members.map(member => `
-                <div class="member-row">
-                    <div class="member-info">
-                        <img class="member-avatar" src="${member.avatar_url || ''}" alt="">
-                        <div class="member-details">
-                            <span class="member-name">${member.username}</span>
-                            <span class="member-joined">
-                                <span class="role-badge ${member.role}">${member.role}</span>
-                                · Joined ${formatRelativeTime(member.joined_at)}
-                            </span>
-                        </div>
-                    </div>
-                    <div class="member-actions">
-                        ${isOwner && member.role !== 'owner' ? `
-                            <button class="btn btn-danger btn-sm" onclick="app.handleRemoveMember('${roomId}', '${member.user_id}', '${this.escapeHtml(member.username)}')">
-                                <i data-lucide="user-minus"></i>
-                                Remove
-                            </button>
-                        ` : ''}
-                    </div>
-                </div>
-            `).join('');
-
-            // Refresh Lucide icons
-            if (typeof lucide !== 'undefined') {
-                lucide.createIcons();
-            }
-
-        } catch (e) {
-            console.error('Failed to load members:', e);
-            container.innerHTML = `<p class="loading" style="color: var(--status-error);">Failed to load members: ${e.message}</p>`;
-        }
-    }
-
-    async handleRemoveMember(roomId, userId, username) {
-        if (!confirm(`Are you sure you want to remove ${username} from this room?`)) {
-            return;
-        }
-
-        try {
-            await this.apiRequest(`/api/auth/rooms/${roomId}/members/${userId}`, {
-                method: 'DELETE',
-            });
-
-            this.showToast(`${username} removed from room`);
-            // Refresh the members list
-            this.handleViewMembers(roomId);
-
-        } catch (e) {
-            console.error('Failed to remove member:', e);
-            this.showToast(e.message, 'error');
-        }
-    }
-
     async handleDeleteRoom(roomId, roomName) {
         if (!confirm(`Are you sure you want to delete room "${roomName}"?\n\nThis will also delete all worker tokens and memberships for this room. This action cannot be undone.`)) {
             return;
@@ -1041,7 +774,7 @@ class SleapRTCDashboard {
 
     async loadTokens() {
         const container = document.getElementById('tokens-list');
-        container.innerHTML = this.renderSkeletonCards(3);
+        container.innerHTML = '<p class="loading">Loading tokens...</p>';
 
         // Restore filter UI state
         const sortEl = document.getElementById('tokens-sort');
@@ -1146,16 +879,6 @@ class SleapRTCDashboard {
     renderTokens() {
         const container = document.getElementById('tokens-list');
 
-        // Filter tokens by search query
-        const filteredTokens = this.searchQuery
-            ? this.tokens.filter(token =>
-                token.worker_name.toLowerCase().includes(this.searchQuery) ||
-                token.room_id.toLowerCase().includes(this.searchQuery) ||
-                (token.room_name || '').toLowerCase().includes(this.searchQuery) ||
-                token.token_id.toLowerCase().includes(this.searchQuery)
-            )
-            : this.tokens;
-
         if (this.tokens.length === 0) {
             container.innerHTML = `
                 <div class="empty-state">
@@ -1176,109 +899,58 @@ class SleapRTCDashboard {
             return;
         }
 
-        if (filteredTokens.length === 0) {
-            container.innerHTML = `
-                <div class="empty-state">
-                    <div class="empty-icon">
-                        <i data-lucide="search"></i>
-                    </div>
-                    <h3>No matching tokens</h3>
-                    <p>No tokens match your search "${this.searchQuery}"</p>
-                </div>
-            `;
-            if (typeof lucide !== 'undefined') {
-                lucide.createIcons();
-            }
-            return;
+        // Split tokens into active and inactive
+        const activeTokens = this.tokens.filter(t => t.is_active);
+        const inactiveTokens = this.tokens.filter(t => !t.is_active);
+
+        // Check if inactive section should be expanded (from localStorage)
+        const inactiveExpanded = localStorage.getItem('sleap_inactive_tokens_expanded') === 'true';
+
+        let html = '';
+
+        // Active tokens section
+        if (activeTokens.length > 0) {
+            html += `<div class="tokens-section-header">
+                <h3>Active Tokens (${activeTokens.length})</h3>
+            </div>`;
+            html += activeTokens.map(token => this.renderTokenCard(token, false)).join('');
         }
 
-        // Pagination
-        const displayedTokens = filteredTokens.slice(0, this.tokensDisplayCount);
-        const hasMore = filteredTokens.length > this.tokensDisplayCount;
-
-        container.innerHTML = displayedTokens.map(token => {
-            const isRevoked = !!token.revoked_at;
-            const expiresAt = token.expires_at ? new Date(token.expires_at) : null;
-            const now = new Date();
-            const msUntilExpiry = expiresAt ? expiresAt - now : Infinity;
-            const isExpired = expiresAt && msUntilExpiry < 0;
-            const isExpiringSoon = expiresAt && !isExpired && msUntilExpiry < 3 * 24 * 60 * 60 * 1000; // 3 days
-
-            // Determine expiration badge
-            let expirationBadge = '';
-            if (!isRevoked && isExpired) {
-                expirationBadge = `<span class="badge badge-expired"><i data-lucide="alert-circle"></i> Expired</span>`;
-            } else if (!isRevoked && isExpiringSoon) {
-                expirationBadge = `<span class="badge badge-expiring"><i data-lucide="alert-triangle"></i> Expiring Soon</span>`;
-            }
-
-            return `
-            <div class="token-card">
-                <div class="token-header">
-                    <div class="token-main">
-                        <div class="token-icon" ${isRevoked || isExpired ? 'style="opacity: 0.5;"' : ''}>
-                            <i data-lucide="key-round"></i>
-                        </div>
-                        <div class="token-info">
-                            <h3>${token.worker_name} ${expirationBadge}</h3>
-                            <div class="token-meta">
-                                <span class="token-meta-item">
-                                    <i data-lucide="home"></i>
-                                    ${token.room_name ? `${token.room_name} (${token.room_id.substring(0, 8)}...)` : token.room_id}
-                                </span>
-                                <span class="token-meta-item" title="${formatExactDate(token.created_at)}">
-                                    <i data-lucide="calendar"></i>
-                                    Created ${formatRelativeTime(token.created_at)}
-                                </span>
-                                ${token.expires_at ? `
-                                    <span class="token-meta-item" ${isExpiringSoon || isExpired ? 'style="color: var(--status-warning);"' : ''} title="${formatExactDate(token.expires_at)}">
-                                        <i data-lucide="${isExpiringSoon || isExpired ? 'alert-triangle' : 'clock'}"></i>
-                                        ${isExpired ? 'Expired' : 'Expires'} ${formatRelativeTime(token.expires_at)}
-                                    </span>
-                                ` : ''}
-                                ${isRevoked ? `
-                                    <span class="token-meta-item" style="color: var(--status-error);">
-                                        <i data-lucide="x-circle"></i>
-                                        Revoked
-                                    </span>
-                                ` : ''}
-                            </div>
-                        </div>
-                    </div>
-                    <div class="token-actions">
-                        ${!isRevoked ? `
-                            <div id="worker-badge-${token.token_id}" class="worker-count-badge offline">
-                                <i data-lucide="zap-off"></i>
-                                Loading...
-                            </div>
-                            <button class="btn btn-danger btn-sm" onclick="app.handleRevokeToken('${token.token_id}')">
-                                <i data-lucide="trash-2"></i>
-                                Revoke
-                            </button>
-                        ` : ''}
-                    </div>
+        // Inactive tokens section (collapsible)
+        if (inactiveTokens.length > 0) {
+            html += `
+            <div class="tokens-section-header inactive-section ${inactiveExpanded ? 'expanded' : ''}" onclick="app.toggleInactiveSection(this)">
+                <div class="section-toggle">
+                    <i data-lucide="${inactiveExpanded ? 'chevron-down' : 'chevron-right'}"></i>
+                    <h3>Inactive Tokens (${inactiveTokens.length})</h3>
                 </div>
-                ${!isRevoked ? `
-                    <div class="nested-workers">
-                        <div class="nested-header" onclick="app.toggleWorkersList('${token.token_id}', this)">
-                            <span>Connected Workers</span>
-                            <i data-lucide="chevron-down"></i>
-                        </div>
-                        <div id="workers-list-${token.token_id}" class="nested-worker-list">
-                            <div class="nested-worker-row" style="justify-content: center; color: var(--text-muted);">Loading workers...</div>
-                        </div>
-                    </div>
-                ` : ''}
-            </div>
-        `;
-        }).join('') + (hasMore ? `
-            <div class="show-more-container">
-                <button class="btn btn-secondary" onclick="app.showMoreTokens()">
-                    <i data-lucide="chevrons-down"></i>
-                    Show more (${filteredTokens.length - this.tokensDisplayCount} remaining)
+                <button class="btn btn-danger btn-sm" onclick="event.stopPropagation(); app.handleDeleteAllInactive()">
+                    <i data-lucide="trash-2"></i>
+                    Delete All
                 </button>
             </div>
-        ` : '');
+            <div class="inactive-tokens-list" style="display: ${inactiveExpanded ? 'block' : 'none'};">
+                ${inactiveTokens.map(token => this.renderTokenCard(token, true)).join('')}
+            </div>`;
+        }
+
+        // If no active tokens but there are inactive ones, show a message
+        if (activeTokens.length === 0 && inactiveTokens.length > 0) {
+            html = `
+            <div class="empty-state" style="padding: 40px 20px;">
+                <div class="empty-icon">
+                    <i data-lucide="key-round"></i>
+                </div>
+                <h3>No active tokens</h3>
+                <p>All your tokens are expired or revoked. Create a new token or delete the inactive ones.</p>
+                <button class="btn btn-primary" onclick="app.showCreateTokenModal()">
+                    <i data-lucide="plus"></i>
+                    Create Token
+                </button>
+            </div>` + html;
+        }
+
+        container.innerHTML = html;
 
         // Initialize Lucide icons
         if (typeof lucide !== 'undefined') {
@@ -1286,9 +958,131 @@ class SleapRTCDashboard {
         }
     }
 
-    showMoreTokens() {
-        this.tokensDisplayCount += this.ITEMS_PER_PAGE;
-        this.renderTokens();
+    renderTokenCard(token, isInactive) {
+        const isRevoked = !!token.revoked_at;
+        const isExpired = !token.is_active && !isRevoked;
+        const isExpiringSoon = token.expires_at && !isInactive &&
+            new Date(token.expires_at) - new Date() < 3 * 24 * 60 * 60 * 1000 &&
+            new Date(token.expires_at) > new Date();
+
+        return `
+        <div class="token-card ${isInactive ? 'inactive' : ''}">
+            <div class="token-header">
+                <div class="token-main">
+                    <div class="token-icon" ${isInactive ? 'style="opacity: 0.5;"' : ''}>
+                        <i data-lucide="key-round"></i>
+                    </div>
+                    <div class="token-info">
+                        <h3>${token.worker_name}</h3>
+                        <div class="token-meta">
+                            <span class="token-meta-item">
+                                <i data-lucide="home"></i>
+                                ${token.room_name ? `${token.room_name} (${token.room_id.substring(0, 8)}...)` : token.room_id}
+                            </span>
+                            <span class="token-meta-item" title="${formatExactDate(token.created_at)}">
+                                <i data-lucide="calendar"></i>
+                                Created ${formatRelativeTime(token.created_at)}
+                            </span>
+                            ${token.expires_at ? `
+                                <span class="token-meta-item ${isExpiringSoon ? 'warning' : ''} ${isExpired ? 'error' : ''}" title="${formatExactDate(token.expires_at)}">
+                                    <i data-lucide="${isExpiringSoon || isExpired ? 'alert-triangle' : 'clock'}"></i>
+                                    ${isExpired ? 'Expired' : `Expires ${formatRelativeTime(token.expires_at)}`}
+                                </span>
+                            ` : ''}
+                            ${isRevoked ? `
+                                <span class="token-meta-item error">
+                                    <i data-lucide="x-circle"></i>
+                                    Revoked ${token.revoked_at ? formatRelativeTime(token.revoked_at) : ''}
+                                </span>
+                            ` : ''}
+                        </div>
+                    </div>
+                </div>
+                <div class="token-actions">
+                    ${!isInactive ? `
+                        <div id="worker-badge-${token.token_id}" class="worker-count-badge offline">
+                            <i data-lucide="zap-off"></i>
+                            Loading...
+                        </div>
+                        <button class="btn btn-danger btn-sm" onclick="app.handleRevokeToken('${token.token_id}')">
+                            <i data-lucide="trash-2"></i>
+                            Revoke
+                        </button>
+                    ` : `
+                        <button class="btn btn-danger btn-sm" onclick="app.handleDeleteToken('${token.token_id}', '${token.worker_name}')">
+                            <i data-lucide="trash-2"></i>
+                            Delete
+                        </button>
+                    `}
+                </div>
+            </div>
+            ${!isInactive ? `
+                <div class="nested-workers">
+                    <div class="nested-header" onclick="app.toggleWorkersList('${token.token_id}', this)">
+                        <span>Connected Workers</span>
+                        <i data-lucide="chevron-down"></i>
+                    </div>
+                    <div id="workers-list-${token.token_id}" class="nested-worker-list">
+                        <div class="nested-worker-row" style="justify-content: center; color: var(--text-muted);">Loading workers...</div>
+                    </div>
+                </div>
+            ` : ''}
+        </div>
+        `;
+    }
+
+    toggleInactiveSection(header) {
+        const isExpanded = header.classList.toggle('expanded');
+        const list = header.nextElementSibling;
+        const icon = header.querySelector('svg');
+
+        list.style.display = isExpanded ? 'block' : 'none';
+        localStorage.setItem('sleap_inactive_tokens_expanded', isExpanded);
+
+        // Re-render to update chevron icon
+        if (typeof lucide !== 'undefined') {
+            lucide.createIcons();
+        }
+    }
+
+    async handleDeleteToken(tokenId, workerName) {
+        if (!confirm(`Permanently delete token "${workerName}"?\n\nThis cannot be undone.`)) {
+            return;
+        }
+
+        try {
+            await this.apiRequest(`/api/auth/tokens/${tokenId}`, {
+                method: 'DELETE',
+            });
+
+            this.showToast('Token deleted');
+            this.loadTokens();
+
+        } catch (e) {
+            console.error('Failed to delete token:', e);
+            this.showToast(e.message, 'error');
+        }
+    }
+
+    async handleDeleteAllInactive() {
+        const inactiveCount = this.tokens.filter(t => !t.is_active).length;
+
+        if (!confirm(`Delete all ${inactiveCount} inactive tokens?\n\nThis will permanently remove all revoked and expired tokens. This cannot be undone.`)) {
+            return;
+        }
+
+        try {
+            const result = await this.apiRequest('/api/auth/tokens', {
+                method: 'DELETE',
+            });
+
+            this.showToast(`Deleted ${result.deleted_count} token(s)`);
+            this.loadTokens();
+
+        } catch (e) {
+            console.error('Failed to delete tokens:', e);
+            this.showToast(e.message, 'error');
+        }
     }
 
     async showCreateTokenModal() {
