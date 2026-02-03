@@ -13,6 +13,10 @@
     <!-- Login Section (shown when not logged in) -->
     <section id="login-section" class="login-section">
         <div class="login-card">
+            <div class="login-logo">
+                <img src="sleap-logo.png" alt="SLEAP" class="login-logo-img">
+                <div class="login-logo-text">SLEAP<span>-RTC</span></div>
+            </div>
             <h2>Welcome to SLEAP-RTC</h2>
             <p>Sign in with GitHub to manage your workers and rooms.</p>
             <button id="github-login-btn" class="btn btn-primary btn-large">
@@ -26,11 +30,14 @@
 
     <!-- Dashboard Section (shown when logged in) -->
     <div id="dashboard-section" class="app-container hidden">
+        <!-- Sidebar Overlay (for mobile) -->
+        <div class="sidebar-overlay" id="sidebar-overlay"></div>
+
         <!-- Sidebar -->
         <aside class="sidebar">
             <div class="sidebar-header">
                 <div class="logo">
-                    <div class="logo-mark">S</div>
+                    <img src="sleap-logo.png" alt="SLEAP" class="logo-mark">
                     <div class="logo-text">SLEAP<span>-RTC</span></div>
                 </div>
             </div>
@@ -47,6 +54,11 @@
                     Tokens
                     <span id="tokens-count" class="nav-badge">0</span>
                 </button>
+                <div class="nav-label" style="margin-top: 16px;">Actions</div>
+                <button class="nav-item" id="join-room-btn">
+                    <i data-lucide="log-in"></i>
+                    Join Room
+                </button>
             </nav>
         </aside>
 
@@ -54,7 +66,12 @@
         <main class="main-content">
             <!-- Top Bar -->
             <header class="top-bar">
-                <h1 class="page-title" id="page-title">Rooms</h1>
+                <div class="top-bar-left">
+                    <button class="btn btn-ghost mobile-menu-btn" id="mobile-menu-btn">
+                        <i data-lucide="menu"></i>
+                    </button>
+                    <h1 class="page-title" id="page-title">Rooms</h1>
+                </div>
                 <div class="top-bar-actions">
                     <!-- User dropdown -->
                     <div id="user-info" class="user-dropdown">
@@ -289,6 +306,109 @@
                     <i data-lucide="copy"></i>
                     Copy Command
                 </button>
+            </div>
+            <div class="form-actions">
+                <button type="button" class="btn btn-primary" data-close-modal>Done</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Room Members Modal -->
+    <div id="members-modal" class="modal hidden">
+        <div class="modal-content modal-large">
+            <h3>Room Members</h3>
+            <div id="members-list" class="members-list">
+                <p class="loading">Loading members...</p>
+            </div>
+            <div class="form-actions">
+                <button type="button" class="btn btn-primary" data-close-modal>Done</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Edit Room Name Modal -->
+    <div id="edit-room-modal" class="modal hidden">
+        <div class="modal-content">
+            <h3>Edit Room Name</h3>
+            <form id="edit-room-form">
+                <input type="hidden" id="edit-room-id">
+                <div class="form-group">
+                    <label for="edit-room-name">Room Name</label>
+                    <input type="text" id="edit-room-name" placeholder="My Training Room">
+                </div>
+                <div class="form-actions">
+                    <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
+                    <button type="submit" class="btn btn-primary">Save</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Settings Modal -->
+    <div id="settings-modal" class="modal hidden">
+        <div class="modal-content">
+            <h3>Settings</h3>
+            <div class="settings-section">
+                <h4>Appearance</h4>
+                <div class="settings-item">
+                    <div class="settings-label">
+                        <span>Theme</span>
+                        <button class="theme-toggle" id="theme-toggle">
+                            <i data-lucide="sun" class="theme-icon-light"></i>
+                            <i data-lucide="moon" class="theme-icon-dark"></i>
+                            <span class="theme-toggle-label" id="theme-label">Dark</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+            <div class="settings-section">
+                <h4>Account</h4>
+                <div class="settings-item">
+                    <div class="settings-label">
+                        <span>Username</span>
+                        <span class="settings-value" id="settings-username">-</span>
+                    </div>
+                </div>
+                <div class="settings-item">
+                    <div class="settings-label">
+                        <span>User ID</span>
+                        <span class="settings-value settings-mono" id="settings-user-id">-</span>
+                    </div>
+                </div>
+            </div>
+            <div class="settings-section">
+                <h4>Keyboard Shortcuts</h4>
+                <div class="settings-item">
+                    <div class="settings-label">
+                        <span>Focus search</span>
+                        <kbd>/</kbd>
+                    </div>
+                </div>
+                <div class="settings-item">
+                    <div class="settings-label">
+                        <span>Close modal</span>
+                        <kbd>Esc</kbd>
+                    </div>
+                </div>
+            </div>
+            <div class="settings-section">
+                <h4>About</h4>
+                <div class="settings-item">
+                    <div class="settings-label">
+                        <span>SLEAP-RTC Dashboard</span>
+                        <span class="settings-value">v1.0</span>
+                    </div>
+                </div>
+                <div class="settings-links">
+                    <a href="https://sleap.ai" target="_blank" rel="noopener">
+                        <i data-lucide="external-link"></i>
+                        Documentation
+                    </a>
+                    <a href="https://github.com/talmolab/sleap-rtc" target="_blank" rel="noopener">
+                        <i data-lucide="github"></i>
+                        GitHub
+                    </a>
+                </div>
             </div>
             <div class="form-actions">
                 <button type="button" class="btn btn-primary" data-close-modal>Done</button>

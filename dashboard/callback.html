@@ -4,57 +4,71 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SLEAP-RTC - Logging in...</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
     <style>
-        :root {
-            --primary-color: #6366f1;
-            --background: #0f172a;
-            --surface: #1e293b;
-            --text: #f1f5f9;
-            --text-secondary: #94a3b8;
-            --danger-color: #ef4444;
-        }
-
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-        }
-
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: var(--background);
-            color: var(--text);
-            min-height: 100vh;
+        /* Callback-specific styles that extend the main stylesheet */
+        .callback-container {
             display: flex;
             align-items: center;
             justify-content: center;
+            min-height: 100vh;
+            padding: 20px;
+            position: relative;
+            z-index: 1;
         }
 
-        .container {
-            text-align: center;
-            padding: 40px;
-            background: var(--surface);
-            border-radius: 16px;
+        .callback-card {
             max-width: 400px;
-            width: 90%;
+            width: 100%;
+            padding: 40px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-subtle);
+            border-radius: 16px;
+            text-align: center;
         }
 
-        h1 {
-            font-size: 1.5rem;
+        .callback-logo {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            margin-bottom: 24px;
+        }
+
+        .callback-logo img {
+            width: 48px;
+            height: 48px;
+            border-radius: 10px;
+        }
+
+        .callback-logo-text {
+            font-size: 24px;
+            font-weight: 600;
+            letter-spacing: -0.5px;
+        }
+
+        .callback-logo-text span {
+            color: var(--accent-primary);
+        }
+
+        .callback-card h1 {
+            font-size: 1.25rem;
             margin-bottom: 8px;
-            color: var(--primary-color);
+            color: var(--text-primary);
         }
 
-        p {
+        .callback-card p {
             color: var(--text-secondary);
             margin-bottom: 24px;
+            font-size: 14px;
         }
 
         .spinner {
             width: 40px;
             height: 40px;
-            border: 3px solid var(--surface);
-            border-top-color: var(--primary-color);
+            border: 3px solid var(--bg-tertiary);
+            border-top-color: var(--accent-primary);
             border-radius: 50%;
             animation: spin 1s linear infinite;
             margin: 0 auto 24px;
@@ -64,59 +78,74 @@
             to { transform: rotate(360deg); }
         }
 
-        .error {
-            color: var(--danger-color);
+        .callback-error {
+            color: var(--status-error);
             background: rgba(239, 68, 68, 0.1);
+            border: 1px solid rgba(239, 68, 68, 0.2);
             padding: 16px;
             border-radius: 8px;
             margin-top: 16px;
         }
 
-        .btn {
-            display: inline-block;
-            padding: 12px 24px;
-            background: var(--primary-color);
-            color: white;
-            border: none;
-            border-radius: 8px;
-            font-size: 0.875rem;
-            font-weight: 500;
-            cursor: pointer;
-            text-decoration: none;
-            margin-top: 16px;
+        .callback-success-icon {
+            width: 48px;
+            height: 48px;
+            background: rgba(34, 197, 94, 0.15);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 16px;
+            color: var(--status-success);
         }
 
-        .btn:hover {
-            background: #4f46e5;
-        }
-
-        .hidden {
-            display: none;
+        .callback-success-icon svg {
+            width: 24px;
+            height: 24px;
         }
     </style>
 </head>
 <body>
-    <div class="container">
-        <div id="loading">
-            <div class="spinner"></div>
-            <h1>SLEAP-RTC</h1>
-            <p>Completing login...</p>
-        </div>
+    <div class="callback-container">
+        <div class="callback-card">
+            <div class="callback-logo">
+                <img src="sleap-logo.png" alt="SLEAP">
+                <div class="callback-logo-text">SLEAP<span>-RTC</span></div>
+            </div>
 
-        <div id="success" class="hidden">
-            <h1>Login Successful!</h1>
-            <p>Redirecting to dashboard...</p>
-        </div>
+            <div id="loading">
+                <div class="spinner"></div>
+                <h1>Completing Login</h1>
+                <p>Please wait while we authenticate your account...</p>
+            </div>
 
-        <div id="error" class="hidden">
-            <h1>Login Failed</h1>
-            <p id="error-message">An error occurred during login.</p>
-            <a href="index.html" class="btn">Try Again</a>
-        </div>
+            <div id="success" class="hidden">
+                <div class="callback-success-icon">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="20 6 9 17 4 12"></polyline>
+                    </svg>
+                </div>
+                <h1>Login Successful!</h1>
+                <p>Redirecting to dashboard...</p>
+            </div>
 
-        <div id="cli-success" class="hidden">
-            <h1>Login Successful!</h1>
-            <p>You can close this window and return to your terminal.</p>
+            <div id="error" class="hidden">
+                <h1>Login Failed</h1>
+                <div class="callback-error">
+                    <p id="error-message">An error occurred during login.</p>
+                </div>
+                <a href="index.html" class="btn btn-primary" style="margin-top: 20px;">Try Again</a>
+            </div>
+
+            <div id="cli-success" class="hidden">
+                <div class="callback-success-icon">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="20 6 9 17 4 12"></polyline>
+                    </svg>
+                </div>
+                <h1>Login Successful!</h1>
+                <p>You can close this window and return to your terminal.</p>
+            </div>
         </div>
     </div>
 
