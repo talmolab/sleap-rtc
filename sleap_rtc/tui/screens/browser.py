@@ -641,9 +641,12 @@ class BrowserScreen(Screen):
         self.connection_status = "Disconnected"
         self._connected = False
 
-        # Update tab status
-        worker_tabs = self.query_one("#worker-tabs", WorkerTabs)
-        worker_tabs.set_worker_connected(self.current_worker_index, False)
+        # Update tab status (widget may not be mounted)
+        try:
+            worker_tabs = self.query_one("#worker-tabs", WorkerTabs)
+            worker_tabs.set_worker_connected(self.current_worker_index, False)
+        except Exception:
+            pass
 
         self.notify("Connection to worker lost", severity="warning")
 

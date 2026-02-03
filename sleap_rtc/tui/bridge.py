@@ -709,6 +709,9 @@ class WebRTCBridge:
 
         @self.data_channel.on("message")
         async def on_message(message):
+            # aiortc may send bytes or str depending on version/config
+            if isinstance(message, bytes):
+                message = message.decode("utf-8")
             await self._handle_message(message)
 
         @self.data_channel.on("close")
