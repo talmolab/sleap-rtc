@@ -1191,7 +1191,15 @@ class SleapRTCDashboard {
                 : roomId;
             document.getElementById('new-token-room').textContent = roomDisplay;
             document.getElementById('new-token-name').textContent = workerName;
-            document.getElementById('worker-command').textContent = `sleap-rtc worker --api-key ${data.token_id}`;
+
+            // Build worker command - include room secret if owner has one stored locally
+            let workerCommand = `sleap-rtc worker --api-key ${data.token_id}`;
+            const isOwner = room && room.role === 'owner';
+            const storedSecret = this.getStoredRoomSecret(roomId);
+            if (isOwner && storedSecret) {
+                workerCommand += ` --room-secret ${storedSecret}`;
+            }
+            document.getElementById('worker-command').textContent = workerCommand;
 
             this.hideModal('create-token-modal');
             this.showModal('token-created-modal');
