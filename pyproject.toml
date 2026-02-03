@@ -25,6 +25,7 @@ dependencies = [
     "pyotp>=2.9.0",
     "pyjwt>=2.8.0",
     "textual>=0.50.0",
+    "rich-click>=1.7.0",
 ]
 
 [project.scripts]

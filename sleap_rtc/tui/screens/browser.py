@@ -22,6 +22,7 @@ from sleap_rtc.tui.widgets.worker_tabs import WorkerTabs, WorkerInfo
 from sleap_rtc.tui.widgets.slp_panel import SLPContextPanel, SLPInfo, VideoInfo
 from sleap_rtc.tui.bridge import WebRTCBridge
 from sleap_rtc.tui.screens.resolve_confirm import ResolveConfirmScreen
+from sleap_rtc.tui.screens.secret_input import SecretInputScreen
 
 
 class BrowserScreen(Screen):
@@ -414,14 +415,20 @@ class BrowserScreen(Screen):
                 self.connection_status = f"Auth failed: {reason}"
                 connecting_status.update(f"Authentication failed: {reason}")
 
-                # Show helpful error message
-                self.notify(
-                    f"PSK authentication failed: {reason}\n"
-                    "Check that your room secret matches the worker's secret.\n"
-                    "Use 'sleap-rtc room create-secret --room ROOM' to generate a new secret.",
-                    severity="error",
-                    timeout=15,
-                )
+                # Check if we need to prompt for room secret
+                if "No room secret configured" in reason:
+                    # Show secret input screen
+                    await self._prompt_for_secret(index, reason)
+                    return
+                else:
+                    # Show helpful error message for other auth failures
+                    self.notify(
+                        f"PSK authentication failed: {reason}\n"
+                        "Check that your room secret matches the worker's secret.\n"
+                        "Use 'sleap-rtc room create-secret --room ROOM' to generate a new secret.",
+                        severity="error",
+                        timeout=15,
+                    )
             else:
                 self.connection_status = "Connection failed"
                 connecting_status.update(f"Failed to connect to {worker_info.display_name}")
@@ -429,6 +436,120 @@ class BrowserScreen(Screen):
             # Update tab connection status
             worker_tabs = self.query_one("#worker-tabs", WorkerTabs)
             worker_tabs.set_worker_connected(index, False)
+
+    async def _prompt_for_secret(self, worker_index: int, error_message: str = None):
+        """Prompt user for room secret and retry connection.
+
+        Args:
+            worker_index: Index of worker to connect to after getting secret.
+            error_message: Optional error message to display.
+        """
+        def on_secret_result(secret: Optional[str]) -> None:
+            """Handle secret input result."""
+            if secret:
+                # Update room_secret and retry connection
+                self.room_secret = secret
+                asyncio.create_task(self._retry_connection_with_secret(worker_index, secret))
+            else:
+                # User cancelled - update status
+                self.connection_status = "Authentication cancelled"
+                connecting_status = self.query_one("#connecting-status", Static)
+                connecting_status.update("Authentication cancelled - no secret provided")
+
+        # Show secret input screen
+        secret_screen = SecretInputScreen(
+            room_id=self.room_id,
+            error_message=error_message if "No room secret" not in (error_message or "") else None,
+        )
+        self.app.push_screen(secret_screen, on_secret_result)
+
+    async def _retry_connection_with_secret(self, worker_index: int, secret: str):
+        """Retry connection to worker with provided secret.
+
+        Args:
+            worker_index: Index of worker to connect to.
+            secret: Room secret to use for authentication.
+        """
+        worker = self.workers_data[worker_index]
+        worker_info = self.worker_infos[worker_index]
+        worker_id = worker.get("peer_id")
+
+        # Disconnect and recreate bridge with new secret
+        if self.bridge:
+            await self.bridge.disconnect()
+
+        self.bridge = WebRTCBridge(
+            room_id=self.room_id,
+            token=self.token,
+            on_connected=self._on_connected,
+            on_disconnected=self._on_disconnected,
+            on_auth_status=self._on_auth_status,
+            room_secret=secret,
+        )
+
+        connecting_status = self.query_one("#connecting-status", Static)
+        connecting_status.update("Reconnecting to signaling server...")
+
+        if not await self.bridge.connect_signaling():
+            self.connection_status = "Failed to reconnect"
+            connecting_status.update("Failed to reconnect to signaling server")
+            return
+
+        connecting_status.update(f"Connecting to {worker_info.display_name}...")
+
+        if await self.bridge.connect(worker_id):
+            self._connected = True
+            self.current_worker_index = worker_index
+            self.connection_status = "Connected"
+            self.current_worker_name = worker_info.display_name
+
+            # Save secret to credentials for future use
+            self._save_room_secret(secret)
+
+            # Update tab connection status
+            worker_tabs = self.query_one("#worker-tabs", WorkerTabs)
+            worker_tabs.set_worker_connected(worker_index, True)
+
+            # Switch to browser view
+            self.query_one("#connecting-overlay").display = False
+            self.query_one("#main-layout").display = True
+
+            # Focus miller columns and load root
+            miller = self.query_one("#miller-columns", MillerColumns)
+            miller.focus()
+            self.set_timer(0.5, self._try_load_root)
+
+        else:
+            # Still failed - check reason
+            if self.bridge and self.bridge.auth_failed_reason:
+                reason = self.bridge.auth_failed_reason
+                # Show secret input again with error
+                await self._prompt_for_secret(worker_index, reason)
+            else:
+                self.connection_status = "Connection failed"
+                connecting_status.update(f"Failed to connect to {worker_info.display_name}")
+
+    def _save_room_secret(self, secret: str):
+        """Save room secret to credentials for future use.
+
+        Args:
+            secret: Room secret to save.
+        """
+        try:
+            from sleap_rtc.auth.credentials import save_room_secret
+            save_room_secret(self.room_id, secret)
+            self.app.notify(
+                f"Room secret saved for future connections",
+                severity="information",
+                timeout=3,
+            )
+        except Exception as e:
+            # Non-fatal - just notify
+            self.app.notify(
+                f"Could not save room secret: {e}",
+                severity="warning",
+                timeout=3,
+            )
 
     async def _switch_to_worker(self, index: int):
         """Switch to a different worker.

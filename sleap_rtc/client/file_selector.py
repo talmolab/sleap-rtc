@@ -11,21 +11,73 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Optional, Callable
 
+# Rich console for styled fallback output (lazy loaded)
+_console = None
+
+
+def _get_console():
+    """Get or create Rich console for styled output."""
+    global _console
+    if _console is None:
+        try:
+            from rich.console import Console
+            _console = Console()
+        except ImportError:
+            _console = False  # Mark as unavailable
+    return _console if _console else None
+
+
 # Terminal capability detection
 def _is_interactive_terminal() -> bool:
-    """Check if we're running in an interactive terminal with cursor support."""
+    """Check if we're running in an interactive terminal with cursor support.
+
+    Returns:
+        True if terminal supports interactive cursor-based selection,
+        False if we should fall back to numbered selection.
+    """
     # Check if stdin/stdout are TTYs
     if not sys.stdin.isatty() or not sys.stdout.isatty():
         return False
 
     # Check for dumb terminal
     term = os.environ.get("TERM", "")
-    if term in ("dumb", ""):
+    if term in ("dumb", "", "unknown"):
         return False
 
-    # Check for common non-interactive environments
-    if os.environ.get("CI") or os.environ.get("GITHUB_ACTIONS"):
+    # Check for common CI/CD environments
+    ci_env_vars = [
+        "CI",                    # Generic CI flag
+        "GITHUB_ACTIONS",        # GitHub Actions
+        "GITLAB_CI",             # GitLab CI
+        "JENKINS_URL",           # Jenkins
+        "TRAVIS",                # Travis CI
+        "CIRCLECI",              # CircleCI
+        "BUILDKITE",             # Buildkite
+        "TEAMCITY_VERSION",      # TeamCity
+        "TF_BUILD",              # Azure DevOps
+        "CODEBUILD_BUILD_ID",    # AWS CodeBuild
+    ]
+    for env_var in ci_env_vars:
+        if os.environ.get(env_var):
+            return False
+
+    # Check for non-interactive shells
+    if os.environ.get("NONINTERACTIVE") or os.environ.get("DEBIAN_FRONTEND") == "noninteractive":
         return False
+
+    # Check for Emacs shell mode
+    if os.environ.get("INSIDE_EMACS"):
+        return False
+
+    # Check for piped input (common in scripts)
+    try:
+        if hasattr(sys.stdin, 'fileno'):
+            import select
+            # If stdin has data waiting, we're likely being piped to
+            if select.select([sys.stdin], [], [], 0)[0]:
+                return False
+    except (ImportError, OSError, ValueError):
+        pass  # select not available or stdin not selectable
 
     return True
 
@@ -179,21 +231,31 @@ class ArrowSelector:
             """Generate formatted text for display."""
             lines = []
 
-            # Title
+            # Title (matching rich-click bold style)
             lines.append(("bold", f"\n{self.title}\n\n"))
 
             # Candidates
             for i, candidate in enumerate(self.candidates):
                 selected = i == self.selected_index
-                line = candidate.format_display(selected=selected)
+                size_str = _format_size(candidate.size)
 
                 if selected:
-                    lines.append(("bold fg:cyan", line + "\n"))
+                    # Selected: bold cyan (matching rich-click STYLE_OPTION)
+                    lines.append(("bold fg:ansicyan", f"> {candidate.path}"))
+                    lines.append(("fg:ansicyan", f"  ({size_str})\n"))
                 else:
-                    lines.append(("", line + "\n"))
+                    lines.append(("", f"  {candidate.path}"))
+                    lines.append(("fg:ansibrightblack", f"  ({size_str})\n"))
 
-            # Help text
-            lines.append(("dim", "\n[↑/↓] Navigate  [Enter] Confirm  [Esc] Cancel\n"))
+            # Help text with highlighted keys (matching rich-click style)
+            lines.append(("", "\n"))
+            lines.append(("fg:ansibrightblack", "["))
+            lines.append(("bold fg:ansiyellow", "↑/↓"))
+            lines.append(("fg:ansibrightblack", "] Navigate  ["))
+            lines.append(("bold fg:ansigreen", "Enter"))
+            lines.append(("fg:ansibrightblack", "] Confirm  ["))
+            lines.append(("bold fg:ansiyellow", "Esc"))
+            lines.append(("fg:ansibrightblack", "] Cancel\n"))
 
             return FormattedText(lines)
 
@@ -234,18 +296,37 @@ class ArrowSelector:
         return result[0]
 
     def _run_numbered(self) -> Optional[FileCandidate]:
-        """Run numbered selection for dumb terminals."""
-        print(f"\n{self.title}\n")
+        """Run numbered selection for dumb terminals with Rich styling."""
+        console = _get_console()
 
-        for i, candidate in enumerate(self.candidates, 1):
-            size_str = _format_size(candidate.size)
-            print(f"  {i}. {candidate.path}  ({size_str})")
+        if console:
+            # Rich-styled output matching rich-click theme
+            console.print()
+            console.print(f"[bold]{self.title}[/bold]")
+            console.print()
 
-        print()
-        if self.allow_cancel:
-            print("Enter number to select, or 'c' to cancel")
+            for i, candidate in enumerate(self.candidates, 1):
+                size_str = _format_size(candidate.size)
+                console.print(f"  [bold cyan]{i}.[/bold cyan] {candidate.path}  [dim]({size_str})[/dim]")
+
+            console.print()
+            if self.allow_cancel:
+                console.print("[dim]Enter number to select, or 'c' to cancel[/dim]")
+            else:
+                console.print("[dim]Enter number to select[/dim]")
         else:
-            print("Enter number to select")
+            # Plain fallback
+            print(f"\n{self.title}\n")
+
+            for i, candidate in enumerate(self.candidates, 1):
+                size_str = _format_size(candidate.size)
+                print(f"  {i}. {candidate.path}  ({size_str})")
+
+            print()
+            if self.allow_cancel:
+                print("Enter number to select, or 'c' to cancel")
+            else:
+                print("Enter number to select")
 
         while True:
             try:
@@ -259,10 +340,18 @@ class ArrowSelector:
                 if 0 <= idx < len(self.candidates):
                     return self.candidates[idx]
                 else:
-                    print(f"Please enter a number between 1 and {len(self.candidates)}")
+                    console = _get_console()
+                    if console:
+                        console.print(f"[yellow]Please enter a number between 1 and {len(self.candidates)}[/yellow]")
+                    else:
+                        print(f"Please enter a number between 1 and {len(self.candidates)}")
 
             except ValueError:
-                print("Invalid input. Please enter a number.")
+                console = _get_console()
+                if console:
+                    console.print("[yellow]Invalid input. Please enter a number.[/yellow]")
+                else:
+                    print("Invalid input. Please enter a number.")
             except (EOFError, KeyboardInterrupt):
                 self.cancelled = True
                 return None
@@ -377,15 +466,22 @@ class MountSelector:
 
             for i, (label, display) in enumerate(options):
                 selected = i == self.selected_index
-                prefix = "> " if selected else "  "
-                line = f"{prefix}{display}"
 
                 if selected:
-                    lines.append(("bold fg:cyan", line + "\n"))
+                    # Selected: bold cyan (matching rich-click STYLE_OPTION)
+                    lines.append(("bold fg:ansicyan", f"> {display}\n"))
                 else:
-                    lines.append(("", line + "\n"))
+                    lines.append(("", f"  {display}\n"))
 
-            lines.append(("dim", "\n[↑/↓] Navigate  [Enter] Confirm  [Esc] Cancel\n"))
+            # Help text with highlighted keys (matching rich-click style)
+            lines.append(("", "\n"))
+            lines.append(("fg:ansibrightblack", "["))
+            lines.append(("bold fg:ansiyellow", "↑/↓"))
+            lines.append(("fg:ansibrightblack", "] Navigate  ["))
+            lines.append(("bold fg:ansigreen", "Enter"))
+            lines.append(("fg:ansibrightblack", "] Confirm  ["))
+            lines.append(("bold fg:ansiyellow", "Esc"))
+            lines.append(("fg:ansibrightblack", "] Cancel\n"))
             return FormattedText(lines)
 
         layout = Layout(Window(content=FormattedTextControl(get_formatted_text)))
@@ -415,17 +511,35 @@ class MountSelector:
         return result[0]
 
     def _run_numbered(self, options: List[tuple]) -> Optional[str]:
-        """Run numbered selection for dumb terminals."""
-        print(f"\n{self.title}\n")
+        """Run numbered selection for dumb terminals with Rich styling."""
+        console = _get_console()
 
-        for i, (label, display) in enumerate(options, 1):
-            print(f"  {i}. {display}")
+        if console:
+            # Rich-styled output matching rich-click theme
+            console.print()
+            console.print(f"[bold]{self.title}[/bold]")
+            console.print()
 
-        print()
-        if self.allow_cancel:
-            print("Enter number to select, or 'c' to cancel")
+            for i, (label, display) in enumerate(options, 1):
+                console.print(f"  [bold cyan]{i}.[/bold cyan] {display}")
+
+            console.print()
+            if self.allow_cancel:
+                console.print("[dim]Enter number to select, or 'c' to cancel[/dim]")
+            else:
+                console.print("[dim]Enter number to select[/dim]")
         else:
-            print("Enter number to select")
+            # Plain fallback
+            print(f"\n{self.title}\n")
+
+            for i, (label, display) in enumerate(options, 1):
+                print(f"  {i}. {display}")
+
+            print()
+            if self.allow_cancel:
+                print("Enter number to select, or 'c' to cancel")
+            else:
+                print("Enter number to select")
 
         while True:
             try:
@@ -439,10 +553,18 @@ class MountSelector:
                 if 0 <= idx < len(options):
                     return options[idx][0]
                 else:
-                    print(f"Please enter a number between 1 and {len(options)}")
+                    console = _get_console()
+                    if console:
+                        console.print(f"[yellow]Please enter a number between 1 and {len(options)}[/yellow]")
+                    else:
+                        print(f"Please enter a number between 1 and {len(options)}")
 
             except ValueError:
-                print("Invalid input. Please enter a number.")
+                console = _get_console()
+                if console:
+                    console.print("[yellow]Invalid input. Please enter a number.[/yellow]")
+                else:
+                    print("Invalid input. Please enter a number.")
             except (EOFError, KeyboardInterrupt):
                 self.cancelled = True
                 return None
@@ -551,14 +673,40 @@ class WorkerSelector:
 
             for i, worker in enumerate(self.workers):
                 selected = i == self.selected_index
-                line = self._format_worker(worker, selected=selected)
+                peer_id = worker.get("peer_id", "unknown")
+                props = worker.get("properties", {})
+                name = props.get("name", "")
+                platform = props.get("platform", "unknown")
+                status = props.get("status", "available")
+
+                # Show name if available, otherwise truncated peer_id
+                display_name = name if name else peer_id[:16]
 
                 if selected:
-                    lines.append(("bold fg:cyan", line + "\n"))
+                    # Selected: bold cyan with status coloring
+                    lines.append(("bold fg:ansicyan", f"> {display_name}"))
+                    lines.append(("fg:ansibrightblack", f"  ({platform})  "))
+                    if status == "available":
+                        lines.append(("fg:ansigreen", f"{status}\n"))
+                    else:
+                        lines.append(("fg:ansiyellow", f"{status}\n"))
                 else:
-                    lines.append(("", line + "\n"))
+                    lines.append(("", f"  {display_name}"))
+                    lines.append(("fg:ansibrightblack", f"  ({platform})  "))
+                    if status == "available":
+                        lines.append(("fg:ansigreen", f"{status}\n"))
+                    else:
+                        lines.append(("fg:ansiyellow", f"{status}\n"))
 
-            lines.append(("dim", "\n[↑/↓] Navigate  [Enter] Confirm  [Esc] Cancel\n"))
+            # Help text with highlighted keys (matching rich-click style)
+            lines.append(("", "\n"))
+            lines.append(("fg:ansibrightblack", "["))
+            lines.append(("bold fg:ansiyellow", "↑/↓"))
+            lines.append(("fg:ansibrightblack", "] Navigate  ["))
+            lines.append(("bold fg:ansigreen", "Enter"))
+            lines.append(("fg:ansibrightblack", "] Confirm  ["))
+            lines.append(("bold fg:ansiyellow", "Esc"))
+            lines.append(("fg:ansibrightblack", "] Cancel\n"))
             return FormattedText(lines)
 
         layout = Layout(Window(content=FormattedTextControl(get_formatted_text)))
@@ -580,21 +728,51 @@ class WorkerSelector:
         return result[0]
 
     def _run_numbered(self) -> Optional[dict]:
-        """Run numbered selection for dumb terminals."""
-        print(f"\n{self.title}\n")
+        """Run numbered selection for dumb terminals with Rich styling."""
+        console = _get_console()
 
-        for i, worker in enumerate(self.workers, 1):
-            peer_id = worker.get("peer_id", "unknown")
-            props = worker.get("properties", {})
-            platform = props.get("platform", "unknown")
-            status = props.get("status", "available")
-            print(f"  {i}. {peer_id}  ({platform}, {status})")
+        if console:
+            # Rich-styled output matching rich-click theme
+            console.print()
+            console.print(f"[bold]{self.title}[/bold]")
+            console.print()
 
-        print()
-        if self.allow_cancel:
-            print("Enter number to select, or 'c' to cancel")
+            for i, worker in enumerate(self.workers, 1):
+                peer_id = worker.get("peer_id", "unknown")
+                props = worker.get("properties", {})
+                name = props.get("name", "")
+                platform = props.get("platform", "unknown")
+                status = props.get("status", "available")
+
+                # Show name if available, otherwise peer_id
+                display_name = name if name else peer_id[:12]
+                status_color = "green" if status == "available" else "yellow"
+                console.print(
+                    f"  [bold cyan]{i}.[/bold cyan] {display_name}  "
+                    f"[dim]({platform})[/dim] [{status_color}]{status}[/{status_color}]"
+                )
+
+            console.print()
+            if self.allow_cancel:
+                console.print("[dim]Enter number to select, or 'c' to cancel[/dim]")
+            else:
+                console.print("[dim]Enter number to select[/dim]")
         else:
-            print("Enter number to select")
+            # Plain fallback
+            print(f"\n{self.title}\n")
+
+            for i, worker in enumerate(self.workers, 1):
+                peer_id = worker.get("peer_id", "unknown")
+                props = worker.get("properties", {})
+                platform = props.get("platform", "unknown")
+                status = props.get("status", "available")
+                print(f"  {i}. {peer_id}  ({platform}, {status})")
+
+            print()
+            if self.allow_cancel:
+                print("Enter number to select, or 'c' to cancel")
+            else:
+                print("Enter number to select")
 
         while True:
             try:
@@ -608,10 +786,18 @@ class WorkerSelector:
                 if 0 <= idx < len(self.workers):
                     return self.workers[idx]
                 else:
-                    print(f"Please enter a number between 1 and {len(self.workers)}")
+                    console = _get_console()
+                    if console:
+                        console.print(f"[yellow]Please enter a number between 1 and {len(self.workers)}[/yellow]")
+                    else:
+                        print(f"Please enter a number between 1 and {len(self.workers)}")
 
             except ValueError:
-                print("Invalid input. Please enter a number.")
+                console = _get_console()
+                if console:
+                    console.print("[yellow]Invalid input. Please enter a number.[/yellow]")
+                else:
+                    print("Invalid input. Please enter a number.")
             except (EOFError, KeyboardInterrupt):
                 self.cancelled = True
                 return None
@@ -641,12 +827,24 @@ class NoMatchMenu:
         Returns:
             One of: "browse", "manual", "wildcard", "cancel"
         """
-        print(f"\nNo matches found for: {self.filename}\n")
-        print("Options:")
-        print("  [B] Open filesystem browser (run sleap-rtc browse)")
-        print("  [P] Enter path manually")
-        print("  [W] Try wildcard search")
-        print("  [C] Cancel")
+        console = _get_console()
+
+        if console:
+            console.print()
+            console.print(f"[yellow]No matches found for:[/yellow] {self.filename}")
+            console.print()
+            console.print("[bold]Options:[/bold]")
+            console.print("  [bold cyan]B[/bold cyan] - Open filesystem browser [dim](run sleap-rtc browse)[/dim]")
+            console.print("  [bold cyan]P[/bold cyan] - Enter path manually")
+            console.print("  [bold cyan]W[/bold cyan] - Try wildcard search")
+            console.print("  [bold cyan]C[/bold cyan] - Cancel")
+        else:
+            print(f"\nNo matches found for: {self.filename}\n")
+            print("Options:")
+            print("  [B] Open filesystem browser (run sleap-rtc browse)")
+            print("  [P] Enter path manually")
+            print("  [W] Try wildcard search")
+            print("  [C] Cancel")
 
         while True:
             try:
@@ -661,7 +859,11 @@ class NoMatchMenu:
                 elif choice == "c":
                     return "cancel"
                 else:
-                    print("Invalid option. Please enter B, P, W, or C.")
+                    console = _get_console()
+                    if console:
+                        console.print("[yellow]Invalid option. Please enter B, P, W, or C.[/yellow]")
+                    else:
+                        print("Invalid option. Please enter B, P, W, or C.")
 
             except (EOFError, KeyboardInterrupt):
                 return "cancel"

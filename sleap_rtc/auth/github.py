@@ -12,7 +12,7 @@ import secrets
 import time
 import webbrowser
 
-import click
+import rich_click as click
 import requests
 from loguru import logger
 

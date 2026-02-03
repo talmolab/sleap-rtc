@@ -75,7 +75,7 @@ Pass the secret directly on the command line:
 sleap-rtc worker --room-id <room_id> --token <token> --room-secret <secret>
 
 # Client
-sleap-rtc client-train --room-id <room_id> --token <token> --room-secret <secret> --pkg-path package.zip
+sleap-rtc train --room <room_id> --room-secret <secret> --pkg-path package.zip
 ```
 
 **Pros:** Simple, explicit
@@ -221,7 +221,7 @@ This maintains backward compatibility with existing deployments.
 
 When using the TUI browser:
 
-1. Configure the secret via CLI: `sleap-rtc tui --room-id <room_id> --room-secret <secret>`
+1. Configure the secret via CLI: `sleap-rtc tui --room <room_id> --room-secret <secret>`
 2. Or set the environment variable before launching
 3. Authentication status is shown during connection
 4. Clear error messages guide troubleshooting
@@ -263,5 +263,5 @@ export SLEAP_RTC_ROOM_SECRET_PRODUCTION_ROOM=a1b2c3d4...
 ssh worker-host "sleap-rtc worker --room-id production-room --token <token>"
 
 # 5. Connect client (secret from env var)
-sleap-rtc client-train --room-id production-room --token <token> --pkg-path job.zip
+sleap-rtc train --room production-room --pkg-path job.zip
 ```

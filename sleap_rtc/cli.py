@@ -1,4 +1,4 @@
-"""Unified CLI for sleap-RTC using Click."""
+"""Unified CLI for sleap-RTC using rich-click."""
 
 import json
 import os
@@ -6,13 +6,128 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-import click
+import rich_click as click
 import requests
 from loguru import logger
+
+# =============================================================================
+# rich-click Configuration
+# =============================================================================
+
+# Use Rich markup in help text
+click.rich_click.USE_RICH_MARKUP = True
+
+# Style configuration
+click.rich_click.STYLE_OPTION = "bold cyan"
+click.rich_click.STYLE_ARGUMENT = "bold cyan"
+click.rich_click.STYLE_COMMAND = "bold green"
+click.rich_click.STYLE_SWITCH = "bold yellow"
+click.rich_click.STYLE_METAVAR = "bold magenta"
+click.rich_click.STYLE_USAGE = "bold"
+click.rich_click.STYLE_HELPTEXT = ""
+
+# Panel configuration
+click.rich_click.SHOW_ARGUMENTS = True
+click.rich_click.GROUP_ARGUMENTS_OPTIONS = True
+click.rich_click.SHOW_METAVARS_COLUMN = True
+click.rich_click.APPEND_METAVARS_HELP = True
+
+# Command groups for organized help output
+click.rich_click.COMMAND_GROUPS = {
+    "sleap-rtc": [
+        {
+            "name": "Authentication",
+            "commands": ["login", "logout", "whoami"],
+        },
+        {
+            "name": "Rooms & Tokens",
+            "commands": ["room", "token"],
+        },
+        {
+            "name": "Worker & Client",
+            "commands": ["worker", "train", "track"],
+        },
+        {
+            "name": "Utilities",
+            "commands": ["tui", "status", "doctor"],
+        },
+        {
+            "name": "Experimental",
+            "commands": ["test"],
+        },
+    ],
+    "sleap-rtc test": [
+        {
+            "name": "File Browser Tools",
+            "commands": ["browse", "resolve-paths"],
+        },
+    ],
+}
 
 from sleap_rtc.rtc_worker import run_RTCworker
 from sleap_rtc.rtc_client import run_RTCclient
 from sleap_rtc.rtc_client_track import run_RTCclient_track
+
+
+# =============================================================================
+# Authentication Helpers
+# =============================================================================
+
+
+def require_login() -> str:
+    """Require user to be logged in and return valid JWT.
+
+    Checks if user has a valid (non-expired) JWT token. If not, prints
+    a helpful error message and exits.
+
+    Returns:
+        Valid JWT token string.
+
+    Raises:
+        SystemExit: If user is not logged in or JWT is expired.
+    """
+    from sleap_rtc.auth.credentials import get_jwt, get_user, is_logged_in
+
+    if not is_logged_in():
+        click.echo(click.style("Error: ", fg="red", bold=True) + "Not logged in.")
+        click.echo("")
+        click.echo("This command requires authentication. Please log in first:")
+        click.echo(click.style("  sleap-rtc login", fg="cyan"))
+        click.echo("")
+        sys.exit(1)
+
+    jwt_token = get_jwt()
+    if not jwt_token:
+        click.echo(click.style("Error: ", fg="red", bold=True) + "No JWT token found.")
+        click.echo("")
+        click.echo("Please log in again:")
+        click.echo(click.style("  sleap-rtc login", fg="cyan"))
+        click.echo("")
+        sys.exit(1)
+
+    # Check JWT expiration
+    try:
+        import jwt
+        claims = jwt.decode(jwt_token, options={"verify_signature": False})
+        exp = claims.get("exp")
+        if exp:
+            from datetime import datetime
+            exp_dt = datetime.fromtimestamp(exp)
+            if exp_dt < datetime.now():
+                user = get_user()
+                username = user.get("username", "unknown") if user else "unknown"
+                click.echo(click.style("Error: ", fg="red", bold=True) + "JWT token has expired.")
+                click.echo(f"  Last logged in as: {username}")
+                click.echo("")
+                click.echo("Please log in again:")
+                click.echo(click.style("  sleap-rtc login", fg="cyan"))
+                click.echo("")
+                sys.exit(1)
+    except Exception:
+        # If we can't decode JWT, let the server handle validation
+        pass
+
+    return jwt_token
 
 
 @click.group()
@@ -811,7 +926,7 @@ def worker(api_key, room, token, working_dir, name, room_secret):
     )
 
 
-@cli.command(name="client-train")
+@cli.command(name="train")
 @click.option(
     "--session-string",
     "--session_string",
@@ -822,49 +937,56 @@ def worker(api_key, room, token, working_dir, name, room_secret):
 )
 @click.option(
     "--room",
-    "--room-id",  # Alias for backward compatibility
+    "--room-id",
+    "-r",
     type=str,
     required=False,
-    help="Room ID for room-based worker discovery.",
+    help="Room ID for room-based worker discovery. Requires login (sleap-rtc login).",
 )
 @click.option(
     "--token",
+    "-t",
     type=str,
     required=False,
-    help="Room token for authentication (required with --room).",
+    help="Room token (optional with JWT auth, for backward compatibility).",
 )
 @click.option(
     "--worker-id",
+    "-w",
     type=str,
     required=False,
     help="Specific worker peer-id to connect to (skips discovery).",
 )
 @click.option(
     "--auto-select",
+    "-a",
     is_flag=True,
     default=False,
     help="Automatically select best worker by GPU memory (use with --room).",
 )
 @click.option(
+    "--pkg-path",
     "--pkg_path",
     "-p",
     type=str,
     required=True,
-    help="Path to the SLEAP training package.",
+    help="Path to SLEAP training package. Filename is resolved on worker filesystem via interactive selector.",
 )
 @click.option(
+    "--controller-port",
     "--controller_port",
     type=int,
     required=False,
     default=9000,
-    help="ZMQ ports for controller communication with SLEAP.",
+    help="ZMQ port for controller communication with SLEAP.",
 )
 @click.option(
+    "--publish-port",
     "--publish_port",
     type=int,
     required=False,
     default=9001,
-    help="ZMQ ports for publish communication with SLEAP.",
+    help="ZMQ port for publish communication with SLEAP.",
 )
 @click.option(
     "--min-gpu-memory",
@@ -900,7 +1022,7 @@ def worker(api_key, room, token, working_dir, name, room_secret):
     required=False,
     help="Room secret for P2P authentication. Can also use SLEAP_ROOM_SECRET env var.",
 )
-def client_train(**kwargs):
+def train(**kwargs):
     """Run remote training on a worker.
 
     Connection modes (mutually exclusive):
@@ -908,8 +1030,9 @@ def client_train(**kwargs):
     1. Session string (direct): --session-string SESSION
        Connect directly to a specific worker using its session string.
 
-    2. Room-based discovery: --room ROOM --token TOKEN
-       Join a room and discover available workers. Supports:
+    2. Room-based discovery: --room ROOM
+       Join a room and discover available workers. Requires login first
+       (sleap-rtc login). Supports:
        - Interactive selection (default)
        - Auto-select: --auto-select
        - Direct worker: --worker-id PEER_ID
@@ -944,23 +1067,23 @@ def client_train(**kwargs):
     if has_session and has_room:
         logger.error("Connection modes are mutually exclusive. Use only one of:")
         logger.error("  --session-string (direct connection)")
-        logger.error("  --room and --token (room-based discovery)")
+        logger.error("  --room (room-based discovery)")
         sys.exit(1)
 
     if not has_session and not has_room:
         logger.error("Must provide a connection method:")
         logger.error("  --session-string SESSION (direct connection)")
-        logger.error("  --room ROOM --token TOKEN (room-based discovery)")
+        logger.error("  --room ROOM (room-based discovery, requires login)")
         sys.exit(1)
 
-    # Validation: room-id and token must be together
-    if (room_id and not token) or (token and not room_id):
-        logger.error("Both --room and --token must be provided together")
-        sys.exit(1)
+    # Room-based connection requires JWT authentication
+    jwt_token = None
+    if has_room:
+        jwt_token = require_login()
 
     # Validation: worker selection options require room-id
     if (worker_id or auto_select) and not room_id:
-        logger.error("--worker-id and --auto-select require --room and --token")
+        logger.error("--worker-id and --auto-select require --room")
         sys.exit(1)
 
     # Validation: worker-id and auto-select are mutually exclusive
@@ -979,7 +1102,8 @@ def client_train(**kwargs):
     if room_id:
         logger.info(f"Room-based connection: room_id={room_id}")
         kwargs["room_id"] = room_id
-        kwargs["token"] = token
+        kwargs["token"] = token or ""  # Token optional with JWT auth
+        kwargs["jwt_token"] = jwt_token
 
         if worker_id:
             logger.info(f"Direct worker connection: worker_id={worker_id}")
@@ -1014,7 +1138,7 @@ def client_train(**kwargs):
     )
 
 
-@cli.command(name="client-track")
+@cli.command(name="track")
 @click.option(
     "--session-string",
     "--session_string",
@@ -1025,42 +1149,48 @@ def client_train(**kwargs):
 )
 @click.option(
     "--room",
-    "--room-id",  # Alias for backward compatibility
+    "--room-id",
+    "-r",
     type=str,
     required=False,
-    help="Room ID for room-based worker discovery.",
+    help="Room ID for room-based worker discovery. Requires login (sleap-rtc login).",
 )
 @click.option(
     "--token",
+    "-t",
     type=str,
     required=False,
-    help="Room token for authentication (required with --room).",
+    help="Room token (optional with JWT auth, for backward compatibility).",
 )
 @click.option(
     "--worker-id",
+    "-w",
     type=str,
     required=False,
     help="Specific worker peer-id to connect to (skips discovery).",
 )
 @click.option(
     "--auto-select",
+    "-a",
     is_flag=True,
     default=False,
     help="Automatically select best worker by GPU memory (use with --room).",
 )
 @click.option(
+    "--data-path",
     "--data_path",
     "-d",
     type=str,
     required=True,
-    help="Path to .slp file with data for inference.",
+    help="Local path to .slp file with data for inference. File is transferred to worker.",
 )
 @click.option(
+    "--model-paths",
     "--model_paths",
     "-m",
     multiple=True,
     required=True,
-    help="Paths to trained model directories (can specify multiple times).",
+    help="Local paths to trained model directories. Directories are transferred to worker.",
 )
 @click.option(
     "--output",
@@ -1070,6 +1200,7 @@ def client_train(**kwargs):
     help="Output predictions filename.",
 )
 @click.option(
+    "--only-suggested-frames",
     "--only_suggested_frames",
     is_flag=True,
     default=True,
@@ -1089,7 +1220,7 @@ def client_train(**kwargs):
     required=False,
     help="Room secret for P2P authentication. Can also use SLEAP_ROOM_SECRET env var.",
 )
-def client_track(**kwargs):
+def track(**kwargs):
     """Run remote inference on a worker with pre-trained models.
 
     Connection modes (mutually exclusive):
@@ -1097,12 +1228,14 @@ def client_track(**kwargs):
     1. Session string (direct): --session-string SESSION
        Connect directly to a specific worker using its session string.
 
-    2. Room-based discovery: --room ROOM --token TOKEN
+    2. Room-based discovery: --room ROOM
        Join a room and discover available workers. Supports:
        - Interactive selection (default)
        - Auto-select: --auto-select
        - Direct worker: --worker-id PEER_ID
        - GPU filter: --min-gpu-memory MB
+
+    Note: Room-based discovery requires authentication. Run 'sleap-rtc login' first.
     """
     # Extract connection options
     session_string = kwargs.pop("session_string", None)
@@ -1122,23 +1255,23 @@ def client_track(**kwargs):
     if has_session and has_room:
         logger.error("Connection modes are mutually exclusive. Use only one of:")
         logger.error("  --session-string (direct connection)")
-        logger.error("  --room and --token (room-based discovery)")
+        logger.error("  --room (room-based discovery)")
         sys.exit(1)
 
     if not has_session and not has_room:
         logger.error("Must provide a connection method:")
         logger.error("  --session-string SESSION (direct connection)")
-        logger.error("  --room ROOM --token TOKEN (room-based discovery)")
+        logger.error("  --room ROOM (room-based discovery, requires login)")
         sys.exit(1)
 
-    # Validation: room-id and token must be together
-    if (room_id and not token) or (token and not room_id):
-        logger.error("Both --room and --token must be provided together")
-        sys.exit(1)
+    # Room-based connection requires JWT authentication
+    jwt_token = None
+    if has_room:
+        jwt_token = require_login()
 
     # Validation: worker selection options require room-id
     if (worker_id or auto_select) and not room_id:
-        logger.error("--worker-id and --auto-select require --room and --token")
+        logger.error("--worker-id and --auto-select require --room")
         sys.exit(1)
 
     # Validation: worker-id and auto-select are mutually exclusive
@@ -1152,7 +1285,8 @@ def client_track(**kwargs):
     if room_id:
         logger.info(f"Room-based connection: room_id={room_id}")
         kwargs["room_id"] = room_id
-        kwargs["token"] = token
+        kwargs["token"] = token or ""  # Token optional with JWT auth
+        kwargs["jwt_token"] = jwt_token
 
         if worker_id:
             logger.info(f"Direct worker connection: worker_id={worker_id}")
@@ -1178,18 +1312,101 @@ def client_track(**kwargs):
     )
 
 
-# Deprecated alias for backward compatibility
+# =============================================================================
+# Deprecated Command Aliases
+# =============================================================================
+
+
+@cli.command(name="client-train", hidden=True)
+@click.option("--session-string", "--session_string", "-s", type=str, required=False)
+@click.option("--room", "--room-id", "-r", type=str, required=False)
+@click.option("--token", "-t", type=str, required=False)
+@click.option("--worker-id", "-w", type=str, required=False)
+@click.option("--auto-select", "-a", is_flag=True, default=False)
+@click.option("--pkg-path", "--pkg_path", "-p", type=str, required=True, help="Path resolved on worker")
+@click.option("--controller-port", "--controller_port", type=int, required=False, default=9000)
+@click.option("--publish-port", "--publish_port", type=int, required=False, default=9001)
+@click.option("--min-gpu-memory", type=int, required=False, default=None)
+@click.option("--worker-path", type=str, required=False, default=None)
+@click.option("--non-interactive", is_flag=True, default=False)
+@click.option("--mount", type=str, required=False, default=None)
+@click.option("--room-secret", type=str, envvar="SLEAP_ROOM_SECRET", required=False)
+@click.pass_context
+def client_train_deprecated(ctx, **kwargs):
+    """[DEPRECATED] Use 'sleap-rtc train' instead."""
+    click.echo(
+        click.style("Warning: ", fg="yellow", bold=True)
+        + "'sleap-rtc client-train' is deprecated. Use 'sleap-rtc train' instead."
+    )
+    ctx.invoke(train, **kwargs)
+
+
 @cli.command(name="client", hidden=True)
+@click.option("--session-string", "--session_string", "-s", type=str, required=False)
+@click.option("--room", "--room-id", "-r", type=str, required=False)
+@click.option("--token", "-t", type=str, required=False)
+@click.option("--worker-id", "-w", type=str, required=False)
+@click.option("--auto-select", "-a", is_flag=True, default=False)
+@click.option("--pkg-path", "--pkg_path", "-p", type=str, required=True, help="Path resolved on worker")
+@click.option("--controller-port", "--controller_port", type=int, required=False, default=9000)
+@click.option("--publish-port", "--publish_port", type=int, required=False, default=9001)
+@click.option("--min-gpu-memory", type=int, required=False, default=None)
+@click.option("--worker-path", type=str, required=False, default=None)
+@click.option("--non-interactive", is_flag=True, default=False)
+@click.option("--mount", type=str, required=False, default=None)
+@click.option("--room-secret", type=str, envvar="SLEAP_ROOM_SECRET", required=False)
 @click.pass_context
 def client_deprecated(ctx, **kwargs):
-    """[DEPRECATED] Use 'client-train' instead."""
-    logger.warning(
-        "Warning: 'sleap-rtc client' is deprecated. Use 'sleap-rtc client-train' instead."
+    """[DEPRECATED] Use 'sleap-rtc train' instead."""
+    click.echo(
+        click.style("Warning: ", fg="yellow", bold=True)
+        + "'sleap-rtc client' is deprecated. Use 'sleap-rtc train' instead."
     )
-    ctx.invoke(client_train, **kwargs)
+    ctx.invoke(train, **kwargs)
 
 
-@cli.command(name="browse")
+@cli.command(name="client-track", hidden=True)
+@click.option("--session-string", "--session_string", "-s", type=str, required=False)
+@click.option("--room", "--room-id", "-r", type=str, required=False)
+@click.option("--token", "-t", type=str, required=False)
+@click.option("--worker-id", "-w", type=str, required=False)
+@click.option("--auto-select", "-a", is_flag=True, default=False)
+@click.option("--data-path", "--data_path", "-d", type=str, required=True, help="Local path, transferred to worker")
+@click.option("--model-paths", "--model_paths", "-m", multiple=True, required=True, help="Local paths, transferred to worker")
+@click.option("--output", "-o", type=str, default="predictions.slp")
+@click.option("--only-suggested-frames", "--only_suggested_frames", is_flag=True, default=True)
+@click.option("--min-gpu-memory", type=int, required=False, default=None)
+@click.option("--room-secret", type=str, envvar="SLEAP_ROOM_SECRET", required=False)
+@click.pass_context
+def client_track_deprecated(ctx, **kwargs):
+    """[DEPRECATED] Use 'sleap-rtc track' instead."""
+    click.echo(
+        click.style("Warning: ", fg="yellow", bold=True)
+        + "'sleap-rtc client-track' is deprecated. Use 'sleap-rtc track' instead."
+    )
+    ctx.invoke(track, **kwargs)
+
+
+# =============================================================================
+# Test Command Group (Experimental Features)
+# =============================================================================
+
+
+@cli.group()
+def test():
+    """Experimental file browser tools.
+
+    These commands provide web-based tools for browsing worker filesystems
+    and resolving file paths. They are considered experimental and may change.
+
+    Available commands:
+        browse         - Browse a worker's filesystem via web UI
+        resolve-paths  - Resolve missing video paths in SLP files
+    """
+    pass
+
+
+@test.command(name="browse")
 @click.option(
     "--room",
     "--room-id",  # Alias for backward compatibility
@@ -1202,8 +1419,8 @@ def client_deprecated(ctx, **kwargs):
     "--token",
     "-t",
     type=str,
-    required=True,
-    help="Room token for authentication (required).",
+    required=False,
+    help="Room token (optional with JWT auth, for backward compatibility).",
 )
 @click.option(
     "--port",
@@ -1225,8 +1442,10 @@ def client_deprecated(ctx, **kwargs):
     required=False,
     help="Room secret for P2P authentication. Can also use SLEAP_ROOM_SECRET env var.",
 )
-def browse(room, token, port, no_browser, room_secret):
+def test_browse(room, token, port, no_browser, room_secret):
     """Browse a Worker's filesystem via web UI.
+
+    [bold yellow]EXPERIMENTAL[/bold yellow]: This feature is under development.
 
     This command connects to a Worker in the specified room and starts
     a local web server that provides a browser-based file explorer.
@@ -1236,21 +1455,24 @@ def browse(room, token, port, no_browser, room_secret):
     - View file information (name, size, type)
     - Copy file paths for use with --worker-path
 
-    Requires JWT authentication. Run 'sleap-rtc login' first.
+    Requires authentication. Run 'sleap-rtc login' first.
 
     Examples:
 
         # Connect to a Worker and open browser
-        sleap-rtc browse --room my-room --token secret123
+        sleap-rtc test browse --room my-room
 
         # Use a different port
-        sleap-rtc browse --room my-room --token secret123 --port 9000
+        sleap-rtc test browse --room my-room --port 9000
 
         # Print URL without opening browser (for remote access)
-        sleap-rtc browse --room my-room --token secret123 --no-browser
+        sleap-rtc test browse --room my-room --no-browser
     """
     import asyncio
     from sleap_rtc.rtc_browse import run_browse_client
+
+    # Require JWT authentication (client will fetch JWT from credentials)
+    require_login()
 
     logger.info(f"Starting filesystem browser for room: {room}")
     logger.info(f"Local server will run on port: {port}")
@@ -1259,7 +1481,7 @@ def browse(room, token, port, no_browser, room_secret):
         asyncio.run(
             run_browse_client(
                 room_id=room,
-                token=token,
+                token=token or "",
                 port=port,
                 open_browser=not no_browser,
                 room_secret=room_secret,
@@ -1272,7 +1494,7 @@ def browse(room, token, port, no_browser, room_secret):
         sys.exit(1)
 
 
-@cli.command(name="resolve-paths")
+@test.command(name="resolve-paths")
 @click.option(
     "--room",
     "--room-id",  # Alias for backward compatibility
@@ -1285,8 +1507,8 @@ def browse(room, token, port, no_browser, room_secret):
     "--token",
     "-t",
     type=str,
-    required=True,
-    help="Room token for authentication (required).",
+    required=False,
+    help="Room token (optional with JWT auth, for backward compatibility).",
 )
 @click.option(
     "--slp",
@@ -1320,8 +1542,10 @@ def browse(room, token, port, no_browser, room_secret):
     default=True,
     help="Use JWT authentication (default: yes). Disable for testing.",
 )
-def resolve_paths(room, token, slp, port, no_browser, room_secret, use_jwt):
+def test_resolve_paths(room, token, slp, port, no_browser, room_secret, use_jwt):
     """Resolve missing video paths in an SLP file on a Worker.
+
+    [bold yellow]EXPERIMENTAL[/bold yellow]: This feature is under development.
 
     This command connects to a Worker and checks if the video paths in an SLP
     file are accessible. If any videos are missing, it launches a web UI that
@@ -1340,16 +1564,21 @@ def resolve_paths(room, token, slp, port, no_browser, room_secret, use_jwt):
     Examples:
 
         # Check video paths in an SLP file
-        sleap-rtc resolve-paths --room my-room --token secret123 --slp /mnt/data/project.slp
+        sleap-rtc test resolve-paths --room my-room --slp /mnt/data/project.slp
 
         # Use a different port
-        sleap-rtc resolve-paths -r my-room -t secret123 -s /mnt/data/project.slp -p 9000
+        sleap-rtc test resolve-paths -r my-room -s /mnt/data/project.slp -p 9000
 
         # Print URL without opening browser
-        sleap-rtc resolve-paths -r my-room -t secret123 -s /mnt/data/project.slp --no-browser
+        sleap-rtc test resolve-paths -r my-room -s /mnt/data/project.slp --no-browser
     """
     import asyncio
     from sleap_rtc.rtc_resolve import run_resolve_client
+
+    # Require JWT authentication (unless --no-jwt for testing)
+    # The client will fetch JWT from credentials internally
+    if use_jwt:
+        require_login()
 
     logger.info(f"Starting video path resolution for: {slp}")
     logger.info(f"Connecting to room: {room}")
@@ -1358,7 +1587,7 @@ def resolve_paths(room, token, slp, port, no_browser, room_secret, use_jwt):
         result = asyncio.run(
             run_resolve_client(
                 room_id=room,
-                token=token,
+                token=token or "",
                 slp_path=slp,
                 port=port,
                 open_browser=not no_browser,
@@ -1375,6 +1604,311 @@ def resolve_paths(room, token, slp, port, no_browser, room_secret, use_jwt):
     except Exception as e:
         logger.error(f"Resolution error: {e}")
         sys.exit(1)
+
+
+# =============================================================================
+# Utility Commands
+# =============================================================================
+
+
+@cli.command(name="tui")
+@click.option(
+    "--room",
+    "--room-id",
+    "-r",
+    type=str,
+    required=False,
+    help="Room ID to connect to directly (bypasses room selection).",
+)
+@click.option(
+    "--room-secret",
+    type=str,
+    envvar="SLEAP_ROOM_SECRET",
+    required=False,
+    help="Room secret for P2P authentication. Can also use SLEAP_ROOM_SECRET env var.",
+)
+def tui(room, room_secret):
+    """Launch the interactive TUI file browser.
+
+    The TUI (Text User Interface) provides an interactive way to:
+    - Log in to SLEAP-RTC (if not already logged in)
+    - Select from rooms you have access to
+    - Browse worker filesystems with Miller columns navigation
+    - Resolve video paths in SLP files
+
+    If you provide --room, it will connect directly to that room,
+    bypassing the room selection screen.
+
+    Examples:
+
+        # Launch TUI with room selection
+        sleap-rtc tui
+
+        # Connect directly to a specific room
+        sleap-rtc tui --room my-room
+
+        # Connect with a room secret for P2P auth
+        sleap-rtc tui --room my-room --room-secret SECRET
+    """
+    from sleap_rtc.tui.app import TUIApp
+
+    app = TUIApp(
+        room_id=room,
+        room_secret=room_secret,
+    )
+    app.run()
+
+
+@cli.command(name="status")
+def status():
+    """Display current authentication and configuration status.
+
+    Shows:
+    - Current login status and user info
+    - JWT token expiration
+    - Saved room secrets
+    - Credential file location
+    - API tokens (if any)
+
+    Example:
+        sleap-rtc status
+    """
+    from sleap_rtc.auth.credentials import (
+        get_credentials,
+        get_jwt,
+        get_user,
+        is_logged_in,
+        CREDENTIALS_PATH,
+    )
+
+    click.echo("")
+    click.echo(click.style("SLEAP-RTC Status", bold=True))
+    click.echo("=" * 40)
+
+    # Login status
+    click.echo("")
+    click.echo(click.style("Authentication:", bold=True))
+    if is_logged_in():
+        user = get_user()
+        click.echo(f"  Status:   {click.style('Logged in', fg='green')}")
+        click.echo(f"  Username: {user.get('username', 'unknown')}")
+        click.echo(f"  User ID:  {user.get('user_id', user.get('id', 'unknown'))}")
+
+        # JWT expiry
+        jwt_token = get_jwt()
+        if jwt_token:
+            try:
+                import jwt
+                claims = jwt.decode(jwt_token, options={"verify_signature": False})
+                exp = claims.get("exp")
+                if exp:
+                    from datetime import datetime
+                    exp_dt = datetime.fromtimestamp(exp)
+                    now = datetime.now()
+                    if exp_dt > now:
+                        remaining = exp_dt - now
+                        hours = remaining.total_seconds() / 3600
+                        click.echo(f"  JWT expires: {exp_dt.strftime('%Y-%m-%d %H:%M')} ({hours:.1f}h remaining)")
+                    else:
+                        click.echo(f"  JWT expires: {click.style('EXPIRED', fg='red')}")
+            except Exception:
+                pass
+    else:
+        click.echo(f"  Status: {click.style('Not logged in', fg='yellow')}")
+        click.echo("  Run 'sleap-rtc login' to authenticate")
+
+    # Credential file
+    click.echo("")
+    click.echo(click.style("Credentials File:", bold=True))
+    click.echo(f"  Location: {CREDENTIALS_PATH}")
+    if CREDENTIALS_PATH.exists():
+        click.echo(f"  Status:   {click.style('exists', fg='green')}")
+    else:
+        click.echo(f"  Status:   {click.style('not found', fg='yellow')}")
+
+    # Room secrets
+    creds = get_credentials()
+    room_secrets = creds.get("room_secrets", {})
+    click.echo("")
+    click.echo(click.style("Room Secrets:", bold=True))
+    if room_secrets:
+        for room_id, secret in room_secrets.items():
+            masked = secret[:4] + "..." + secret[-4:] if len(secret) > 8 else "****"
+            click.echo(f"  {room_id}: {masked}")
+    else:
+        click.echo("  No room secrets saved")
+
+    # API tokens
+    tokens = creds.get("tokens", {})
+    click.echo("")
+    click.echo(click.style("API Tokens:", bold=True))
+    if tokens:
+        for room_id, token_info in tokens.items():
+            name = token_info.get("worker_name", "unknown")
+            api_key = token_info.get("api_key", "")
+            masked_key = api_key[:8] + "..." if len(api_key) > 8 else api_key
+            click.echo(f"  {room_id}: {name} ({masked_key})")
+    else:
+        click.echo("  No API tokens saved")
+
+    click.echo("")
+
+
+@cli.command(name="doctor")
+def doctor():
+    """Check system configuration and connectivity.
+
+    Runs diagnostic checks to verify:
+    - Python version and environment
+    - Required dependencies
+    - Network connectivity to signaling server
+    - Credential file permissions
+    - Configuration file status
+
+    Use this command to troubleshoot connection issues.
+
+    Example:
+        sleap-rtc doctor
+    """
+    import platform
+
+    click.echo("")
+    click.echo(click.style("SLEAP-RTC Doctor", bold=True))
+    click.echo("=" * 40)
+
+    all_ok = True
+
+    # Python version
+    click.echo("")
+    click.echo(click.style("Python Environment:", bold=True))
+    py_version = platform.python_version()
+    py_major, py_minor = map(int, py_version.split(".")[:2])
+    if py_major >= 3 and py_minor >= 11:
+        click.echo(f"  Python version: {py_version} {click.style('✓', fg='green')}")
+    else:
+        click.echo(f"  Python version: {py_version} {click.style('✗ (requires 3.11+)', fg='red')}")
+        all_ok = False
+
+    click.echo(f"  Platform: {platform.system()} {platform.release()}")
+
+    # Check key dependencies
+    click.echo("")
+    click.echo(click.style("Dependencies:", bold=True))
+    deps_to_check = ["aiortc", "websockets", "textual", "rich_click", "requests"]
+    for dep in deps_to_check:
+        try:
+            __import__(dep.replace("-", "_"))
+            click.echo(f"  {dep}: {click.style('✓', fg='green')}")
+        except ImportError:
+            click.echo(f"  {dep}: {click.style('✗ missing', fg='red')}")
+            all_ok = False
+
+    # Network connectivity
+    click.echo("")
+    click.echo(click.style("Network Connectivity:", bold=True))
+    from sleap_rtc.config import get_config
+    config = get_config()
+    server_url = config.get_http_url()
+    click.echo(f"  Signaling server: {server_url}")
+
+    try:
+        response = requests.get(f"{server_url}/health", timeout=10)
+        if response.status_code == 200:
+            click.echo(f"  Health check: {click.style('✓ reachable', fg='green')}")
+        else:
+            click.echo(f"  Health check: {click.style(f'✗ HTTP {response.status_code}', fg='yellow')}")
+            all_ok = False
+    except requests.exceptions.Timeout:
+        click.echo(f"  Health check: {click.style('✗ timeout', fg='red')}")
+        all_ok = False
+    except requests.exceptions.ConnectionError:
+        click.echo(f"  Health check: {click.style('✗ connection failed', fg='red')}")
+        all_ok = False
+    except Exception as e:
+        click.echo(f"  Health check: {click.style(f'✗ {e}', fg='red')}")
+        all_ok = False
+
+    # Credential file
+    click.echo("")
+    click.echo(click.style("Credentials:", bold=True))
+    from sleap_rtc.auth.credentials import CREDENTIALS_PATH, is_logged_in
+    click.echo(f"  File: {CREDENTIALS_PATH}")
+
+    if CREDENTIALS_PATH.exists():
+        click.echo(f"  Exists: {click.style('✓', fg='green')}")
+        # Check permissions
+        import stat
+        file_stat = CREDENTIALS_PATH.stat()
+        mode = file_stat.st_mode
+        if mode & stat.S_IRWXO:  # Others have any permissions
+            click.echo(f"  Permissions: {click.style('✗ world-readable (insecure)', fg='yellow')}")
+        else:
+            click.echo(f"  Permissions: {click.style('✓ secure', fg='green')}")
+
+        if is_logged_in():
+            click.echo(f"  Logged in: {click.style('✓', fg='green')}")
+        else:
+            click.echo(f"  Logged in: {click.style('✗ no valid JWT', fg='yellow')}")
+    else:
+        click.echo(f"  Exists: {click.style('✗ not found', fg='yellow')}")
+        click.echo("  Run 'sleap-rtc login' to create credentials")
+
+    # Config file
+    click.echo("")
+    click.echo(click.style("Configuration:", bold=True))
+    config_file = Path("sleap-rtc.toml")
+    if config_file.exists():
+        click.echo(f"  Config file: {config_file.absolute()} {click.style('✓', fg='green')}")
+    else:
+        click.echo(f"  Config file: {click.style('using defaults', fg='cyan')}")
+
+    # Summary
+    click.echo("")
+    click.echo("=" * 40)
+    if all_ok:
+        click.echo(click.style("All checks passed! ✓", fg="green", bold=True))
+    else:
+        click.echo(click.style("Some checks failed. Review above.", fg="yellow", bold=True))
+    click.echo("")
+
+
+# =============================================================================
+# Deprecated Top-Level Aliases for Test Commands
+# =============================================================================
+
+
+@cli.command(name="browse", hidden=True)
+@click.option("--room", "--room-id", "-r", type=str, required=True)
+@click.option("--token", "-t", type=str, required=False)
+@click.option("--port", "-p", type=int, default=8765)
+@click.option("--no-browser", is_flag=True, default=False)
+@click.option("--room-secret", type=str, envvar="SLEAP_ROOM_SECRET", required=False)
+@click.pass_context
+def browse_deprecated(ctx, **kwargs):
+    """[DEPRECATED] Use 'sleap-rtc test browse' instead."""
+    click.echo(
+        click.style("Warning: ", fg="yellow", bold=True)
+        + "'sleap-rtc browse' is deprecated. Use 'sleap-rtc test browse' instead."
+    )
+    ctx.invoke(test_browse, **kwargs)
+
+
+@cli.command(name="resolve-paths", hidden=True)
+@click.option("--room", "--room-id", "-r", type=str, required=True)
+@click.option("--token", "-t", type=str, required=False)
+@click.option("--slp", "-s", type=str, required=True)
+@click.option("--port", "-p", type=int, default=8765)
+@click.option("--no-browser", is_flag=True, default=False)
+@click.option("--room-secret", type=str, envvar="SLEAP_ROOM_SECRET", required=False)
+@click.option("--use-jwt/--no-jwt", default=True)
+@click.pass_context
+def resolve_paths_deprecated(ctx, **kwargs):
+    """[DEPRECATED] Use 'sleap-rtc test resolve-paths' instead."""
+    click.echo(
+        click.style("Warning: ", fg="yellow", bold=True)
+        + "'sleap-rtc resolve-paths' is deprecated. Use 'sleap-rtc test resolve-paths' instead."
+    )
+    ctx.invoke(test_resolve_paths, **kwargs)
 
 
 if __name__ == "__main__":
