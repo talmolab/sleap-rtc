@@ -115,9 +115,9 @@ class RoomSelectScreen(Screen):
         ("r", "refresh", "Refresh"),
     ]
 
-    # Reactive properties
-    loading = reactive(True)
-    error_message = reactive("")
+    # Reactive properties (init=False to prevent watchers firing before mount)
+    loading = reactive(True, init=False)
+    error_message = reactive("", init=False)
 
     def __init__(
         self,
@@ -156,21 +156,27 @@ class RoomSelectScreen(Screen):
 
     def watch_loading(self, loading: bool) -> None:
         """Update UI when loading state changes."""
-        status = self.query_one("#status", Static)
-        if loading:
-            status.update("Loading rooms...")
-            status.display = True
-        else:
-            status.display = False
+        try:
+            status = self.query_one("#status", Static)
+            if loading:
+                status.update("Loading rooms...")
+                status.display = True
+            else:
+                status.display = False
+        except Exception:
+            pass  # Widget not mounted yet
 
     def watch_error_message(self, message: str) -> None:
         """Update error display."""
-        error = self.query_one("#error", Static)
-        if message:
-            error.update(f"Error: {message}")
-            error.display = True
-        else:
-            error.display = False
+        try:
+            error = self.query_one("#error", Static)
+            if message:
+                error.update(f"Error: {message}")
+                error.display = True
+            else:
+                error.display = False
+        except Exception:
+            pass  # Widget not mounted yet
 
     def fetch_rooms(self) -> None:
         """Fetch rooms from API."""

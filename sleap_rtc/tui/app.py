@@ -88,31 +88,27 @@ class TUIApp(App):
         def on_login_success(jwt: str, user: dict) -> None:
             """Called when login succeeds."""
             self.notify(f"Logged in as {user.get('username', 'unknown')}")
-            # After login, show room selection
-            self._show_room_select()
+            # After login, switch to room selection
+            # Use switch_screen for clean transition (pops current, pushes new)
+            self.switch_screen(RoomSelectScreen(on_room_selected=self._on_room_selected))
 
         login_screen = LoginScreen(on_login_success=on_login_success)
         self.push_screen(login_screen)
 
+    def _on_room_selected(self, room_data: dict) -> None:
+        """Handle room selection from RoomSelectScreen."""
+        room_id = room_data.get("room_id")
+        token = room_data.get("token", "")
+
+        # Resolve room_secret from credentials/env/filesystem
+        from sleap_rtc.auth.secret_resolver import resolve_secret
+        room_secret = resolve_secret(room_id)
+
+        self._show_browser(room_id, token, room_secret=room_secret)
+
     def _show_room_select(self) -> None:
         """Show the room selection screen."""
-        def on_room_selected(room_data: dict) -> None:
-            """Called when a room is selected."""
-            room_id = room_data.get("room_id")
-
-            # For JWT auth, the server validates room access via membership,
-            # not via room token. The token field is ignored by the server
-            # when JWT is present. We pass an empty string for compatibility.
-            # The room_data may include a token if the user owns the room,
-            # but it's not required for connection.
-            token = room_data.get("token", "")
-
-            # Pass room_secret for PSK authentication
-            # Note: room_secret from CLI only applies when room_id is specified directly
-            # When using room selection, secret is resolved from credentials/env/filesystem
-            self._show_browser(room_id, token, room_secret=None)
-
-        room_screen = RoomSelectScreen(on_room_selected=on_room_selected)
+        room_screen = RoomSelectScreen(on_room_selected=self._on_room_selected)
         self.push_screen(room_screen)
 
     def _show_browser(

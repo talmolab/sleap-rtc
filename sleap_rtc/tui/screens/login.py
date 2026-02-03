@@ -105,8 +105,8 @@ class LoginScreen(Screen):
     ]
 
     # Reactive properties
-    remaining_time = reactive(DEFAULT_TIMEOUT)
-    status_message = reactive("Waiting for login...")
+    remaining_time = reactive(DEFAULT_TIMEOUT, init=False)
+    status_message = reactive("Waiting for login...", init=False)
 
     def __init__(
         self,
@@ -189,16 +189,22 @@ class LoginScreen(Screen):
 
     def watch_remaining_time(self, time: int) -> None:
         """Update countdown display when time changes."""
-        countdown = self.query_one("#countdown", Static)
-        if time > 0:
-            countdown.update(f"Time remaining: {time}s")
-        else:
-            countdown.update("Login timed out")
+        try:
+            countdown = self.query_one("#countdown", Static)
+            if time > 0:
+                countdown.update(f"Time remaining: {time}s")
+            else:
+                countdown.update("Login timed out")
+        except Exception:
+            pass  # Widget not mounted yet
 
     def watch_status_message(self, message: str) -> None:
         """Update status display when message changes."""
-        status = self.query_one("#status", Static)
-        status.update(message)
+        try:
+            status = self.query_one("#status", Static)
+            status.update(message)
+        except Exception:
+            pass  # Widget not mounted yet
 
     async def _poll_for_jwt(self) -> None:
         """Poll signaling server for JWT."""
@@ -231,12 +237,13 @@ class LoginScreen(Screen):
                         from sleap_rtc.auth.credentials import save_jwt
                         save_jwt(data["jwt"], data["user"])
 
-                        # Notify success
+                        # Notify success and let callback handle navigation
                         if self.on_login_success:
                             self.on_login_success(data["jwt"], data["user"])
-
-                        # Dismiss this screen
-                        self.app.pop_screen()
+                            # Don't pop here - callback handles navigation
+                        else:
+                            # No callback, just dismiss
+                            self.app.pop_screen()
                         return
 
             except requests.RequestException:
