@@ -474,6 +474,136 @@ def token_revoke(token_id, yes):
         sys.exit(1)
 
 
+@token.command(name="delete")
+@click.argument("token_id")
+@click.option("--yes", "-y", is_flag=True, help="Skip confirmation prompt.")
+def token_delete(token_id, yes):
+    """Permanently delete a revoked or expired token.
+
+    Only inactive tokens (revoked or expired) can be deleted.
+    Active tokens must be revoked first using 'sleap-rtc token revoke'.
+
+    Example:
+        sleap-rtc token delete slp_abc123...
+    """
+    from sleap_rtc.auth.credentials import get_jwt
+    from sleap_rtc.config import get_config
+
+    jwt_token = get_jwt()
+    if not jwt_token:
+        logger.error("Not logged in. Run: sleap-rtc login")
+        sys.exit(1)
+
+    if not yes:
+        if not click.confirm(f"Permanently delete token {token_id[:20]}...? This cannot be undone."):
+            click.echo("Cancelled")
+            return
+
+    config = get_config()
+    endpoint = f"{config.get_http_url()}/api/auth/tokens/{token_id}"
+
+    try:
+        response = requests.delete(
+            endpoint,
+            headers={"Authorization": f"Bearer {jwt_token}"},
+            timeout=30,
+        )
+
+        if response.status_code != 200:
+            error = response.json().get("detail", response.text)
+            logger.error(f"Failed to delete token: {error}")
+            sys.exit(1)
+
+        click.echo("Token deleted permanently")
+
+    except requests.RequestException as e:
+        logger.error(f"Request failed: {e}")
+        sys.exit(1)
+
+
+@token.command(name="cleanup")
+@click.option("--room", "-r", help="Filter by room ID (delete only tokens for this room).")
+@click.option("--yes", "-y", is_flag=True, help="Skip confirmation prompt.")
+def token_cleanup(room, yes):
+    """Delete all revoked and expired tokens.
+
+    Permanently removes all inactive tokens to clean up your token list.
+    Only deletes tokens you created or tokens for rooms you own.
+
+    Examples:
+        sleap-rtc token cleanup
+        sleap-rtc token cleanup --room abc123
+        sleap-rtc token cleanup --yes
+    """
+    from sleap_rtc.auth.credentials import get_jwt
+    from sleap_rtc.config import get_config
+
+    jwt_token = get_jwt()
+    if not jwt_token:
+        logger.error("Not logged in. Run: sleap-rtc login")
+        sys.exit(1)
+
+    config = get_config()
+
+    # First, count inactive tokens
+    list_endpoint = f"{config.get_http_url()}/api/auth/tokens"
+    try:
+        response = requests.get(
+            list_endpoint,
+            headers={"Authorization": f"Bearer {jwt_token}"},
+            params={"room_id": room} if room else {},
+            timeout=30,
+        )
+        if response.status_code != 200:
+            logger.error("Failed to fetch tokens")
+            sys.exit(1)
+
+        tokens = response.json().get("tokens", [])
+        inactive_tokens = [t for t in tokens if not t.get("is_active")]
+
+        if not inactive_tokens:
+            click.echo("No inactive tokens to delete.")
+            return
+
+        click.echo(f"Found {len(inactive_tokens)} inactive token(s) to delete:")
+        for t in inactive_tokens[:5]:  # Show first 5
+            status = "revoked" if t.get("revoked_at") else "expired"
+            click.echo(f"  - {t['worker_name']} ({status})")
+        if len(inactive_tokens) > 5:
+            click.echo(f"  ... and {len(inactive_tokens) - 5} more")
+
+    except requests.RequestException as e:
+        logger.error(f"Request failed: {e}")
+        sys.exit(1)
+
+    if not yes:
+        if not click.confirm(f"Delete {len(inactive_tokens)} inactive token(s)? This cannot be undone."):
+            click.echo("Cancelled")
+            return
+
+    # Delete all inactive tokens
+    delete_endpoint = f"{config.get_http_url()}/api/auth/tokens"
+    try:
+        response = requests.delete(
+            delete_endpoint,
+            headers={"Authorization": f"Bearer {jwt_token}"},
+            params={"room_id": room} if room else {},
+            timeout=30,
+        )
+
+        if response.status_code != 200:
+            error = response.json().get("detail", response.text)
+            logger.error(f"Failed to delete tokens: {error}")
+            sys.exit(1)
+
+        deleted_count = response.json().get("deleted_count", 0)
+        click.echo(f"Deleted {deleted_count} inactive token(s)")
+
+    except requests.RequestException as e:
+        logger.error(f"Request failed: {e}")
+        sys.exit(1)
+
+
 # =============================================================================
 # Room Commands (subgroup)
 # =============================================================================
