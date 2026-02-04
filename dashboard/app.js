@@ -247,6 +247,9 @@ class SleapRTCDashboard {
         document.getElementById('create-token-btn')?.addEventListener('click', () => this.showCreateTokenModal());
         document.getElementById('create-token-form')?.addEventListener('submit', (e) => this.handleCreateToken(e));
 
+        // Settings button
+        document.getElementById('settings-btn')?.addEventListener('click', () => this.showModal('settings-modal'));
+
         // Modal close buttons
         document.querySelectorAll('[data-close-modal]').forEach(btn => {
             btn.addEventListener('click', (e) => {
@@ -343,6 +346,12 @@ class SleapRTCDashboard {
     }
 
     showModal(modalId) {
+        // Populate settings modal with user info
+        if (modalId === 'settings-modal' && this.user) {
+            document.getElementById('settings-username').textContent = this.user.username || '-';
+            document.getElementById('settings-user-id').textContent = this.user.id || '-';
+        }
+
         document.getElementById(modalId)?.classList.remove('hidden');
         // Refresh Lucide icons in modal
         if (typeof lucide !== 'undefined') {
@@ -352,6 +361,46 @@ class SleapRTCDashboard {
 
     hideModal(modalId) {
         document.getElementById(modalId)?.classList.add('hidden');
+    }
+
+    /**
+     * Show a confirmation modal and return a Promise that resolves to true if confirmed
+     * @param {string} title - The title of the confirmation dialog
+     * @param {string} message - The message to display
+     * @param {string} confirmText - The text for the confirm button (default: "Delete")
+     * @returns {Promise<boolean>} - Resolves to true if confirmed, false if cancelled
+     */
+    showConfirmModal(title, message, confirmText = 'Delete') {
+        return new Promise((resolve) => {
+            const modal = document.getElementById('confirm-modal');
+            document.getElementById('confirm-title').textContent = title;
+            document.getElementById('confirm-message').textContent = message;
+            document.getElementById('confirm-ok').textContent = confirmText;
+
+            const handleConfirm = () => {
+                cleanup();
+                resolve(true);
+            };
+
+            const handleCancel = () => {
+                cleanup();
+                resolve(false);
+            };
+
+            const cleanup = () => {
+                modal.classList.add('hidden');
+                document.getElementById('confirm-ok').removeEventListener('click', handleConfirm);
+                document.getElementById('confirm-cancel').removeEventListener('click', handleCancel);
+            };
+
+            document.getElementById('confirm-ok').addEventListener('click', handleConfirm);
+            document.getElementById('confirm-cancel').addEventListener('click', handleCancel);
+
+            modal.classList.remove('hidden');
+            if (typeof lucide !== 'undefined') {
+                lucide.createIcons();
+            }
+        });
     }
 
     showToast(message, type = 'success') {
@@ -578,47 +627,119 @@ class SleapRTCDashboard {
             return;
         }
 
-        container.innerHTML = this.rooms.map(room => {
-            // Check if room is expiring soon (< 3 days)
-            const isExpiringSoon = room.expires_at &&
-                new Date(room.expires_at) - new Date() < 3 * 24 * 60 * 60 * 1000 &&
-                new Date(room.expires_at) > new Date();
-            const isExpired = room.expires_at && new Date(room.expires_at) < new Date();
+        // Separate rooms into active and expired
+        const now = new Date();
+        const activeRooms = this.rooms.filter(room => !room.expires_at || new Date(room.expires_at) > now);
+        const expiredRooms = this.rooms.filter(room => room.expires_at && new Date(room.expires_at) <= now);
 
-            return `
-            <div class="room-card ${isExpired ? 'expired' : ''} ${isExpiringSoon ? 'expiring-soon' : ''}">
-                <div class="room-header">
-                    <div class="room-main">
-                        <div class="room-icon">
-                            <i data-lucide="home"></i>
-                        </div>
-                        <div class="room-info">
-                            <h3>${room.name || 'Unnamed Room'}</h3>
-                            <div class="room-meta">
+        // Check if expired section should be expanded (from localStorage)
+        const expiredExpanded = localStorage.getItem('sleap_expired_rooms_expanded') === 'true';
+
+        let html = '';
+
+        // Active rooms section
+        if (activeRooms.length > 0) {
+            html += `<div class="rooms-section-header">
+                <h3>Active Rooms (${activeRooms.length})</h3>
+            </div>`;
+            html += activeRooms.map(room => this.renderRoomCard(room)).join('');
+        }
+
+        // Create Room button at the bottom of active section
+        html += `
+            <div class="create-item-row">
+                <button class="btn btn-secondary btn-create-inline" onclick="app.showModal('create-room-modal')">
+                    <i data-lucide="plus"></i>
+                    Create Room
+                </button>
+            </div>`;
+
+        // Expired rooms section (collapsible)
+        if (expiredRooms.length > 0) {
+            html += `
+            <div class="rooms-section-header inactive-section ${expiredExpanded ? 'expanded' : ''}" onclick="app.toggleExpiredRoomsSection(this)">
+                <div class="section-toggle">
+                    <i data-lucide="${expiredExpanded ? 'chevron-down' : 'chevron-right'}"></i>
+                    <h3>Expired Rooms (${expiredRooms.length})</h3>
+                </div>
+                <button class="btn btn-danger btn-sm" onclick="event.stopPropagation(); app.handleDeleteAllExpiredRooms()">
+                    <i data-lucide="trash-2"></i>
+                    Delete All
+                </button>
+            </div>
+            <div class="expired-rooms-list" style="display: ${expiredExpanded ? 'block' : 'none'};">
+                ${expiredRooms.map(room => this.renderRoomCard(room, true)).join('')}
+            </div>`;
+        }
+
+        // If no active rooms but there are expired ones, show a message
+        if (activeRooms.length === 0 && expiredRooms.length > 0) {
+            html = `
+            <div class="empty-state" style="padding: 40px 20px;">
+                <div class="empty-icon">
+                    <i data-lucide="home"></i>
+                </div>
+                <h3>No active rooms</h3>
+                <p>All your rooms have expired. Create a new room or delete the expired ones.</p>
+                <button class="btn btn-primary" onclick="app.showModal('create-room-modal')">
+                    <i data-lucide="plus"></i>
+                    Create Room
+                </button>
+            </div>` + html;
+        }
+
+        container.innerHTML = html;
+
+        // Initialize Lucide icons
+        if (typeof lucide !== 'undefined') {
+            lucide.createIcons();
+        }
+    }
+
+    renderRoomCard(room, isExpired = false) {
+        // Check if room is expiring soon (< 3 days)
+        const isExpiringSoon = room.expires_at &&
+            new Date(room.expires_at) - new Date() < 3 * 24 * 60 * 60 * 1000 &&
+            new Date(room.expires_at) > new Date();
+        if (!isExpired) {
+            isExpired = room.expires_at && new Date(room.expires_at) < new Date();
+        }
+
+        return `
+        <div class="room-card ${isExpired ? 'expired inactive' : ''} ${isExpiringSoon ? 'expiring-soon' : ''}">
+            <div class="room-header">
+                <div class="room-main">
+                    <div class="room-icon" ${isExpired ? 'style="opacity: 0.5;"' : ''}>
+                        <i data-lucide="home"></i>
+                    </div>
+                    <div class="room-info">
+                        <h3>${room.name || 'Unnamed Room'}</h3>
+                        <div class="room-meta">
+                            <span class="room-meta-item">
+                                <i data-lucide="hash"></i>
+                                ${room.room_id}
+                            </span>
+                            <span class="room-meta-item" title="${formatExactDate(room.joined_at)}">
+                                <i data-lucide="calendar"></i>
+                                Joined ${formatRelativeTime(room.joined_at)}
+                            </span>
+                            ${room.expires_at ? `
+                                <span class="room-meta-item ${isExpiringSoon ? 'warning' : ''} ${isExpired ? 'error' : ''}" title="${formatExactDate(room.expires_at)}">
+                                    <i data-lucide="${isExpiringSoon || isExpired ? 'alert-triangle' : 'clock'}"></i>
+                                    ${isExpired ? 'Expired' : `Expires ${formatRelativeTime(room.expires_at)}`}
+                                </span>
+                            ` : `
                                 <span class="room-meta-item">
-                                    <i data-lucide="hash"></i>
-                                    ${room.room_id}
+                                    <i data-lucide="infinity"></i>
+                                    Never expires
                                 </span>
-                                <span class="room-meta-item" title="${formatExactDate(room.joined_at)}">
-                                    <i data-lucide="calendar"></i>
-                                    Joined ${formatRelativeTime(room.joined_at)}
-                                </span>
-                                ${room.expires_at ? `
-                                    <span class="room-meta-item ${isExpiringSoon ? 'warning' : ''} ${isExpired ? 'error' : ''}" title="${formatExactDate(room.expires_at)}">
-                                        <i data-lucide="${isExpiringSoon || isExpired ? 'alert-triangle' : 'clock'}"></i>
-                                        ${isExpired ? 'Expired' : `Expires ${formatRelativeTime(room.expires_at)}`}
-                                    </span>
-                                ` : `
-                                    <span class="room-meta-item">
-                                        <i data-lucide="infinity"></i>
-                                        Never expires
-                                    </span>
-                                `}
-                            </div>
+                            `}
                         </div>
                     </div>
-                    <div class="room-actions">
-                        <span class="role-badge ${room.role}">${room.role}</span>
+                </div>
+                <div class="room-actions">
+                    <span class="role-badge ${room.role}">${room.role}</span>
+                    ${!isExpired ? `
                         <button class="btn btn-secondary btn-sm" onclick="app.handleViewRoom('${room.room_id}')">
                             <i data-lucide="eye"></i>
                             View
@@ -637,15 +758,16 @@ class SleapRTCDashboard {
                                 Delete
                             </button>
                         ` : ''}
-                    </div>
+                    ` : `
+                        <button class="btn btn-danger btn-sm" onclick="app.handleDeleteRoom('${room.room_id}', '${this.escapeHtml(room.name || room.room_id)}')">
+                            <i data-lucide="trash-2"></i>
+                            Delete
+                        </button>
+                    `}
                 </div>
             </div>
-        `}).join('');
-
-        // Initialize Lucide icons
-        if (typeof lucide !== 'undefined') {
-            lucide.createIcons();
-        }
+        </div>
+        `;
     }
 
     escapeHtml(text) {
@@ -753,9 +875,12 @@ class SleapRTCDashboard {
     }
 
     async handleDeleteRoom(roomId, roomName) {
-        if (!confirm(`Are you sure you want to delete room "${roomName}"?\n\nThis will also delete all worker tokens and memberships for this room. This action cannot be undone.`)) {
-            return;
-        }
+        const confirmed = await this.showConfirmModal(
+            'Delete Room',
+            `Are you sure you want to delete "${roomName}"? This will also delete all worker tokens and memberships. This action cannot be undone.`
+        );
+
+        if (!confirmed) return;
 
         try {
             await this.apiRequest(`/api/auth/rooms/${roomId}`, {
@@ -919,6 +1044,15 @@ class SleapRTCDashboard {
             html += activeTokens.map(token => this.renderTokenCard(token, false)).join('');
         }
 
+        // Create Token button at the bottom of active section
+        html += `
+            <div class="create-item-row">
+                <button class="btn btn-secondary btn-create-inline" onclick="app.showCreateTokenModal()">
+                    <i data-lucide="plus"></i>
+                    Create Token
+                </button>
+            </div>`;
+
         // Inactive tokens section (collapsible)
         if (inactiveTokens.length > 0) {
             html += `
@@ -1073,10 +1207,53 @@ class SleapRTCDashboard {
         }
     }
 
-    async handleDeleteToken(tokenId, workerName) {
-        if (!confirm(`Permanently delete token "${workerName}"?\n\nThis cannot be undone.`)) {
-            return;
+    toggleExpiredRoomsSection(header) {
+        const isExpanded = header.classList.toggle('expanded');
+        const list = header.nextElementSibling;
+
+        list.style.display = isExpanded ? 'block' : 'none';
+        localStorage.setItem('sleap_expired_rooms_expanded', isExpanded);
+
+        // Re-render to update chevron icon
+        if (typeof lucide !== 'undefined') {
+            lucide.createIcons();
         }
+    }
+
+    async handleDeleteAllExpiredRooms() {
+        const expiredRooms = this.rooms.filter(room => room.expires_at && new Date(room.expires_at) < new Date());
+
+        const confirmed = await this.showConfirmModal(
+            'Delete All Expired Rooms',
+            `Delete all ${expiredRooms.length} expired rooms? This will also delete all associated tokens and memberships.`
+        );
+
+        if (!confirmed) return;
+
+        try {
+            // Delete each expired room
+            for (const room of expiredRooms) {
+                await this.apiRequest(`/api/auth/rooms/${room.room_id}`, {
+                    method: 'DELETE',
+                });
+            }
+
+            this.showToast(`Deleted ${expiredRooms.length} expired room(s)`);
+            this.loadRooms();
+
+        } catch (e) {
+            console.error('Failed to delete expired rooms:', e);
+            this.showToast(e.message, 'error');
+        }
+    }
+
+    async handleDeleteToken(tokenId, workerName) {
+        const confirmed = await this.showConfirmModal(
+            'Delete Token',
+            `Permanently delete token "${workerName}"? This cannot be undone.`
+        );
+
+        if (!confirmed) return;
 
         try {
             await this.apiRequest(`/api/auth/tokens/${tokenId}`, {
@@ -1095,9 +1272,12 @@ class SleapRTCDashboard {
     async handleDeleteAllInactive() {
         const inactiveCount = this.tokens.filter(t => !t.is_active).length;
 
-        if (!confirm(`Delete all ${inactiveCount} inactive tokens?\n\nThis will permanently remove all revoked and expired tokens. This cannot be undone.`)) {
-            return;
-        }
+        const confirmed = await this.showConfirmModal(
+            'Delete All Inactive Tokens',
+            `Delete all ${inactiveCount} inactive tokens? This will permanently remove all revoked and expired tokens.`
+        );
+
+        if (!confirmed) return;
 
         try {
             const result = await this.apiRequest('/api/auth/tokens', {
@@ -1223,9 +1403,13 @@ class SleapRTCDashboard {
     }
 
     async handleRevokeToken(tokenId) {
-        if (!confirm('Are you sure you want to revoke this token? Workers using it will no longer be able to connect.')) {
-            return;
-        }
+        const confirmed = await this.showConfirmModal(
+            'Revoke Token',
+            'Are you sure you want to revoke this token? Workers using it will no longer be able to connect.',
+            'Revoke'
+        );
+
+        if (!confirmed) return;
 
         try {
             await this.apiRequest(`/api/auth/token/${tokenId}`, {
