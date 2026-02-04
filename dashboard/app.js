@@ -1564,18 +1564,18 @@ class SleapRTCDashboard {
             content.innerHTML = `
                 <div class="success-details">
                     <p>This room has a P2P authentication secret configured.</p>
-                    <p class="security-note"><i data-lucide="shield-check"></i> This secret is stored only in your browser. The server never sees it.</p>
-                    <div class="detail-row">
-                        <label>Room ID:</label>
-                        <code id="room-id-value">${roomId}</code>
-                        <button class="btn btn-secondary btn-sm" onclick="app.copyToClipboard('${roomId}')">
-                            <i data-lucide="copy"></i>
-                        </button>
-                    </div>
+                    <p class="security-note" style="margin-bottom: 16px;"><i data-lucide="shield-check"></i> This secret is stored only in your browser. The server never sees it.</p>
                     <div class="detail-row">
                         <label>Secret:</label>
                         <code id="room-secret-value" class="api-key">${existingSecret}</code>
                         <button class="btn btn-secondary btn-sm" onclick="app.copyToClipboard('${existingSecret}')">
+                            <i data-lucide="copy"></i>
+                        </button>
+                    </div>
+                    <div class="detail-row">
+                        <label>Room ID:</label>
+                        <code id="room-id-value">${roomId}</code>
+                        <button class="btn btn-secondary btn-sm" onclick="app.copyToClipboard('${roomId}')">
                             <i data-lucide="copy"></i>
                         </button>
                     </div>
@@ -1599,7 +1599,12 @@ class SleapRTCDashboard {
         } else {
             // No secret yet - offer to generate one
             content.innerHTML = `
-                <div class="success-details">
+                <div class="info-banner">
+                    <p>P2P authentication adds an extra layer of security for direct worker-client communication.</p>
+                    <p>When enabled, both the worker and client must have the same secret to authorize connections.</p>
+                    <p><strong><i data-lucide="shield-check"></i> Privacy:</strong> This secret is generated in your browser and stored locally. The server never sees it.</p>
+                </div>
+                <div class="success-details" style="margin-top: 16px;">
                     <div class="detail-row">
                         <label>Room ID:</label>
                         <code id="room-id-value">${roomId}</code>
@@ -1607,11 +1612,6 @@ class SleapRTCDashboard {
                             <i data-lucide="copy"></i>
                         </button>
                     </div>
-                </div>
-                <div class="info-banner">
-                    <p>P2P authentication adds an extra layer of security for direct worker-client communication.</p>
-                    <p>When enabled, both the worker and client must have the same secret to authorize connections.</p>
-                    <p><strong><i data-lucide="shield-check"></i> Privacy:</strong> This secret is generated in your browser and stored locally. The server never sees it.</p>
                 </div>
                 <div class="form-actions" style="margin-top: 1rem;">
                     <button type="button" class="btn btn-primary" onclick="app.generateAndSaveRoomSecret('${roomId}')">
