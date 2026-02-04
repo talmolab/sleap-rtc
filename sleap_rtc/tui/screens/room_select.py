@@ -9,12 +9,13 @@ from typing import Optional, Callable
 
 import requests
 from textual.app import ComposeResult
-from textual.containers import Container, Vertical
+from textual.containers import Container, Vertical, Horizontal
 from textual.screen import Screen
 from textual.widgets import Header, Footer, Static, ListView, ListItem, Label
 from textual.reactive import reactive
 
 from sleap_rtc.config import get_config
+from sleap_rtc.auth.credentials import get_user
 
 
 class RoomListItem(ListItem):
@@ -51,9 +52,26 @@ class RoomSelectScreen(Screen):
         background: $background;
     }
 
+    /* Custom header bar */
+    #app-header {
+        width: 100%;
+        height: 1;
+        padding: 0 1;
+        background: $panel;
+    }
+
+    #header-title {
+        text-style: bold;
+    }
+
+    #header-user {
+        dock: right;
+        color: $primary;
+    }
+
     #room-container {
         align: center middle;
-        height: 100%;
+        height: 1fr;
     }
 
     #room-box {
@@ -135,7 +153,15 @@ class RoomSelectScreen(Screen):
         self.rooms: list[dict] = []
 
     def compose(self) -> ComposeResult:
-        yield Header()
+        # Get user info for profile display
+        user = get_user()
+        username = user.get("username", "unknown") if user else "unknown"
+
+        # Custom header with profile
+        with Horizontal(id="app-header"):
+            yield Static("sleap-rtc", id="header-title")
+            yield Static(f"👤 {username}", id="header-user")
+
         yield Container(
             Vertical(
                 Static("Select a Room", classes="title"),
