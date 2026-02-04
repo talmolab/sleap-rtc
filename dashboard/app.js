@@ -1,25 +1,62 @@
 // SLEAP-RTC Dashboard Application
 
 // =========================================================================
-// Relative Time Formatting
+// Date Parsing and Formatting
 // =========================================================================
+
+/**
+ * Parse a date value that could be an ISO string, Unix timestamp (seconds), or Date object
+ * @param {string|number|Date} value - The date value to parse
+ * @returns {Date|null} Parsed Date object or null if invalid
+ */
+function parseDate(value) {
+    if (!value) return null;
+
+    // Already a Date object
+    if (value instanceof Date) return value;
+
+    // Unix timestamp (number) - could be seconds or milliseconds
+    if (typeof value === 'number') {
+        // If the number is less than 10 billion, it's likely seconds (before year 2286)
+        // If greater, it's likely milliseconds
+        if (value < 10000000000) {
+            return new Date(value * 1000); // Convert seconds to milliseconds
+        }
+        return new Date(value);
+    }
+
+    // String - could be ISO format or numeric string
+    if (typeof value === 'string') {
+        // Check if it's a numeric string (Unix timestamp)
+        if (/^\d+$/.test(value)) {
+            const num = parseInt(value, 10);
+            if (num < 10000000000) {
+                return new Date(num * 1000);
+            }
+            return new Date(num);
+        }
+
+        // ISO string - ensure UTC parsing
+        let dateStr = value;
+        if (!value.endsWith('Z') && !value.includes('+') && !value.includes('-', 10)) {
+            dateStr = value + 'Z';
+        }
+        return new Date(dateStr);
+    }
+
+    return null;
+}
 
 /**
  * Format a date as relative time (e.g., "2 hours ago", "yesterday")
  * Uses Intl.RelativeTimeFormat for localized output
- * @param {string} isoString - ISO 8601 date string
+ * @param {string|number|Date} value - Date value (ISO string, Unix timestamp, or Date)
  * @returns {string} Relative time string
  */
-function formatRelativeTime(isoString) {
-    if (!isoString) return 'N/A';
-    if (typeof isoString !== 'string') isoString = String(isoString);
+function formatRelativeTime(value) {
+    const date = parseDate(value);
+    if (!date || isNaN(date.getTime())) return 'N/A';
 
-    // Ensure UTC parsing: if no timezone indicator, assume UTC
-    let dateStr = isoString;
-    if (!isoString.endsWith('Z') && !isoString.includes('+') && !isoString.includes('-', 10)) {
-        dateStr = isoString + 'Z';
-    }
-    const date = new Date(dateStr);
     const now = new Date();
     const diffMs = now - date;
     const diffSec = Math.floor(diffMs / 1000);
@@ -51,18 +88,13 @@ function formatRelativeTime(isoString) {
 
 /**
  * Format a date as an exact datetime string for tooltip display
- * @param {string} isoString - ISO 8601 date string
+ * @param {string|number|Date} value - Date value (ISO string, Unix timestamp, or Date)
  * @returns {string} Formatted datetime string
  */
-function formatExactDate(isoString) {
-    if (!isoString) return '';
-    if (typeof isoString !== 'string') isoString = String(isoString);
-    // Ensure UTC parsing: if no timezone indicator, assume UTC
-    let dateStr = isoString;
-    if (!isoString.endsWith('Z') && !isoString.includes('+') && !isoString.includes('-', 10)) {
-        dateStr = isoString + 'Z';
-    }
-    const date = new Date(dateStr);
+function formatExactDate(value) {
+    const date = parseDate(value);
+    if (!date || isNaN(date.getTime())) return '';
+
     return date.toLocaleString('en-US', {
         weekday: 'short',
         year: 'numeric',
@@ -104,7 +136,6 @@ class SleapRTCDashboard {
         this.roomsFilter = localStorage.getItem('sleap_rooms_filter') || 'all';
         this.roomsSort = localStorage.getItem('sleap_rooms_sort') || 'joined_at';
         this.roomsSearch = '';
-        this.tokensRoomFilter = localStorage.getItem('sleap_tokens_room') || '';
         this.tokensSort = localStorage.getItem('sleap_tokens_sort') || 'created_at';
         this.tokensActiveOnly = localStorage.getItem('sleap_tokens_active') === 'true';
         this.tokensSearch = '';
@@ -121,6 +152,9 @@ class SleapRTCDashboard {
         // Load stored credentials
         this.loadStoredCredentials();
 
+        // Load theme preference
+        this.loadTheme();
+
         // Setup event listeners
         this.setupEventListeners();
 
@@ -134,6 +168,27 @@ class SleapRTCDashboard {
 
         // Check auth state and render
         this.updateUI();
+    }
+
+    loadTheme() {
+        const savedTheme = localStorage.getItem('sleap_theme') || 'dark';
+        document.documentElement.setAttribute('data-theme', savedTheme);
+        this.updateThemeUI(savedTheme);
+    }
+
+    toggleTheme() {
+        const currentTheme = document.documentElement.getAttribute('data-theme') || 'dark';
+        const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+        document.documentElement.setAttribute('data-theme', newTheme);
+        localStorage.setItem('sleap_theme', newTheme);
+        this.updateThemeUI(newTheme);
+    }
+
+    updateThemeUI(theme) {
+        const label = document.getElementById('theme-label');
+        if (label) {
+            label.textContent = theme === 'dark' ? 'Dark' : 'Light';
+        }
     }
 
     loadStoredCredentials() {
@@ -247,6 +302,12 @@ class SleapRTCDashboard {
         document.getElementById('create-token-btn')?.addEventListener('click', () => this.showCreateTokenModal());
         document.getElementById('create-token-form')?.addEventListener('submit', (e) => this.handleCreateToken(e));
 
+        // Settings button
+        document.getElementById('settings-btn')?.addEventListener('click', () => this.showModal('settings-modal'));
+
+        // Theme toggle
+        document.getElementById('theme-toggle')?.addEventListener('click', () => this.toggleTheme());
+
         // Modal close buttons
         document.querySelectorAll('[data-close-modal]').forEach(btn => {
             btn.addEventListener('click', (e) => {
@@ -292,11 +353,6 @@ class SleapRTCDashboard {
         });
 
         // Token filter/sort event listeners
-        document.getElementById('tokens-room-filter')?.addEventListener('change', (e) => {
-            this.tokensRoomFilter = e.target.value;
-            localStorage.setItem('sleap_tokens_room', this.tokensRoomFilter);
-            this.loadTokens();
-        });
         document.getElementById('tokens-sort')?.addEventListener('change', (e) => {
             this.tokensSort = e.target.value;
             localStorage.setItem('sleap_tokens_sort', this.tokensSort);
@@ -310,6 +366,22 @@ class SleapRTCDashboard {
         document.getElementById('tokens-search')?.addEventListener('input', (e) => {
             this.tokensSearch = e.target.value;
             this.debounceSearch(() => this.loadTokens());
+        });
+
+        // Keyboard shortcuts
+        document.addEventListener('keydown', (e) => {
+            // `/` to focus search bar (only if not in an input/textarea)
+            if (e.key === '/' && !['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) {
+                e.preventDefault();
+                // Focus the search bar in the active tab
+                const activeTab = document.querySelector('.tab-content.active');
+                if (activeTab) {
+                    const searchInput = activeTab.querySelector('input[type="text"][placeholder*="Search"]');
+                    if (searchInput) {
+                        searchInput.focus();
+                    }
+                }
+            }
         });
     }
 
@@ -337,12 +409,25 @@ class SleapRTCDashboard {
         // Update page title
         const titles = {
             'rooms': 'Rooms',
-            'tokens': 'Worker Tokens'
+            'tokens': 'Worker Tokens',
+            'quickstart': 'Quickstart Guide',
+            'about': 'About SLEAP-RTC'
         };
         document.getElementById('page-title').textContent = titles[tabName] || tabName;
+
+        // Re-initialize Lucide icons for the About and Quickstart tabs
+        if ((tabName === 'about' || tabName === 'quickstart') && typeof lucide !== 'undefined') {
+            lucide.createIcons();
+        }
     }
 
     showModal(modalId) {
+        // Populate settings modal with user info
+        if (modalId === 'settings-modal' && this.user) {
+            document.getElementById('settings-username').textContent = this.user.username || '-';
+            document.getElementById('settings-user-id').textContent = this.user.id || '-';
+        }
+
         document.getElementById(modalId)?.classList.remove('hidden');
         // Refresh Lucide icons in modal
         if (typeof lucide !== 'undefined') {
@@ -352,6 +437,46 @@ class SleapRTCDashboard {
 
     hideModal(modalId) {
         document.getElementById(modalId)?.classList.add('hidden');
+    }
+
+    /**
+     * Show a confirmation modal and return a Promise that resolves to true if confirmed
+     * @param {string} title - The title of the confirmation dialog
+     * @param {string} message - The message to display
+     * @param {string} confirmText - The text for the confirm button (default: "Delete")
+     * @returns {Promise<boolean>} - Resolves to true if confirmed, false if cancelled
+     */
+    showConfirmModal(title, message, confirmText = 'Delete') {
+        return new Promise((resolve) => {
+            const modal = document.getElementById('confirm-modal');
+            document.getElementById('confirm-title').textContent = title;
+            document.getElementById('confirm-message').textContent = message;
+            document.getElementById('confirm-ok').textContent = confirmText;
+
+            const handleConfirm = () => {
+                cleanup();
+                resolve(true);
+            };
+
+            const handleCancel = () => {
+                cleanup();
+                resolve(false);
+            };
+
+            const cleanup = () => {
+                modal.classList.add('hidden');
+                document.getElementById('confirm-ok').removeEventListener('click', handleConfirm);
+                document.getElementById('confirm-cancel').removeEventListener('click', handleCancel);
+            };
+
+            document.getElementById('confirm-ok').addEventListener('click', handleConfirm);
+            document.getElementById('confirm-cancel').addEventListener('click', handleCancel);
+
+            modal.classList.remove('hidden');
+            if (typeof lucide !== 'undefined') {
+                lucide.createIcons();
+            }
+        });
     }
 
     showToast(message, type = 'success') {
@@ -524,25 +649,10 @@ class SleapRTCDashboard {
             this.rooms = data.rooms || [];
             this.renderRooms();
             this.updateCounts();
-            this.updateTokensRoomFilter();
         } catch (e) {
             console.error('Failed to load rooms:', e);
             container.innerHTML = `<p class="loading" style="color: var(--status-error);">Failed to load rooms: ${e.message}</p>`;
         }
-    }
-
-    updateTokensRoomFilter() {
-        // Update the room dropdown in tokens filter
-        const select = document.getElementById('tokens-room-filter');
-        if (!select) return;
-
-        const currentValue = this.tokensRoomFilter;
-        select.innerHTML = '<option value="">All Rooms</option>' +
-            this.rooms.map(room => `
-                <option value="${room.room_id}" ${room.room_id === currentValue ? 'selected' : ''}>
-                    ${room.name || room.room_id.substring(0, 8) + '...'}
-                </option>
-            `).join('');
     }
 
     updateCounts() {
@@ -578,51 +688,129 @@ class SleapRTCDashboard {
             return;
         }
 
-        container.innerHTML = this.rooms.map(room => {
-            // Check if room is expiring soon (< 3 days)
-            const isExpiringSoon = room.expires_at &&
-                new Date(room.expires_at) - new Date() < 3 * 24 * 60 * 60 * 1000 &&
-                new Date(room.expires_at) > new Date();
-            const isExpired = room.expires_at && new Date(room.expires_at) < new Date();
+        // Separate rooms into active and expired
+        const now = new Date();
+        const activeRooms = this.rooms.filter(room => {
+            if (!room.expires_at) return true;
+            const expiresAt = parseDate(room.expires_at);
+            return expiresAt && expiresAt > now;
+        });
+        const expiredRooms = this.rooms.filter(room => {
+            if (!room.expires_at) return false;
+            const expiresAt = parseDate(room.expires_at);
+            return expiresAt && expiresAt <= now;
+        });
 
-            return `
-            <div class="room-card ${isExpired ? 'expired' : ''} ${isExpiringSoon ? 'expiring-soon' : ''}">
-                <div class="room-header">
-                    <div class="room-main">
-                        <div class="room-icon">
-                            <i data-lucide="home"></i>
-                        </div>
-                        <div class="room-info">
-                            <h3>${room.name || 'Unnamed Room'}</h3>
-                            <div class="room-meta">
+        // Check if expired section should be expanded (from localStorage)
+        const expiredExpanded = localStorage.getItem('sleap_expired_rooms_expanded') === 'true';
+
+        let html = '';
+
+        // If no active rooms but there are expired ones, show empty state message
+        if (activeRooms.length === 0 && expiredRooms.length > 0) {
+            html += `
+            <div class="empty-state" style="padding: 40px 20px;">
+                <div class="empty-icon">
+                    <i data-lucide="home"></i>
+                </div>
+                <h3>No active rooms</h3>
+                <p>All your rooms have expired. Create a new room or delete the expired ones.</p>
+                <button class="btn btn-primary" onclick="app.showModal('create-room-modal')">
+                    <i data-lucide="plus"></i>
+                    Create Room
+                </button>
+            </div>`;
+        } else {
+            // Active rooms section
+            if (activeRooms.length > 0) {
+                html += `<div class="rooms-section-header">
+                    <h3>Active Rooms (${activeRooms.length})</h3>
+                </div>`;
+                html += activeRooms.map(room => this.renderRoomCard(room)).join('');
+            }
+
+            // Create Room button at the bottom of active section
+            html += `
+                <div class="create-item-row">
+                    <button class="btn btn-primary btn-create-inline" onclick="app.showModal('create-room-modal')">
+                        <i data-lucide="plus"></i>
+                        Create Room
+                    </button>
+                </div>`;
+        }
+
+        // Expired rooms section (collapsible)
+        if (expiredRooms.length > 0) {
+            html += `
+            <div class="rooms-section-header inactive-section ${expiredExpanded ? 'expanded' : ''}" onclick="app.toggleExpiredRoomsSection(this)">
+                <div class="section-toggle">
+                    <i data-lucide="${expiredExpanded ? 'chevron-down' : 'chevron-right'}"></i>
+                    <h3>Expired Rooms (${expiredRooms.length})</h3>
+                </div>
+                <button class="btn btn-danger btn-sm" onclick="event.stopPropagation(); app.handleDeleteAllExpiredRooms()">
+                    <i data-lucide="trash-2"></i>
+                    Delete All
+                </button>
+            </div>
+            <div class="expired-rooms-list" style="display: ${expiredExpanded ? 'block' : 'none'};">
+                ${expiredRooms.map(room => this.renderRoomCard(room, true)).join('')}
+            </div>`;
+        }
+
+        container.innerHTML = html;
+
+        // Initialize Lucide icons
+        if (typeof lucide !== 'undefined') {
+            lucide.createIcons();
+        }
+    }
+
+    renderRoomCard(room, isExpired = false) {
+        // Check if room is expiring soon (< 3 days)
+        const now = new Date();
+        const expiresAt = room.expires_at ? parseDate(room.expires_at) : null;
+        const isExpiringSoon = expiresAt &&
+            expiresAt - now < 3 * 24 * 60 * 60 * 1000 &&
+            expiresAt > now;
+        if (!isExpired) {
+            isExpired = expiresAt && expiresAt < now;
+        }
+
+        return `
+        <div class="room-card ${isExpired ? 'expired inactive' : ''} ${isExpiringSoon ? 'expiring-soon' : ''}">
+            <div class="room-header">
+                <div class="room-main">
+                    <div class="room-icon" ${isExpired ? 'style="opacity: 0.5;"' : ''}>
+                        <i data-lucide="home"></i>
+                    </div>
+                    <div class="room-info">
+                        <h3>${room.name || 'Unnamed Room'}</h3>
+                        <div class="room-meta">
+                            <span class="room-meta-item">
+                                <i data-lucide="hash"></i>
+                                ${room.room_id}
+                            </span>
+                            <span class="room-meta-item" title="${formatExactDate(room.joined_at)}">
+                                <i data-lucide="calendar"></i>
+                                Joined ${formatRelativeTime(room.joined_at)}
+                            </span>
+                            ${room.expires_at ? `
+                                <span class="room-meta-item ${isExpiringSoon ? 'warning' : ''} ${isExpired ? 'error' : ''}" title="${formatExactDate(room.expires_at)}">
+                                    <i data-lucide="${isExpiringSoon || isExpired ? 'alert-triangle' : 'clock'}"></i>
+                                    ${isExpired ? 'Expired' : `Expires ${formatRelativeTime(room.expires_at)}`}
+                                </span>
+                            ` : `
                                 <span class="room-meta-item">
-                                    <i data-lucide="hash"></i>
-                                    ${room.room_id}
+                                    <i data-lucide="infinity"></i>
+                                    Never expires
                                 </span>
-                                <span class="room-meta-item" title="${formatExactDate(room.joined_at)}">
-                                    <i data-lucide="calendar"></i>
-                                    Joined ${formatRelativeTime(room.joined_at)}
-                                </span>
-                                ${room.expires_at ? `
-                                    <span class="room-meta-item ${isExpiringSoon ? 'warning' : ''} ${isExpired ? 'error' : ''}" title="${formatExactDate(room.expires_at)}">
-                                        <i data-lucide="${isExpiringSoon || isExpired ? 'alert-triangle' : 'clock'}"></i>
-                                        ${isExpired ? 'Expired' : `Expires ${formatRelativeTime(room.expires_at)}`}
-                                    </span>
-                                ` : `
-                                    <span class="room-meta-item">
-                                        <i data-lucide="infinity"></i>
-                                        Never expires
-                                    </span>
-                                `}
-                            </div>
+                            `}
                         </div>
                     </div>
-                    <div class="room-actions">
-                        <span class="role-badge ${room.role}">${room.role}</span>
-                        <button class="btn btn-secondary btn-sm" onclick="app.handleViewRoom('${room.room_id}')">
-                            <i data-lucide="eye"></i>
-                            View
-                        </button>
+                </div>
+                <div class="room-actions">
+                    <span class="role-badge ${room.role}">${room.role}</span>
+                    ${!isExpired ? `
                         ${room.role === 'owner' ? `
                             <button class="btn btn-secondary btn-sm" onclick="app.handleRoomSecret('${room.room_id}')">
                                 <i data-lucide="key"></i>
@@ -637,15 +825,16 @@ class SleapRTCDashboard {
                                 Delete
                             </button>
                         ` : ''}
-                    </div>
+                    ` : `
+                        <button class="btn btn-danger btn-sm" onclick="app.handleDeleteRoom('${room.room_id}', '${this.escapeHtml(room.name || room.room_id)}')">
+                            <i data-lucide="trash-2"></i>
+                            Delete
+                        </button>
+                    `}
                 </div>
             </div>
-        `}).join('');
-
-        // Initialize Lucide icons
-        if (typeof lucide !== 'undefined') {
-            lucide.createIcons();
-        }
+        </div>
+        `;
     }
 
     escapeHtml(text) {
@@ -679,10 +868,8 @@ class SleapRTCDashboard {
 
             // Show success modal
             document.getElementById('new-room-id').textContent = data.room_id;
-            document.getElementById('new-room-token').textContent = data.room_token;
 
             this.hideModal('create-room-modal');
-            document.getElementById('room-modal-title').textContent = 'Room Created!';
             this.showModal('room-created-modal');
 
             // Refresh rooms list and reset form
@@ -692,23 +879,6 @@ class SleapRTCDashboard {
 
         } catch (e) {
             console.error('Failed to create room:', e);
-            this.showToast(e.message, 'error');
-        }
-    }
-
-    async handleViewRoom(roomId) {
-        try {
-            const data = await this.apiRequest(`/api/auth/rooms/${roomId}`);
-
-            // Populate the room details modal (reuse the room-created-modal)
-            document.getElementById('new-room-id').textContent = data.room_id;
-            document.getElementById('new-room-token').textContent = data.room_token || 'N/A';
-
-            document.getElementById('room-modal-title').textContent = 'Room Details';
-            this.showModal('room-created-modal');
-
-        } catch (e) {
-            console.error('Failed to get room details:', e);
             this.showToast(e.message, 'error');
         }
     }
@@ -753,9 +923,12 @@ class SleapRTCDashboard {
     }
 
     async handleDeleteRoom(roomId, roomName) {
-        if (!confirm(`Are you sure you want to delete room "${roomName}"?\n\nThis will also delete all worker tokens and memberships for this room. This action cannot be undone.`)) {
-            return;
-        }
+        const confirmed = await this.showConfirmModal(
+            'Delete Room',
+            `Are you sure you want to delete "${roomName}"? This will also delete all worker tokens and memberships. This action cannot be undone.`
+        );
+
+        if (!confirmed) return;
 
         try {
             await this.apiRequest(`/api/auth/rooms/${roomId}`, {
@@ -789,9 +962,6 @@ class SleapRTCDashboard {
 
         // Build query params
         const params = new URLSearchParams();
-        if (this.tokensRoomFilter) {
-            params.set('room_id', this.tokensRoomFilter);
-        }
         if (this.tokensSort) {
             params.set('sort_by', this.tokensSort);
         }
@@ -911,12 +1081,37 @@ class SleapRTCDashboard {
 
         let html = '';
 
-        // Active tokens section
-        if (activeTokens.length > 0) {
-            html += `<div class="tokens-section-header">
-                <h3>Active Tokens (${activeTokens.length})</h3>
+        // If no active tokens but there are inactive ones, show empty state message
+        if (activeTokens.length === 0 && inactiveTokens.length > 0) {
+            html += `
+            <div class="empty-state" style="padding: 40px 20px;">
+                <div class="empty-icon">
+                    <i data-lucide="key-round"></i>
+                </div>
+                <h3>No active tokens</h3>
+                <p>All your tokens are expired or revoked. Create a new token or delete the inactive ones.</p>
+                <button class="btn btn-primary" onclick="app.showCreateTokenModal()">
+                    <i data-lucide="plus"></i>
+                    Create Token
+                </button>
             </div>`;
-            html += activeTokens.map(token => this.renderTokenCard(token, false)).join('');
+        } else {
+            // Active tokens section
+            if (activeTokens.length > 0) {
+                html += `<div class="tokens-section-header">
+                    <h3>Active Tokens (${activeTokens.length})</h3>
+                </div>`;
+                html += activeTokens.map(token => this.renderTokenCard(token, false)).join('');
+            }
+
+            // Create Token button at the bottom of active section
+            html += `
+                <div class="create-item-row">
+                    <button class="btn btn-primary btn-create-inline" onclick="app.showCreateTokenModal()">
+                        <i data-lucide="plus"></i>
+                        Create Token
+                    </button>
+                </div>`;
         }
 
         // Inactive tokens section (collapsible)
@@ -937,22 +1132,6 @@ class SleapRTCDashboard {
             </div>`;
         }
 
-        // If no active tokens but there are inactive ones, show a message
-        if (activeTokens.length === 0 && inactiveTokens.length > 0) {
-            html = `
-            <div class="empty-state" style="padding: 40px 20px;">
-                <div class="empty-icon">
-                    <i data-lucide="key-round"></i>
-                </div>
-                <h3>No active tokens</h3>
-                <p>All your tokens are expired or revoked. Create a new token or delete the inactive ones.</p>
-                <button class="btn btn-primary" onclick="app.showCreateTokenModal()">
-                    <i data-lucide="plus"></i>
-                    Create Token
-                </button>
-            </div>` + html;
-        }
-
         container.innerHTML = html;
 
         // Initialize Lucide icons
@@ -964,9 +1143,11 @@ class SleapRTCDashboard {
     renderTokenCard(token, isInactive) {
         const isRevoked = !!token.revoked_at;
         const isExpired = !token.is_active && !isRevoked;
-        const isExpiringSoon = token.expires_at && !isInactive &&
-            new Date(token.expires_at) - new Date() < 3 * 24 * 60 * 60 * 1000 &&
-            new Date(token.expires_at) > new Date();
+        const now = new Date();
+        const expiresAt = token.expires_at ? parseDate(token.expires_at) : null;
+        const isExpiringSoon = expiresAt && !isInactive &&
+            expiresAt - now < 3 * 24 * 60 * 60 * 1000 &&
+            expiresAt > now;
 
         // Check if API key is available in session storage
         const storedKey = this.getStoredApiKey(token.token_id);
@@ -1062,21 +1243,71 @@ class SleapRTCDashboard {
     toggleInactiveSection(header) {
         const isExpanded = header.classList.toggle('expanded');
         const list = header.nextElementSibling;
-        const icon = header.querySelector('svg');
+        const icon = header.querySelector('[data-lucide]');
 
         list.style.display = isExpanded ? 'block' : 'none';
         localStorage.setItem('sleap_inactive_tokens_expanded', isExpanded);
 
-        // Re-render to update chevron icon
+        // Update chevron icon direction
+        if (icon) {
+            icon.setAttribute('data-lucide', isExpanded ? 'chevron-down' : 'chevron-right');
+        }
         if (typeof lucide !== 'undefined') {
             lucide.createIcons();
         }
     }
 
-    async handleDeleteToken(tokenId, workerName) {
-        if (!confirm(`Permanently delete token "${workerName}"?\n\nThis cannot be undone.`)) {
-            return;
+    toggleExpiredRoomsSection(header) {
+        const isExpanded = header.classList.toggle('expanded');
+        const list = header.nextElementSibling;
+        const icon = header.querySelector('[data-lucide]');
+
+        list.style.display = isExpanded ? 'block' : 'none';
+        localStorage.setItem('sleap_expired_rooms_expanded', isExpanded);
+
+        // Update chevron icon direction
+        if (icon) {
+            icon.setAttribute('data-lucide', isExpanded ? 'chevron-down' : 'chevron-right');
         }
+        if (typeof lucide !== 'undefined') {
+            lucide.createIcons();
+        }
+    }
+
+    async handleDeleteAllExpiredRooms() {
+        const expiredRooms = this.rooms.filter(room => room.expires_at && new Date(room.expires_at) < new Date());
+
+        const confirmed = await this.showConfirmModal(
+            'Delete All Expired Rooms',
+            `Delete all ${expiredRooms.length} expired rooms? This will also delete all associated tokens and memberships.`
+        );
+
+        if (!confirmed) return;
+
+        try {
+            // Delete each expired room
+            for (const room of expiredRooms) {
+                await this.apiRequest(`/api/auth/rooms/${room.room_id}`, {
+                    method: 'DELETE',
+                });
+            }
+
+            this.showToast(`Deleted ${expiredRooms.length} expired room(s)`);
+            this.loadRooms();
+
+        } catch (e) {
+            console.error('Failed to delete expired rooms:', e);
+            this.showToast(e.message, 'error');
+        }
+    }
+
+    async handleDeleteToken(tokenId, workerName) {
+        const confirmed = await this.showConfirmModal(
+            'Delete Token',
+            `Permanently delete token "${workerName}"? This cannot be undone.`
+        );
+
+        if (!confirmed) return;
 
         try {
             await this.apiRequest(`/api/auth/tokens/${tokenId}`, {
@@ -1095,9 +1326,12 @@ class SleapRTCDashboard {
     async handleDeleteAllInactive() {
         const inactiveCount = this.tokens.filter(t => !t.is_active).length;
 
-        if (!confirm(`Delete all ${inactiveCount} inactive tokens?\n\nThis will permanently remove all revoked and expired tokens. This cannot be undone.`)) {
-            return;
-        }
+        const confirmed = await this.showConfirmModal(
+            'Delete All Inactive Tokens',
+            `Delete all ${inactiveCount} inactive tokens? This will permanently remove all revoked and expired tokens.`
+        );
+
+        if (!confirmed) return;
 
         try {
             const result = await this.apiRequest('/api/auth/tokens', {
@@ -1114,10 +1348,16 @@ class SleapRTCDashboard {
     }
 
     async showCreateTokenModal() {
-        // Populate room dropdown
+        // Populate room dropdown - filter out expired rooms
         const select = document.getElementById('token-room');
+        const now = new Date();
+        const activeRooms = this.rooms.filter(room => {
+            if (!room.expires_at) return true;
+            const expiresAt = parseDate(room.expires_at);
+            return expiresAt && expiresAt > now;
+        });
         select.innerHTML = '<option value="">Select a room...</option>' +
-            this.rooms.map(room => `
+            activeRooms.map(room => `
                 <option value="${room.room_id}">${room.room_id}${room.name ? ` - ${room.name}` : ''}</option>
             `).join('');
 
@@ -1223,9 +1463,13 @@ class SleapRTCDashboard {
     }
 
     async handleRevokeToken(tokenId) {
-        if (!confirm('Are you sure you want to revoke this token? Workers using it will no longer be able to connect.')) {
-            return;
-        }
+        const confirmed = await this.showConfirmModal(
+            'Revoke Token',
+            'Are you sure you want to revoke this token? Workers using it will no longer be able to connect.',
+            'Revoke'
+        );
+
+        if (!confirmed) return;
 
         try {
             await this.apiRequest(`/api/auth/token/${tokenId}`, {
@@ -1356,11 +1600,18 @@ class SleapRTCDashboard {
             content.innerHTML = `
                 <div class="success-details">
                     <p>This room has a P2P authentication secret configured.</p>
-                    <p class="security-note"><i data-lucide="shield-check"></i> This secret is stored only in your browser. The server never sees it.</p>
+                    <p class="security-note" style="margin-bottom: 16px;"><i data-lucide="shield-check"></i> This secret is stored only in your browser. The server never sees it.</p>
                     <div class="detail-row">
                         <label>Secret:</label>
                         <code id="room-secret-value" class="api-key">${existingSecret}</code>
                         <button class="btn btn-secondary btn-sm" onclick="app.copyToClipboard('${existingSecret}')">
+                            <i data-lucide="copy"></i>
+                        </button>
+                    </div>
+                    <div class="detail-row">
+                        <label>Room ID:</label>
+                        <code id="room-id-value">${roomId}</code>
+                        <button class="btn btn-secondary btn-sm" onclick="app.copyToClipboard('${roomId}')">
                             <i data-lucide="copy"></i>
                         </button>
                     </div>
@@ -1388,6 +1639,15 @@ class SleapRTCDashboard {
                     <p>P2P authentication adds an extra layer of security for direct worker-client communication.</p>
                     <p>When enabled, both the worker and client must have the same secret to authorize connections.</p>
                     <p><strong><i data-lucide="shield-check"></i> Privacy:</strong> This secret is generated in your browser and stored locally. The server never sees it.</p>
+                </div>
+                <div class="success-details" style="margin-top: 16px;">
+                    <div class="detail-row">
+                        <label>Room ID:</label>
+                        <code id="room-id-value">${roomId}</code>
+                        <button class="btn btn-secondary btn-sm" onclick="app.copyToClipboard('${roomId}')">
+                            <i data-lucide="copy"></i>
+                        </button>
+                    </div>
                 </div>
                 <div class="form-actions" style="margin-top: 1rem;">
                     <button type="button" class="btn btn-primary" onclick="app.generateAndSaveRoomSecret('${roomId}')">

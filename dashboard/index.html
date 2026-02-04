@@ -59,6 +59,15 @@
                     <i data-lucide="log-in"></i>
                     Join Room
                 </button>
+                <div class="nav-label" style="margin-top: 16px;">Help</div>
+                <button class="nav-item" data-tab="quickstart">
+                    <i data-lucide="rocket"></i>
+                    Quickstart
+                </button>
+                <button class="nav-item" data-tab="about">
+                    <i data-lucide="book-open"></i>
+                    About
+                </button>
             </nav>
         </aside>
 
@@ -104,10 +113,6 @@
                     <div class="section-header">
                         <h2 class="section-title">Your Rooms (<span id="rooms-title-count">0</span>)</h2>
                         <div class="section-actions">
-                            <button id="create-room-btn" class="btn btn-primary">
-                                <i data-lucide="plus"></i>
-                                Create Room
-                            </button>
                             <button class="btn btn-ghost btn-sm" id="refresh-rooms-btn">
                                 <i data-lucide="refresh-cw"></i>
                                 Refresh
@@ -142,28 +147,21 @@
                     <div class="section-header">
                         <h2 class="section-title">Your Tokens (<span id="tokens-title-count">0</span>)</h2>
                         <div class="section-actions">
-                            <button id="create-token-btn" class="btn btn-primary">
-                                <i data-lucide="plus"></i>
-                                Create Token
-                            </button>
                             <button class="btn btn-ghost btn-sm" id="refresh-tokens-btn">
                                 <i data-lucide="refresh-cw"></i>
                                 Refresh
                             </button>
                             <div class="filter-group">
-                                <select id="tokens-room-filter" class="filter-select">
-                                    <option value="">All Rooms</option>
-                                </select>
+                                <label class="checkbox-filter">
+                                    <input type="checkbox" id="tokens-active-only">
+                                    <span>Active only</span>
+                                </label>
                                 <select id="tokens-sort" class="filter-select">
                                     <option value="created_at">Sort: Recent</option>
                                     <option value="worker_name">Sort: Name</option>
                                     <option value="expires_at">Sort: Expiry</option>
                                     <option value="room_name">Sort: Room</option>
                                 </select>
-                                <label class="checkbox-filter">
-                                    <input type="checkbox" id="tokens-active-only">
-                                    <span>Active only</span>
-                                </label>
                             </div>
                             <div class="search-box">
                                 <i data-lucide="search"></i>
@@ -174,6 +172,662 @@
 
                     <div id="tokens-list" class="card-list">
                         <p class="loading">Loading tokens...</p>
+                    </div>
+                </div>
+
+                <!-- Quickstart Tab -->
+                <div id="quickstart-tab" class="tab-content">
+                    <div class="about-content">
+                        <!-- Overview Section -->
+                        <section class="about-section quickstart-overview">
+                            <div class="about-header">
+                                <div class="about-icon">
+                                    <i data-lucide="rocket"></i>
+                                </div>
+                                <div>
+                                    <h2>5-Minute Setup</h2>
+                                    <p class="about-subtitle">Get remote training running in 5 steps</p>
+                                </div>
+                            </div>
+                            <div class="about-body">
+                                <div class="quickstart-steps-overview">
+                                    <div class="step-pill">
+                                        <span class="step-num">1</span>
+                                        <span>Create Room</span>
+                                    </div>
+                                    <i data-lucide="chevron-right" class="step-arrow"></i>
+                                    <div class="step-pill">
+                                        <span class="step-num">2</span>
+                                        <span>Generate Secret</span>
+                                    </div>
+                                    <i data-lucide="chevron-right" class="step-arrow"></i>
+                                    <div class="step-pill">
+                                        <span class="step-num">3</span>
+                                        <span>Create Token</span>
+                                    </div>
+                                    <i data-lucide="chevron-right" class="step-arrow"></i>
+                                    <div class="step-pill">
+                                        <span class="step-num">4</span>
+                                        <span>Start Worker</span>
+                                    </div>
+                                    <i data-lucide="chevron-right" class="step-arrow"></i>
+                                    <div class="step-pill">
+                                        <span class="step-num">5</span>
+                                        <span>Submit Job</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </section>
+
+                        <!-- Step 1: Create Room -->
+                        <section class="about-section">
+                            <div class="about-header">
+                                <div class="about-icon step-icon">
+                                    <span>1</span>
+                                </div>
+                                <div>
+                                    <h2>Create a Room</h2>
+                                    <p class="about-subtitle">Your workspace for remote training</p>
+                                </div>
+                            </div>
+                            <div class="about-body">
+                                <p>A <strong>Room</strong> is where workers and clients collaborate. Create one from this dashboard or via CLI.</p>
+                                <div class="quickstart-options">
+                                    <div class="option-card">
+                                        <h4><i data-lucide="layout-dashboard"></i> Dashboard</h4>
+                                        <p>Click <strong>Rooms</strong> in the sidebar, then click <strong>Create Room</strong>.</p>
+                                        <button class="btn btn-primary btn-sm" onclick="app.switchTab('rooms'); setTimeout(() => app.showModal('create-room-modal'), 100);">
+                                            <i data-lucide="plus"></i>
+                                            Create Room Now
+                                        </button>
+                                    </div>
+                                    <div class="option-card">
+                                        <h4><i data-lucide="terminal"></i> CLI</h4>
+                                        <p>Create a room with a name using the command line.</p>
+                                        <div class="about-code">
+                                            <code>sleap-rtc room create --name "My Lab"</code>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="about-callout">
+                                    <i data-lucide="info"></i>
+                                    <div>
+                                        <strong>Tip:</strong> Rooms expire after 30 days by default. Use <code>--expires never</code> for permanent rooms.
+                                    </div>
+                                </div>
+                            </div>
+                        </section>
+
+                        <!-- Step 2: Generate Room Secret -->
+                        <section class="about-section">
+                            <div class="about-header">
+                                <div class="about-icon step-icon">
+                                    <span>2</span>
+                                </div>
+                                <div>
+                                    <h2>Generate Room Secret <span class="optional-badge">Optional</span></h2>
+                                    <p class="about-subtitle">Extra security for P2P connections</p>
+                                </div>
+                            </div>
+                            <div class="about-body">
+                                <p>Room secrets add authentication to WebRTC peer connections. Both workers and clients must share the same secret.</p>
+                                <div class="quickstart-options">
+                                    <div class="option-card">
+                                        <h4><i data-lucide="layout-dashboard"></i> Dashboard</h4>
+                                        <p>Click <strong>Secret</strong> on your room card, then <strong>Generate Secret</strong>.</p>
+                                    </div>
+                                    <div class="option-card">
+                                        <h4><i data-lucide="terminal"></i> CLI</h4>
+                                        <p>Generate and store a secret for a room.</p>
+                                        <div class="about-code">
+                                            <code>sleap-rtc room secret generate --room ROOM_ID</code>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="about-callout warning">
+                                    <i data-lucide="shield-check"></i>
+                                    <div>
+                                        <strong>Privacy:</strong> Secrets are generated locally and never sent to the server. You must distribute them securely to workers and clients.
+                                    </div>
+                                </div>
+                            </div>
+                        </section>
+
+                        <!-- Step 3: Create Worker Token -->
+                        <section class="about-section">
+                            <div class="about-header">
+                                <div class="about-icon step-icon">
+                                    <span>3</span>
+                                </div>
+                                <div>
+                                    <h2>Create Worker Token</h2>
+                                    <p class="about-subtitle">API key for worker authentication</p>
+                                </div>
+                            </div>
+                            <div class="about-body">
+                                <p>Each worker needs an <strong>API key</strong> (token) to authenticate with a room. Tokens are room-scoped and have an expiration date.</p>
+                                <div class="quickstart-options">
+                                    <div class="option-card">
+                                        <h4><i data-lucide="layout-dashboard"></i> Dashboard</h4>
+                                        <p>Go to <strong>Tokens</strong>, click <strong>Create Token</strong>, select your room and name your worker.</p>
+                                        <button class="btn btn-primary btn-sm" onclick="app.switchTab('tokens'); setTimeout(() => app.showCreateTokenModal(), 100);">
+                                            <i data-lucide="plus"></i>
+                                            Create Token Now
+                                        </button>
+                                    </div>
+                                    <div class="option-card">
+                                        <h4><i data-lucide="terminal"></i> CLI</h4>
+                                        <p>Create a token for a specific room and worker name.</p>
+                                        <div class="about-code">
+                                            <code>sleap-rtc token create --room ROOM_ID --name "gpu-server-1"</code>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="about-callout warning">
+                                    <i data-lucide="alert-triangle"></i>
+                                    <div>
+                                        <strong>Important:</strong> Copy the API key immediately! It's shown only once and cannot be retrieved later.
+                                    </div>
+                                </div>
+                            </div>
+                        </section>
+
+                        <!-- Step 4: Start Worker -->
+                        <section class="about-section">
+                            <div class="about-header">
+                                <div class="about-icon step-icon">
+                                    <span>4</span>
+                                </div>
+                                <div>
+                                    <h2>Start Worker on Remote Machine</h2>
+                                    <p class="about-subtitle">Run the worker on your GPU server</p>
+                                </div>
+                            </div>
+                            <div class="about-body">
+                                <p>SSH into your GPU machine and start the worker with your API key.</p>
+                                <div class="about-code">
+                                    <div class="code-header">
+                                        <span>Basic worker start</span>
+                                    </div>
+                                    <code>sleap-rtc worker --api-key YOUR_API_KEY</code>
+                                </div>
+                                <div class="about-code">
+                                    <div class="code-header">
+                                        <span>With room secret (if configured)</span>
+                                    </div>
+                                    <code>sleap-rtc worker --api-key YOUR_API_KEY --room-secret YOUR_SECRET</code>
+                                </div>
+                                <div class="about-code">
+                                    <div class="code-header">
+                                        <span>With custom worker name</span>
+                                    </div>
+                                    <code>sleap-rtc worker --api-key YOUR_API_KEY --name "lab-gpu-1"</code>
+                                </div>
+                                <div class="about-callout">
+                                    <i data-lucide="monitor"></i>
+                                    <div>
+                                        <strong>Tip:</strong> The worker will display a session string and wait for client connections. You can also run it in the background with screen or tmux.
+                                    </div>
+                                </div>
+                            </div>
+                        </section>
+
+                        <!-- Step 5: Submit Job -->
+                        <section class="about-section">
+                            <div class="about-header">
+                                <div class="about-icon step-icon">
+                                    <span>5</span>
+                                </div>
+                                <div>
+                                    <h2>Submit a Training Job</h2>
+                                    <p class="about-subtitle">Run training from your local machine</p>
+                                </div>
+                            </div>
+                            <div class="about-body">
+                                <p>From your local machine, submit a training job to the remote worker.</p>
+                                <div class="about-code">
+                                    <div class="code-header">
+                                        <span>Connect to room and auto-select worker</span>
+                                    </div>
+                                    <code>sleap-rtc train --room ROOM_ID --auto-select --pkg-path training.zip</code>
+                                </div>
+                                <div class="about-code">
+                                    <div class="code-header">
+                                        <span>Interactive worker selection</span>
+                                    </div>
+                                    <code>sleap-rtc train --room ROOM_ID --pkg-path training.zip</code>
+                                </div>
+                                <div class="about-code">
+                                    <div class="code-header">
+                                        <span>Direct connection with session string</span>
+                                    </div>
+                                    <code>sleap-rtc train --session-string SESSION_STRING --pkg-path training.zip</code>
+                                </div>
+                                <div class="about-callout">
+                                    <i data-lucide="zap"></i>
+                                    <div>
+                                        <strong>That's it!</strong> Your training job will run on the remote GPU and results will be streamed back.
+                                    </div>
+                                </div>
+                            </div>
+                        </section>
+
+                        <!-- Configuration File -->
+                        <section class="about-section">
+                            <div class="about-header">
+                                <div class="about-icon">
+                                    <i data-lucide="file-cog"></i>
+                                </div>
+                                <div>
+                                    <h2>Configuration File</h2>
+                                    <p class="about-subtitle">Persistent settings with sleap-rtc.toml</p>
+                                </div>
+                            </div>
+                            <div class="about-body">
+                                <p>Instead of passing flags every time, create a <code>sleap-rtc.toml</code> file in your home directory or project root.</p>
+                                <div class="about-code config-file">
+                                    <div class="code-header">
+                                        <span>~/.sleap-rtc.toml (or ./sleap-rtc.toml)</span>
+                                    </div>
+                                    <pre><code># Default room for commands
+default_room = "your-room-id"
+
+# Worker configuration
+[worker]
+api_key = "your-api-key"
+name = "lab-gpu-1"
+
+# Room secrets (optional)
+[secrets]
+"room-id-1" = "secret-for-room-1"
+"room-id-2" = "secret-for-room-2"
+
+# Client configuration
+[client]
+auto_select = true</code></pre>
+                                </div>
+                                <p style="margin-top: 16px;">With this config, you can run commands without flags:</p>
+                                <div class="cli-reference">
+                                    <div class="cli-item">
+                                        <code>sleap-rtc worker</code>
+                                        <span>Starts worker using config values</span>
+                                    </div>
+                                    <div class="cli-item">
+                                        <code>sleap-rtc train --pkg-path training.zip</code>
+                                        <span>Uses default room and auto-select</span>
+                                    </div>
+                                </div>
+                                <div class="about-callout warning">
+                                    <i data-lucide="shield-alert"></i>
+                                    <div>
+                                        <strong>Security:</strong> Keep your config file secure. Don't commit it to version control if it contains API keys.
+                                    </div>
+                                </div>
+                            </div>
+                        </section>
+
+                        <!-- Next Steps -->
+                        <section class="about-section">
+                            <div class="about-header">
+                                <div class="about-icon">
+                                    <i data-lucide="arrow-right-circle"></i>
+                                </div>
+                                <div>
+                                    <h2>Next Steps</h2>
+                                    <p class="about-subtitle">Learn more about SLEAP-RTC</p>
+                                </div>
+                            </div>
+                            <div class="about-body">
+                                <div class="next-steps-grid">
+                                    <a href="#" onclick="app.switchTab('about'); return false;" class="next-step-card">
+                                        <i data-lucide="book-open"></i>
+                                        <div>
+                                            <h4>About SLEAP-RTC</h4>
+                                            <p>Learn about the architecture, rooms, tokens, and connection modes</p>
+                                        </div>
+                                    </a>
+                                    <a href="https://sleap.ai" target="_blank" rel="noopener" class="next-step-card">
+                                        <i data-lucide="external-link"></i>
+                                        <div>
+                                            <h4>SLEAP Documentation</h4>
+                                            <p>Full documentation for SLEAP pose estimation</p>
+                                        </div>
+                                    </a>
+                                    <a href="https://github.com/talmolab/sleap-rtc" target="_blank" rel="noopener" class="next-step-card">
+                                        <i data-lucide="github"></i>
+                                        <div>
+                                            <h4>GitHub Repository</h4>
+                                            <p>Source code, issues, and contributions</p>
+                                        </div>
+                                    </a>
+                                </div>
+                            </div>
+                        </section>
+                    </div>
+                </div>
+
+                <!-- About Tab -->
+                <div id="about-tab" class="tab-content">
+                    <div class="about-content">
+                        <!-- Overview Section -->
+                        <section class="about-section">
+                            <div class="about-header">
+                                <div class="about-icon">
+                                    <i data-lucide="network"></i>
+                                </div>
+                                <div>
+                                    <h2>What is SLEAP-RTC?</h2>
+                                    <p class="about-subtitle">Real-Time Communication for Remote Training & Inference</p>
+                                </div>
+                            </div>
+                            <div class="about-body">
+                                <p>SLEAP-RTC enables <strong>remote training and inference</strong> with SLEAP by connecting Clients (who submit jobs) and Workers (who process them) through peer-to-peer WebRTC connections.</p>
+                                <div class="architecture-diagram">
+                                    <div class="arch-node client">
+                                        <i data-lucide="laptop"></i>
+                                        <span>Client</span>
+                                        <small>Submits jobs</small>
+                                    </div>
+                                    <div class="arch-arrow">
+                                        <i data-lucide="arrow-right"></i>
+                                        <small>WebRTC P2P</small>
+                                    </div>
+                                    <div class="arch-node server">
+                                        <i data-lucide="server"></i>
+                                        <span>Signaling Server</span>
+                                        <small>Coordinates connections</small>
+                                    </div>
+                                    <div class="arch-arrow">
+                                        <i data-lucide="arrow-right"></i>
+                                        <small>WebRTC P2P</small>
+                                    </div>
+                                    <div class="arch-node worker">
+                                        <i data-lucide="cpu"></i>
+                                        <span>Worker</span>
+                                        <small>GPU processing</small>
+                                    </div>
+                                </div>
+                                <p>The <strong>Signaling Server</strong> helps peers discover each other and establish connections, but all data transfer happens directly between Client and Worker via WebRTC.</p>
+                            </div>
+                        </section>
+
+                        <!-- Rooms Section -->
+                        <section class="about-section">
+                            <div class="about-header">
+                                <div class="about-icon">
+                                    <i data-lucide="home"></i>
+                                </div>
+                                <div>
+                                    <h2>Rooms</h2>
+                                    <p class="about-subtitle">Virtual workspaces for collaboration</p>
+                                </div>
+                            </div>
+                            <div class="about-body">
+                                <p>A <strong>Room</strong> is a virtual workspace where workers and clients collaborate. Rooms provide:</p>
+                                <ul class="about-list">
+                                    <li>
+                                        <i data-lucide="users"></i>
+                                        <div>
+                                            <strong>Membership</strong>
+                                            <span>Only room members can discover and connect to workers in that room</span>
+                                        </div>
+                                    </li>
+                                    <li>
+                                        <i data-lucide="database"></i>
+                                        <div>
+                                            <strong>Shared Model Registry</strong>
+                                            <span>Models trained in a room are accessible to all members</span>
+                                        </div>
+                                    </li>
+                                    <li>
+                                        <i data-lucide="clock"></i>
+                                        <div>
+                                            <strong>Expiration</strong>
+                                            <span>Rooms auto-expire after a configurable period (default: 30 days)</span>
+                                        </div>
+                                    </li>
+                                </ul>
+                                <div class="about-callout">
+                                    <i data-lucide="lightbulb"></i>
+                                    <div>
+                                        <strong>Tip:</strong> Create separate rooms for different projects or teams. Room owners can invite others via invite codes.
+                                    </div>
+                                </div>
+                            </div>
+                        </section>
+
+                        <!-- Membership Section -->
+                        <section class="about-section">
+                            <div class="about-header">
+                                <div class="about-icon">
+                                    <i data-lucide="user-plus"></i>
+                                </div>
+                                <div>
+                                    <h2>Room Membership</h2>
+                                    <p class="about-subtitle">Owners vs Members</p>
+                                </div>
+                            </div>
+                            <div class="about-body">
+                                <div class="role-comparison">
+                                    <div class="role-card">
+                                        <div class="role-header owner">
+                                            <i data-lucide="crown"></i>
+                                            <h4>Owner</h4>
+                                        </div>
+                                        <ul>
+                                            <li><i data-lucide="check"></i> Create and delete the room</li>
+                                            <li><i data-lucide="check"></i> Generate invite codes</li>
+                                            <li><i data-lucide="check"></i> Create worker tokens</li>
+                                            <li><i data-lucide="check"></i> Manage room secrets</li>
+                                            <li><i data-lucide="check"></i> Remove members</li>
+                                        </ul>
+                                    </div>
+                                    <div class="role-card">
+                                        <div class="role-header member">
+                                            <i data-lucide="user"></i>
+                                            <h4>Member</h4>
+                                        </div>
+                                        <ul>
+                                            <li><i data-lucide="check"></i> Discover workers in the room</li>
+                                            <li><i data-lucide="check"></i> Connect to workers</li>
+                                            <li><i data-lucide="check"></i> Submit training/inference jobs</li>
+                                            <li><i data-lucide="check"></i> Access shared models</li>
+                                            <li><i data-lucide="x"></i> Cannot manage the room</li>
+                                        </ul>
+                                    </div>
+                                </div>
+                                <p style="margin-top: 16px;">To join a room as a member, use an <strong>invite code</strong> shared by the room owner.</p>
+                            </div>
+                        </section>
+
+                        <!-- Tokens Section -->
+                        <section class="about-section">
+                            <div class="about-header">
+                                <div class="about-icon">
+                                    <i data-lucide="key-round"></i>
+                                </div>
+                                <div>
+                                    <h2>Worker Tokens (API Keys)</h2>
+                                    <p class="about-subtitle">Authenticate workers with your rooms</p>
+                                </div>
+                            </div>
+                            <div class="about-body">
+                                <p>Worker tokens are <strong>API keys</strong> that authenticate worker machines with specific rooms. Each token:</p>
+                                <ul class="about-list">
+                                    <li>
+                                        <i data-lucide="lock"></i>
+                                        <div>
+                                            <strong>Room-Scoped</strong>
+                                            <span>Only grants access to one specific room</span>
+                                        </div>
+                                    </li>
+                                    <li>
+                                        <i data-lucide="tag"></i>
+                                        <div>
+                                            <strong>Named</strong>
+                                            <span>Has a human-readable worker name (e.g., "lab-gpu-1")</span>
+                                        </div>
+                                    </li>
+                                    <li>
+                                        <i data-lucide="calendar-x"></i>
+                                        <div>
+                                            <strong>Expirable</strong>
+                                            <span>Auto-expires after a set period (default: 7 days)</span>
+                                        </div>
+                                    </li>
+                                    <li>
+                                        <i data-lucide="shield-off"></i>
+                                        <div>
+                                            <strong>Revocable</strong>
+                                            <span>Can be revoked at any time to disconnect a worker</span>
+                                        </div>
+                                    </li>
+                                </ul>
+                                <div class="about-code">
+                                    <div class="code-header">
+                                        <span>Starting a worker with a token</span>
+                                    </div>
+                                    <code>sleap-rtc worker --api-key YOUR_TOKEN_HERE</code>
+                                </div>
+                                <div class="about-callout warning">
+                                    <i data-lucide="alert-triangle"></i>
+                                    <div>
+                                        <strong>Security:</strong> Tokens are shown only once when created. Store them securely!
+                                    </div>
+                                </div>
+                            </div>
+                        </section>
+
+                        <!-- Room Secrets Section -->
+                        <section class="about-section">
+                            <div class="about-header">
+                                <div class="about-icon">
+                                    <i data-lucide="shield-check"></i>
+                                </div>
+                                <div>
+                                    <h2>Room Secrets (P2P Authentication)</h2>
+                                    <p class="about-subtitle">Optional extra security for peer connections</p>
+                                </div>
+                            </div>
+                            <div class="about-body">
+                                <p>Room secrets add an <strong>additional layer of security</strong> for WebRTC peer connections. When configured, workers will challenge connecting clients to prove they have the shared secret.</p>
+                                <div class="about-flow">
+                                    <div class="flow-step">
+                                        <div class="flow-number">1</div>
+                                        <div class="flow-content">
+                                            <strong>Generate Secret</strong>
+                                            <span>Room owner creates a secret (stored locally in browser)</span>
+                                        </div>
+                                    </div>
+                                    <div class="flow-step">
+                                        <div class="flow-number">2</div>
+                                        <div class="flow-content">
+                                            <strong>Distribute</strong>
+                                            <span>Share secret securely with workers and clients</span>
+                                        </div>
+                                    </div>
+                                    <div class="flow-step">
+                                        <div class="flow-number">3</div>
+                                        <div class="flow-content">
+                                            <strong>Authenticate</strong>
+                                            <span>Worker challenges client on connection; client proves knowledge of secret</span>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="about-callout">
+                                    <i data-lucide="info"></i>
+                                    <div>
+                                        <strong>Privacy:</strong> Room secrets are generated and stored in your browser. The server never sees them.
+                                    </div>
+                                </div>
+                            </div>
+                        </section>
+
+                        <!-- Connection Modes Section -->
+                        <section class="about-section">
+                            <div class="about-header">
+                                <div class="about-icon">
+                                    <i data-lucide="plug"></i>
+                                </div>
+                                <div>
+                                    <h2>Connection Modes</h2>
+                                    <p class="about-subtitle">Different ways to connect clients to workers</p>
+                                </div>
+                            </div>
+                            <div class="about-body">
+                                <div class="connection-modes">
+                                    <div class="mode-card">
+                                        <h4><i data-lucide="link"></i> Direct (Session String)</h4>
+                                        <p>Worker displays a session string; client connects directly using it.</p>
+                                        <code>sleap-rtc train --session-string SESSION</code>
+                                        <span class="mode-tag">Best for: Single worker, testing</span>
+                                    </div>
+                                    <div class="mode-card">
+                                        <h4><i data-lucide="search"></i> Room Discovery</h4>
+                                        <p>Client discovers all workers in a room and selects one interactively.</p>
+                                        <code>sleap-rtc train --room ROOM_ID</code>
+                                        <span class="mode-tag">Best for: Multiple workers, manual selection</span>
+                                    </div>
+                                    <div class="mode-card">
+                                        <h4><i data-lucide="zap"></i> Auto-Select</h4>
+                                        <p>Automatically selects the worker with the most GPU memory.</p>
+                                        <code>sleap-rtc train --room ROOM_ID --auto-select</code>
+                                        <span class="mode-tag">Best for: Scripts, CI/CD pipelines</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </section>
+
+                        <!-- Quick Reference Section -->
+                        <section class="about-section">
+                            <div class="about-header">
+                                <div class="about-icon">
+                                    <i data-lucide="terminal"></i>
+                                </div>
+                                <div>
+                                    <h2>CLI Quick Reference</h2>
+                                    <p class="about-subtitle">Common commands</p>
+                                </div>
+                            </div>
+                            <div class="about-body">
+                                <div class="cli-reference">
+                                    <div class="cli-item">
+                                        <code>sleap-rtc login</code>
+                                        <span>Authenticate with GitHub</span>
+                                    </div>
+                                    <div class="cli-item">
+                                        <code>sleap-rtc room create --name "My Room"</code>
+                                        <span>Create a new room</span>
+                                    </div>
+                                    <div class="cli-item">
+                                        <code>sleap-rtc room join --code INVITE_CODE</code>
+                                        <span>Join a room with invite code</span>
+                                    </div>
+                                    <div class="cli-item">
+                                        <code>sleap-rtc token create --room ROOM_ID --name "gpu-1"</code>
+                                        <span>Create a worker token</span>
+                                    </div>
+                                    <div class="cli-item">
+                                        <code>sleap-rtc worker --api-key TOKEN</code>
+                                        <span>Start a worker</span>
+                                    </div>
+                                    <div class="cli-item">
+                                        <code>sleap-rtc train --room ROOM_ID --pkg-path package.zip</code>
+                                        <span>Submit a training job</span>
+                                    </div>
+                                </div>
+                                <div class="about-links">
+                                    <a href="https://sleap.ai" target="_blank" rel="noopener">
+                                        <i data-lucide="external-link"></i>
+                                        SLEAP Documentation
+                                    </a>
+                                    <a href="https://github.com/talmolab/sleap-rtc" target="_blank" rel="noopener">
+                                        <i data-lucide="github"></i>
+                                        GitHub Repository
+                                    </a>
+                                </div>
+                            </div>
+                        </section>
                     </div>
                 </div>
 
@@ -210,10 +864,10 @@
         </div>
     </div>
 
-    <!-- Room Details Modal (used for create and view) -->
+    <!-- Room Created Modal -->
     <div id="room-created-modal" class="modal hidden">
         <div class="modal-content">
-            <h3 id="room-modal-title">Room Details</h3>
+            <h3 id="room-modal-title">Room Created!</h3>
             <div class="success-details">
                 <div class="detail-row">
                     <label>Room ID:</label>
@@ -222,14 +876,11 @@
                         <i data-lucide="copy"></i>
                     </button>
                 </div>
-                <div class="detail-row">
-                    <label>Room Token:</label>
-                    <code id="new-room-token"></code>
-                    <button class="btn btn-secondary btn-sm" data-copy="new-room-token" title="Copy">
-                        <i data-lucide="copy"></i>
-                    </button>
-                </div>
             </div>
+            <p style="margin-top: 16px; color: var(--text-muted); font-size: 13px;">
+                Use the <strong>Secret</strong> button on your room card to generate a P2P authentication secret,
+                and <strong>Invite</strong> to share access with collaborators.
+            </p>
             <div class="form-actions">
                 <button type="button" class="btn btn-primary" data-close-modal>Done</button>
             </div>
@@ -451,6 +1102,21 @@
             </div>
             <div class="form-actions">
                 <button type="button" class="btn btn-primary" data-close-modal>Done</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Confirmation Modal -->
+    <div id="confirm-modal" class="modal hidden">
+        <div class="modal-content modal-confirm">
+            <div class="confirm-icon">
+                <i data-lucide="alert-triangle"></i>
+            </div>
+            <h3 id="confirm-title">Confirm Action</h3>
+            <p id="confirm-message">Are you sure you want to proceed?</p>
+            <div class="form-actions">
+                <button type="button" class="btn btn-secondary" id="confirm-cancel">Cancel</button>
+                <button type="button" class="btn btn-danger" id="confirm-ok">Delete</button>
             </div>
         </div>
     </div>
