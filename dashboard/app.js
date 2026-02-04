@@ -1,25 +1,62 @@
 // SLEAP-RTC Dashboard Application
 
 // =========================================================================
-// Relative Time Formatting
+// Date Parsing and Formatting
 // =========================================================================
+
+/**
+ * Parse a date value that could be an ISO string, Unix timestamp (seconds), or Date object
+ * @param {string|number|Date} value - The date value to parse
+ * @returns {Date|null} Parsed Date object or null if invalid
+ */
+function parseDate(value) {
+    if (!value) return null;
+
+    // Already a Date object
+    if (value instanceof Date) return value;
+
+    // Unix timestamp (number) - could be seconds or milliseconds
+    if (typeof value === 'number') {
+        // If the number is less than 10 billion, it's likely seconds (before year 2286)
+        // If greater, it's likely milliseconds
+        if (value < 10000000000) {
+            return new Date(value * 1000); // Convert seconds to milliseconds
+        }
+        return new Date(value);
+    }
+
+    // String - could be ISO format or numeric string
+    if (typeof value === 'string') {
+        // Check if it's a numeric string (Unix timestamp)
+        if (/^\d+$/.test(value)) {
+            const num = parseInt(value, 10);
+            if (num < 10000000000) {
+                return new Date(num * 1000);
+            }
+            return new Date(num);
+        }
+
+        // ISO string - ensure UTC parsing
+        let dateStr = value;
+        if (!value.endsWith('Z') && !value.includes('+') && !value.includes('-', 10)) {
+            dateStr = value + 'Z';
+        }
+        return new Date(dateStr);
+    }
+
+    return null;
+}
 
 /**
  * Format a date as relative time (e.g., "2 hours ago", "yesterday")
  * Uses Intl.RelativeTimeFormat for localized output
- * @param {string} isoString - ISO 8601 date string
+ * @param {string|number|Date} value - Date value (ISO string, Unix timestamp, or Date)
  * @returns {string} Relative time string
  */
-function formatRelativeTime(isoString) {
-    if (!isoString) return 'N/A';
-    if (typeof isoString !== 'string') isoString = String(isoString);
+function formatRelativeTime(value) {
+    const date = parseDate(value);
+    if (!date || isNaN(date.getTime())) return 'N/A';
 
-    // Ensure UTC parsing: if no timezone indicator, assume UTC
-    let dateStr = isoString;
-    if (!isoString.endsWith('Z') && !isoString.includes('+') && !isoString.includes('-', 10)) {
-        dateStr = isoString + 'Z';
-    }
-    const date = new Date(dateStr);
     const now = new Date();
     const diffMs = now - date;
     const diffSec = Math.floor(diffMs / 1000);
@@ -51,18 +88,13 @@ function formatRelativeTime(isoString) {
 
 /**
  * Format a date as an exact datetime string for tooltip display
- * @param {string} isoString - ISO 8601 date string
+ * @param {string|number|Date} value - Date value (ISO string, Unix timestamp, or Date)
  * @returns {string} Formatted datetime string
  */
-function formatExactDate(isoString) {
-    if (!isoString) return '';
-    if (typeof isoString !== 'string') isoString = String(isoString);
-    // Ensure UTC parsing: if no timezone indicator, assume UTC
-    let dateStr = isoString;
-    if (!isoString.endsWith('Z') && !isoString.includes('+') && !isoString.includes('-', 10)) {
-        dateStr = isoString + 'Z';
-    }
-    const date = new Date(dateStr);
+function formatExactDate(value) {
+    const date = parseDate(value);
+    if (!date || isNaN(date.getTime())) return '';
+
     return date.toLocaleString('en-US', {
         weekday: 'short',
         year: 'numeric',
@@ -657,8 +689,16 @@ class SleapRTCDashboard {
 
         // Separate rooms into active and expired
         const now = new Date();
-        const activeRooms = this.rooms.filter(room => !room.expires_at || new Date(room.expires_at) > now);
-        const expiredRooms = this.rooms.filter(room => room.expires_at && new Date(room.expires_at) <= now);
+        const activeRooms = this.rooms.filter(room => {
+            if (!room.expires_at) return true;
+            const expiresAt = parseDate(room.expires_at);
+            return expiresAt && expiresAt > now;
+        });
+        const expiredRooms = this.rooms.filter(room => {
+            if (!room.expires_at) return false;
+            const expiresAt = parseDate(room.expires_at);
+            return expiresAt && expiresAt <= now;
+        });
 
         // Check if expired section should be expanded (from localStorage)
         const expiredExpanded = localStorage.getItem('sleap_expired_rooms_expanded') === 'true';
@@ -726,11 +766,13 @@ class SleapRTCDashboard {
 
     renderRoomCard(room, isExpired = false) {
         // Check if room is expiring soon (< 3 days)
-        const isExpiringSoon = room.expires_at &&
-            new Date(room.expires_at) - new Date() < 3 * 24 * 60 * 60 * 1000 &&
-            new Date(room.expires_at) > new Date();
+        const now = new Date();
+        const expiresAt = room.expires_at ? parseDate(room.expires_at) : null;
+        const isExpiringSoon = expiresAt &&
+            expiresAt - now < 3 * 24 * 60 * 60 * 1000 &&
+            expiresAt > now;
         if (!isExpired) {
-            isExpired = room.expires_at && new Date(room.expires_at) < new Date();
+            isExpired = expiresAt && expiresAt < now;
         }
 
         return `
@@ -1100,9 +1142,11 @@ class SleapRTCDashboard {
     renderTokenCard(token, isInactive) {
         const isRevoked = !!token.revoked_at;
         const isExpired = !token.is_active && !isRevoked;
-        const isExpiringSoon = token.expires_at && !isInactive &&
-            new Date(token.expires_at) - new Date() < 3 * 24 * 60 * 60 * 1000 &&
-            new Date(token.expires_at) > new Date();
+        const now = new Date();
+        const expiresAt = token.expires_at ? parseDate(token.expires_at) : null;
+        const isExpiringSoon = expiresAt && !isInactive &&
+            expiresAt - now < 3 * 24 * 60 * 60 * 1000 &&
+            expiresAt > now;
 
         // Check if API key is available in session storage
         const storedKey = this.getStoredApiKey(token.token_id);
@@ -1306,7 +1350,11 @@ class SleapRTCDashboard {
         // Populate room dropdown - filter out expired rooms
         const select = document.getElementById('token-room');
         const now = new Date();
-        const activeRooms = this.rooms.filter(room => !room.expires_at || new Date(room.expires_at) > now);
+        const activeRooms = this.rooms.filter(room => {
+            if (!room.expires_at) return true;
+            const expiresAt = parseDate(room.expires_at);
+            return expiresAt && expiresAt > now;
+        });
         select.innerHTML = '<option value="">Select a room...</option>' +
             activeRooms.map(room => `
                 <option value="${room.room_id}">${room.room_id}${room.name ? ` - ${room.name}` : ''}</option>
