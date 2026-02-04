@@ -159,25 +159,23 @@ class WebRTCBridge:
             await self._connect_to_worker(worker_id)
             await self._wait_for_channel()
 
-            # Wait for PSK authentication if secret is configured
-            if self._room_secret:
-                if self._on_auth_status:
-                    await self._call_async(self._on_auth_status, "Authenticating...")
+            # Always wait for PSK authentication - even without a secret configured,
+            # the worker may require it and we need to detect that case
+            if self._on_auth_status:
+                status_msg = "Authenticating..." if self._room_secret else "Checking authentication..."
+                await self._call_async(self._on_auth_status, status_msg)
 
-                auth_success = await self._wait_for_auth()
-                if not auth_success:
-                    if self._on_auth_status:
-                        await self._call_async(
-                            self._on_auth_status,
-                            f"Auth failed: {self._auth_failed_reason}"
-                        )
-                    return False
-
+            auth_success = await self._wait_for_auth()
+            if not auth_success:
                 if self._on_auth_status:
-                    await self._call_async(self._on_auth_status, "Authenticated")
-            else:
-                # No secret configured - mark as authenticated (legacy mode)
-                self._authenticated = True
+                    await self._call_async(
+                        self._on_auth_status,
+                        f"Auth failed: {self._auth_failed_reason}"
+                    )
+                return False
+
+            if self._on_auth_status:
+                await self._call_async(self._on_auth_status, "Authenticated")
 
             return True
         except Exception as e:
