@@ -12,6 +12,7 @@
  */
 function formatRelativeTime(isoString) {
     if (!isoString) return 'N/A';
+    if (typeof isoString !== 'string') isoString = String(isoString);
 
     // Ensure UTC parsing: if no timezone indicator, assume UTC
     let dateStr = isoString;
@@ -55,6 +56,7 @@ function formatRelativeTime(isoString) {
  */
 function formatExactDate(isoString) {
     if (!isoString) return '';
+    if (typeof isoString !== 'string') isoString = String(isoString);
     // Ensure UTC parsing: if no timezone indicator, assume UTC
     let dateStr = isoString;
     if (!isoString.endsWith('Z') && !isoString.includes('+') && !isoString.includes('-', 10)) {
@@ -238,6 +240,7 @@ class SleapRTCDashboard {
         document.getElementById('create-room-form')?.addEventListener('submit', (e) => this.handleCreateRoom(e));
 
         // Join room
+        document.getElementById('join-room-btn')?.addEventListener('click', () => this.showModal('join-room-modal'));
         document.getElementById('join-room-form')?.addEventListener('submit', (e) => this.handleJoinRoom(e));
 
         // Create token
