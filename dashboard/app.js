@@ -825,10 +825,8 @@ class SleapRTCDashboard {
 
             // Show success modal
             document.getElementById('new-room-id').textContent = data.room_id;
-            document.getElementById('new-room-token').textContent = data.room_token;
 
             this.hideModal('create-room-modal');
-            document.getElementById('room-modal-title').textContent = 'Room Created!';
             this.showModal('room-created-modal');
 
             // Refresh rooms list and reset form
@@ -838,23 +836,6 @@ class SleapRTCDashboard {
 
         } catch (e) {
             console.error('Failed to create room:', e);
-            this.showToast(e.message, 'error');
-        }
-    }
-
-    async handleViewRoom(roomId) {
-        try {
-            const data = await this.apiRequest(`/api/auth/rooms/${roomId}`);
-
-            // Populate the room details modal (reuse the room-created-modal)
-            document.getElementById('new-room-id').textContent = data.room_id;
-            document.getElementById('new-room-token').textContent = data.room_token || 'N/A';
-
-            document.getElementById('room-modal-title').textContent = 'Room Details';
-            this.showModal('room-created-modal');
-
-        } catch (e) {
-            console.error('Failed to get room details:', e);
             this.showToast(e.message, 'error');
         }
     }

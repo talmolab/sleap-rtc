@@ -529,10 +529,10 @@
         </div>
     </div>
 
-    <!-- Room Details Modal (used for create and view) -->
+    <!-- Room Created Modal -->
     <div id="room-created-modal" class="modal hidden">
         <div class="modal-content">
-            <h3 id="room-modal-title">Room Details</h3>
+            <h3 id="room-modal-title">Room Created!</h3>
             <div class="success-details">
                 <div class="detail-row">
                     <label>Room ID:</label>
@@ -541,14 +541,11 @@
                         <i data-lucide="copy"></i>
                     </button>
                 </div>
-                <div class="detail-row">
-                    <label>Room Token:</label>
-                    <code id="new-room-token"></code>
-                    <button class="btn btn-secondary btn-sm" data-copy="new-room-token" title="Copy">
-                        <i data-lucide="copy"></i>
-                    </button>
-                </div>
             </div>
+            <p style="margin-top: 16px; color: var(--text-muted); font-size: 13px;">
+                Use the <strong>Secret</strong> button on your room card to generate a P2P authentication secret,
+                and <strong>Invite</strong> to share access with collaborators.
+            </p>
             <div class="form-actions">
                 <button type="button" class="btn btn-primary" data-close-modal>Done</button>
             </div>
