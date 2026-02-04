@@ -335,6 +335,22 @@ class SleapRTCDashboard {
             this.tokensSearch = e.target.value;
             this.debounceSearch(() => this.loadTokens());
         });
+
+        // Keyboard shortcuts
+        document.addEventListener('keydown', (e) => {
+            // `/` to focus search bar (only if not in an input/textarea)
+            if (e.key === '/' && !['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) {
+                e.preventDefault();
+                // Focus the search bar in the active tab
+                const activeTab = document.querySelector('.tab-content.active');
+                if (activeTab) {
+                    const searchInput = activeTab.querySelector('input[type="text"][placeholder*="Search"]');
+                    if (searchInput) {
+                        searchInput.focus();
+                    }
+                }
+            }
+        });
     }
 
     debounceSearch(callback) {
@@ -746,10 +762,6 @@ class SleapRTCDashboard {
                 <div class="room-actions">
                     <span class="role-badge ${room.role}">${room.role}</span>
                     ${!isExpired ? `
-                        <button class="btn btn-secondary btn-sm" onclick="app.handleViewRoom('${room.room_id}')">
-                            <i data-lucide="eye"></i>
-                            View
-                        </button>
                         ${room.role === 'owner' ? `
                             <button class="btn btn-secondary btn-sm" onclick="app.handleRoomSecret('${room.room_id}')">
                                 <i data-lucide="key"></i>
@@ -1199,12 +1211,15 @@ class SleapRTCDashboard {
     toggleInactiveSection(header) {
         const isExpanded = header.classList.toggle('expanded');
         const list = header.nextElementSibling;
-        const icon = header.querySelector('svg');
+        const icon = header.querySelector('[data-lucide]');
 
         list.style.display = isExpanded ? 'block' : 'none';
         localStorage.setItem('sleap_inactive_tokens_expanded', isExpanded);
 
-        // Re-render to update chevron icon
+        // Update chevron icon direction
+        if (icon) {
+            icon.setAttribute('data-lucide', isExpanded ? 'chevron-down' : 'chevron-right');
+        }
         if (typeof lucide !== 'undefined') {
             lucide.createIcons();
         }
@@ -1213,11 +1228,15 @@ class SleapRTCDashboard {
     toggleExpiredRoomsSection(header) {
         const isExpanded = header.classList.toggle('expanded');
         const list = header.nextElementSibling;
+        const icon = header.querySelector('[data-lucide]');
 
         list.style.display = isExpanded ? 'block' : 'none';
         localStorage.setItem('sleap_expired_rooms_expanded', isExpanded);
 
-        // Re-render to update chevron icon
+        // Update chevron icon direction
+        if (icon) {
+            icon.setAttribute('data-lucide', isExpanded ? 'chevron-down' : 'chevron-right');
+        }
         if (typeof lucide !== 'undefined') {
             lucide.createIcons();
         }
@@ -1297,10 +1316,12 @@ class SleapRTCDashboard {
     }
 
     async showCreateTokenModal() {
-        // Populate room dropdown
+        // Populate room dropdown - filter out expired rooms
         const select = document.getElementById('token-room');
+        const now = new Date();
+        const activeRooms = this.rooms.filter(room => !room.expires_at || new Date(room.expires_at) > now);
         select.innerHTML = '<option value="">Select a room...</option>' +
-            this.rooms.map(room => `
+            activeRooms.map(room => `
                 <option value="${room.room_id}">${room.room_id}${room.name ? ` - ${room.name}` : ''}</option>
             `).join('');
 
@@ -1545,6 +1566,13 @@ class SleapRTCDashboard {
                     <p>This room has a P2P authentication secret configured.</p>
                     <p class="security-note"><i data-lucide="shield-check"></i> This secret is stored only in your browser. The server never sees it.</p>
                     <div class="detail-row">
+                        <label>Room ID:</label>
+                        <code id="room-id-value">${roomId}</code>
+                        <button class="btn btn-secondary btn-sm" onclick="app.copyToClipboard('${roomId}')">
+                            <i data-lucide="copy"></i>
+                        </button>
+                    </div>
+                    <div class="detail-row">
                         <label>Secret:</label>
                         <code id="room-secret-value" class="api-key">${existingSecret}</code>
                         <button class="btn btn-secondary btn-sm" onclick="app.copyToClipboard('${existingSecret}')">
@@ -1571,6 +1599,15 @@ class SleapRTCDashboard {
         } else {
             // No secret yet - offer to generate one
             content.innerHTML = `
+                <div class="success-details">
+                    <div class="detail-row">
+                        <label>Room ID:</label>
+                        <code id="room-id-value">${roomId}</code>
+                        <button class="btn btn-secondary btn-sm" onclick="app.copyToClipboard('${roomId}')">
+                            <i data-lucide="copy"></i>
+                        </button>
+                    </div>
+                </div>
                 <div class="info-banner">
                     <p>P2P authentication adds an extra layer of security for direct worker-client communication.</p>
                     <p>When enabled, both the worker and client must have the same secret to authorize connections.</p>
