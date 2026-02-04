@@ -331,10 +331,35 @@ def token_create(room, name, expires, save):
 
 
 @token.command(name="list")
-def token_list():
+@click.option(
+    "--room", "-r",
+    help="Filter by room ID.",
+)
+@click.option(
+    "--sort", "-s",
+    type=click.Choice(["name", "created", "expires", "room"]),
+    default="created",
+    help="Sort by field.",
+)
+@click.option(
+    "--reverse",
+    is_flag=True,
+    help="Reverse sort order.",
+)
+@click.option(
+    "--active-only", "-a",
+    is_flag=True,
+    help="Hide revoked and expired tokens.",
+)
+def token_list(room, sort, reverse, active_only):
     """List your API tokens.
 
     Shows all tokens you've created, their status, and expiration.
+
+    Examples:
+        sleap-rtc token list --room abc123
+        sleap-rtc token list --active-only
+        sleap-rtc token list --sort expires
     """
     from sleap_rtc.auth.credentials import get_jwt
     from sleap_rtc.config import get_config
@@ -347,10 +372,21 @@ def token_list():
     config = get_config()
     endpoint = f"{config.get_http_url()}/api/auth/tokens"
 
+    # Build query params
+    params = {}
+    if room:
+        params["room_id"] = room
+    if active_only:
+        params["active_only"] = "true"
+    sort_map = {"name": "worker_name", "created": "created_at", "expires": "expires_at", "room": "room_name"}
+    params["sort_by"] = sort_map.get(sort, "created_at")
+    params["sort_order"] = "asc" if reverse else "desc"
+
     try:
         response = requests.get(
             endpoint,
             headers={"Authorization": f"Bearer {jwt_token}"},
+            params=params,
             timeout=30,
         )
 
@@ -372,10 +408,17 @@ def token_list():
 
         for t in tokens:
             name = t.get("worker_name", "unknown")[:20]
-            room = t.get("room_id", "?")[:12]
-            status = "revoked" if t.get("revoked_at") else "active"
-            expires = t.get("expires_at", "never")[:20]
-            click.echo(f"{name:<20} {room:<12} {status:<10} {expires:<20}")
+            room_display = (t.get("room_name") or t.get("room_id", "?"))[:12]
+            if t.get("revoked_at"):
+                status = "revoked"
+            elif not t.get("is_active"):
+                status = "expired"
+            else:
+                status = "active"
+            expires = t.get("expires_at", "never")
+            if expires and expires != "never":
+                expires = expires[:20]
+            click.echo(f"{name:<20} {room_display:<12} {status:<10} {expires:<20}")
 
         click.echo("")
 
@@ -431,6 +474,136 @@ def token_revoke(token_id, yes):
         sys.exit(1)
 
 
+@token.command(name="delete")
+@click.argument("token_id")
+@click.option("--yes", "-y", is_flag=True, help="Skip confirmation prompt.")
+def token_delete(token_id, yes):
+    """Permanently delete a revoked or expired token.
+
+    Only inactive tokens (revoked or expired) can be deleted.
+    Active tokens must be revoked first using 'sleap-rtc token revoke'.
+
+    Example:
+        sleap-rtc token delete slp_abc123...
+    """
+    from sleap_rtc.auth.credentials import get_jwt
+    from sleap_rtc.config import get_config
+
+    jwt_token = get_jwt()
+    if not jwt_token:
+        logger.error("Not logged in. Run: sleap-rtc login")
+        sys.exit(1)
+
+    if not yes:
+        if not click.confirm(f"Permanently delete token {token_id[:20]}...? This cannot be undone."):
+            click.echo("Cancelled")
+            return
+
+    config = get_config()
+    endpoint = f"{config.get_http_url()}/api/auth/tokens/{token_id}"
+
+    try:
+        response = requests.delete(
+            endpoint,
+            headers={"Authorization": f"Bearer {jwt_token}"},
+            timeout=30,
+        )
+
+        if response.status_code != 200:
+            error = response.json().get("detail", response.text)
+            logger.error(f"Failed to delete token: {error}")
+            sys.exit(1)
+
+        click.echo("Token deleted permanently")
+
+    except requests.RequestException as e:
+        logger.error(f"Request failed: {e}")
+        sys.exit(1)
+
+
+@token.command(name="cleanup")
+@click.option("--room", "-r", help="Filter by room ID (delete only tokens for this room).")
+@click.option("--yes", "-y", is_flag=True, help="Skip confirmation prompt.")
+def token_cleanup(room, yes):
+    """Delete all revoked and expired tokens.
+
+    Permanently removes all inactive tokens to clean up your token list.
+    Only deletes tokens you created or tokens for rooms you own.
+
+    Examples:
+        sleap-rtc token cleanup
+        sleap-rtc token cleanup --room abc123
+        sleap-rtc token cleanup --yes
+    """
+    from sleap_rtc.auth.credentials import get_jwt
+    from sleap_rtc.config import get_config
+
+    jwt_token = get_jwt()
+    if not jwt_token:
+        logger.error("Not logged in. Run: sleap-rtc login")
+        sys.exit(1)
+
+    config = get_config()
+
+    # First, count inactive tokens
+    list_endpoint = f"{config.get_http_url()}/api/auth/tokens"
+    try:
+        response = requests.get(
+            list_endpoint,
+            headers={"Authorization": f"Bearer {jwt_token}"},
+            params={"room_id": room} if room else {},
+            timeout=30,
+        )
+        if response.status_code != 200:
+            logger.error("Failed to fetch tokens")
+            sys.exit(1)
+
+        tokens = response.json().get("tokens", [])
+        inactive_tokens = [t for t in tokens if not t.get("is_active")]
+
+        if not inactive_tokens:
+            click.echo("No inactive tokens to delete.")
+            return
+
+        click.echo(f"Found {len(inactive_tokens)} inactive token(s) to delete:")
+        for t in inactive_tokens[:5]:  # Show first 5
+            status = "revoked" if t.get("revoked_at") else "expired"
+            click.echo(f"  - {t['worker_name']} ({status})")
+        if len(inactive_tokens) > 5:
+            click.echo(f"  ... and {len(inactive_tokens) - 5} more")
+
+    except requests.RequestException as e:
+        logger.error(f"Request failed: {e}")
+        sys.exit(1)
+
+    if not yes:
+        if not click.confirm(f"Delete {len(inactive_tokens)} inactive token(s)? This cannot be undone."):
+            click.echo("Cancelled")
+            return
+
+    # Delete all inactive tokens
+    delete_endpoint = f"{config.get_http_url()}/api/auth/tokens"
+    try:
+        response = requests.delete(
+            delete_endpoint,
+            headers={"Authorization": f"Bearer {jwt_token}"},
+            params={"room_id": room} if room else {},
+            timeout=30,
+        )
+
+        if response.status_code != 200:
+            error = response.json().get("detail", response.text)
+            logger.error(f"Failed to delete tokens: {error}")
+            sys.exit(1)
+
+        deleted_count = response.json().get("deleted_count", 0)
+        click.echo(f"Deleted {deleted_count} inactive token(s)")
+
+    except requests.RequestException as e:
+        logger.error(f"Request failed: {e}")
+        sys.exit(1)
+
+
 # =============================================================================
 # Room Commands (subgroup)
 # =============================================================================
@@ -447,10 +620,37 @@ def room():
 
 
 @room.command(name="list")
-def room_list():
+@click.option(
+    "--filter", "-f",
+    "role_filter",
+    type=click.Choice(["all", "owned", "member"]),
+    default="all",
+    help="Filter by ownership role.",
+)
+@click.option(
+    "--sort", "-s",
+    type=click.Choice(["name", "created", "expires", "role"]),
+    default="created",
+    help="Sort by field.",
+)
+@click.option(
+    "--reverse", "-r",
+    is_flag=True,
+    help="Reverse sort order.",
+)
+@click.option(
+    "--search",
+    help="Search by room name (case-insensitive substring match).",
+)
+def room_list(role_filter, sort, reverse, search):
     """List rooms you have access to.
 
     Shows all rooms where you are an owner or member.
+
+    Examples:
+        sleap-rtc room list --filter owned
+        sleap-rtc room list --sort name
+        sleap-rtc room list --search "lab"
     """
     from sleap_rtc.auth.credentials import get_jwt
     from sleap_rtc.config import get_config
@@ -463,10 +663,21 @@ def room_list():
     config = get_config()
     endpoint = f"{config.get_http_url()}/api/auth/rooms"
 
+    # Build query params
+    params = {}
+    if role_filter != "all":
+        params["role"] = role_filter.replace("owned", "owner")  # Map 'owned' to 'owner'
+    sort_map = {"name": "name", "created": "joined_at", "expires": "expires_at", "role": "role"}
+    params["sort_by"] = sort_map.get(sort, "joined_at")
+    params["sort_order"] = "asc" if reverse else "desc"
+    if search:
+        params["search"] = search
+
     try:
         response = requests.get(
             endpoint,
             headers={"Authorization": f"Bearer {jwt_token}"},
+            params=params,
             timeout=30,
         )
 
@@ -484,14 +695,30 @@ def room_list():
             return
 
         click.echo("")
-        click.echo(f"{'ROOM ID':<12} {'ROLE':<10} {'JOINED':<20}")
-        click.echo("-" * 42)
+        click.echo(f"{'ROOM ID':<12} {'NAME':<16} {'ROLE':<8} {'EXPIRES':<20}")
+        click.echo("-" * 60)
 
         for r in rooms:
             room_id = r.get("room_id", "?")[:12]
-            role = r.get("role", "?")[:10]
-            joined = r.get("joined_at", "?")[:20]
-            click.echo(f"{room_id:<12} {role:<10} {joined:<20}")
+            name = (r.get("name") or room_id)[:16]
+            role = r.get("role", "?")[:8]
+
+            # Format expiration
+            expires_at = r.get("expires_at")
+            if expires_at:
+                expires_dt = datetime.fromtimestamp(expires_at)
+                now = datetime.now()
+                if expires_dt < now:
+                    expires_str = "EXPIRED"
+                elif (expires_dt - now).days > 0:
+                    expires_str = f"{(expires_dt - now).days}d left"
+                else:
+                    hours = (expires_dt - now).seconds // 3600
+                    expires_str = f"{hours}h left"
+            else:
+                expires_str = "Never"
+
+            click.echo(f"{room_id:<12} {name:<16} {role:<8} {expires_str:<20}")
 
         click.echo("")
 
@@ -507,7 +734,14 @@ def room_list():
     default=None,
     help="Optional name for the room.",
 )
-def room_create(name):
+@click.option(
+    "--expires",
+    "-e",
+    type=click.Choice(["1d", "5d", "10d", "15d", "30d", "never"]),
+    default="30d",
+    help="Room expiration time (default: 30d). Use 'never' for no expiration.",
+)
+def room_create(name, expires):
     """Create a new room.
 
     Creates a room where you can add workers and invite collaborators.
@@ -515,6 +749,7 @@ def room_create(name):
 
     Example:
         sleap-rtc room create --name "my-training-room"
+        sleap-rtc room create --name "persistent-room" --expires never
     """
     from sleap_rtc.auth.credentials import get_jwt
     from sleap_rtc.config import get_config
@@ -527,7 +762,11 @@ def room_create(name):
     config = get_config()
     endpoint = f"{config.get_http_url()}/api/auth/rooms"
 
-    payload = {}
+    # Map expires to days (None = never expires)
+    expires_map = {"1d": 1, "5d": 5, "10d": 10, "15d": 15, "30d": 30, "never": None}
+    expires_in_days = expires_map[expires]
+
+    payload = {"expires_in_days": expires_in_days}
     if name:
         payload["name"] = name
 
@@ -546,15 +785,105 @@ def room_create(name):
 
         data = response.json()
 
+        # Format expiration display
+        if data.get("expires_at"):
+            expires_dt = datetime.fromtimestamp(data["expires_at"])
+            expires_str = expires_dt.strftime("%Y-%m-%d %H:%M")
+        else:
+            expires_str = "Never"
+
         click.echo("")
         click.echo("Room created successfully!")
         click.echo("")
         click.echo(f"  Room ID:    {data['room_id']}")
         click.echo(f"  Room Token: {data['room_token']}")
+        click.echo(f"  Expires:    {expires_str}")
         click.echo("")
         click.echo("Next steps:")
         click.echo(f"  1. Create a worker token: sleap-rtc token create --room {data['room_id']} --name my-worker")
         click.echo(f"  2. Start a worker with the token")
+        click.echo("")
+
+    except requests.RequestException as e:
+        logger.error(f"Request failed: {e}")
+        sys.exit(1)
+
+
+@room.command(name="info")
+@click.argument("room_id")
+def room_info(room_id):
+    """Show details for a room.
+
+    Displays room information including name, expiration, members, and role.
+
+    Example:
+        sleap-rtc room info abc123
+    """
+    from sleap_rtc.auth.credentials import get_jwt
+    from sleap_rtc.config import get_config
+
+    jwt_token = get_jwt()
+    if not jwt_token:
+        logger.error("Not logged in. Run: sleap-rtc login")
+        sys.exit(1)
+
+    config = get_config()
+    endpoint = f"{config.get_http_url()}/api/auth/rooms/{room_id}"
+
+    try:
+        response = requests.get(
+            endpoint,
+            headers={"Authorization": f"Bearer {jwt_token}"},
+            timeout=30,
+        )
+
+        if response.status_code != 200:
+            error = response.json().get("detail", response.json().get("error", response.text))
+            logger.error(f"Failed to get room info: {error}")
+            sys.exit(1)
+
+        data = response.json()
+
+        # Format expiration
+        expires_at = data.get("expires_at")
+        if expires_at:
+            expires_dt = datetime.fromtimestamp(expires_at)
+            now = datetime.now()
+            time_left = expires_dt - now
+
+            if time_left.total_seconds() < 0:
+                expires_str = f"{expires_dt.strftime('%Y-%m-%d %H:%M')} (EXPIRED)"
+            elif time_left.days > 0:
+                expires_str = f"{expires_dt.strftime('%Y-%m-%d %H:%M')} ({time_left.days} days left)"
+            elif time_left.seconds > 3600:
+                hours_left = time_left.seconds // 3600
+                expires_str = f"{expires_dt.strftime('%Y-%m-%d %H:%M')} ({hours_left} hours left)"
+            else:
+                minutes_left = time_left.seconds // 60
+                expires_str = f"{expires_dt.strftime('%Y-%m-%d %H:%M')} ({minutes_left} minutes left)"
+        else:
+            expires_str = "Never"
+
+        click.echo("")
+        click.echo(f"Room: {data.get('name', room_id)}")
+        click.echo("")
+        click.echo(f"  Room ID:    {room_id}")
+        click.echo(f"  Your Role:  {data.get('role', 'unknown')}")
+        click.echo(f"  Expires:    {expires_str}")
+
+        # Show token only for owners
+        if data.get("token"):
+            click.echo(f"  Room Token: {data['token']}")
+
+        # Show members if available
+        members = data.get("members", [])
+        if members:
+            click.echo("")
+            click.echo("  Members:")
+            for member in members:
+                role_icon = "👑" if member.get("role") == "owner" else "👤"
+                click.echo(f"    {role_icon} {member.get('username', member.get('user_id', 'unknown'))} ({member.get('role', 'member')})")
+
         click.echo("")
 
     except requests.RequestException as e:
