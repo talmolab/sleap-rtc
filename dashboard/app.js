@@ -377,9 +377,15 @@ class SleapRTCDashboard {
         // Update page title
         const titles = {
             'rooms': 'Rooms',
-            'tokens': 'Worker Tokens'
+            'tokens': 'Worker Tokens',
+            'about': 'About SLEAP-RTC'
         };
         document.getElementById('page-title').textContent = titles[tabName] || tabName;
+
+        // Re-initialize Lucide icons for the About tab
+        if (tabName === 'about' && typeof lucide !== 'undefined') {
+            lucide.createIcons();
+        }
     }
 
     showModal(modalId) {
