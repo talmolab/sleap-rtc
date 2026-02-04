@@ -104,10 +104,6 @@
                     <div class="section-header">
                         <h2 class="section-title">Your Rooms (<span id="rooms-title-count">0</span>)</h2>
                         <div class="section-actions">
-                            <button id="create-room-btn" class="btn btn-primary">
-                                <i data-lucide="plus"></i>
-                                Create Room
-                            </button>
                             <button class="btn btn-ghost btn-sm" id="refresh-rooms-btn">
                                 <i data-lucide="refresh-cw"></i>
                                 Refresh
@@ -142,28 +138,21 @@
                     <div class="section-header">
                         <h2 class="section-title">Your Tokens (<span id="tokens-title-count">0</span>)</h2>
                         <div class="section-actions">
-                            <button id="create-token-btn" class="btn btn-primary">
-                                <i data-lucide="plus"></i>
-                                Create Token
-                            </button>
                             <button class="btn btn-ghost btn-sm" id="refresh-tokens-btn">
                                 <i data-lucide="refresh-cw"></i>
                                 Refresh
                             </button>
                             <div class="filter-group">
-                                <select id="tokens-room-filter" class="filter-select">
-                                    <option value="">All Rooms</option>
-                                </select>
+                                <label class="checkbox-filter">
+                                    <input type="checkbox" id="tokens-active-only">
+                                    <span>Active only</span>
+                                </label>
                                 <select id="tokens-sort" class="filter-select">
                                     <option value="created_at">Sort: Recent</option>
                                     <option value="worker_name">Sort: Name</option>
                                     <option value="expires_at">Sort: Expiry</option>
                                     <option value="room_name">Sort: Room</option>
                                 </select>
-                                <label class="checkbox-filter">
-                                    <input type="checkbox" id="tokens-active-only">
-                                    <span>Active only</span>
-                                </label>
                             </div>
                             <div class="search-box">
                                 <i data-lucide="search"></i>

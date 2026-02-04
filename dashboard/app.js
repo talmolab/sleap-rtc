@@ -104,7 +104,6 @@ class SleapRTCDashboard {
         this.roomsFilter = localStorage.getItem('sleap_rooms_filter') || 'all';
         this.roomsSort = localStorage.getItem('sleap_rooms_sort') || 'joined_at';
         this.roomsSearch = '';
-        this.tokensRoomFilter = localStorage.getItem('sleap_tokens_room') || '';
         this.tokensSort = localStorage.getItem('sleap_tokens_sort') || 'created_at';
         this.tokensActiveOnly = localStorage.getItem('sleap_tokens_active') === 'true';
         this.tokensSearch = '';
@@ -121,6 +120,9 @@ class SleapRTCDashboard {
         // Load stored credentials
         this.loadStoredCredentials();
 
+        // Load theme preference
+        this.loadTheme();
+
         // Setup event listeners
         this.setupEventListeners();
 
@@ -134,6 +136,27 @@ class SleapRTCDashboard {
 
         // Check auth state and render
         this.updateUI();
+    }
+
+    loadTheme() {
+        const savedTheme = localStorage.getItem('sleap_theme') || 'dark';
+        document.documentElement.setAttribute('data-theme', savedTheme);
+        this.updateThemeUI(savedTheme);
+    }
+
+    toggleTheme() {
+        const currentTheme = document.documentElement.getAttribute('data-theme') || 'dark';
+        const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+        document.documentElement.setAttribute('data-theme', newTheme);
+        localStorage.setItem('sleap_theme', newTheme);
+        this.updateThemeUI(newTheme);
+    }
+
+    updateThemeUI(theme) {
+        const label = document.getElementById('theme-label');
+        if (label) {
+            label.textContent = theme === 'dark' ? 'Dark' : 'Light';
+        }
     }
 
     loadStoredCredentials() {
@@ -250,6 +273,9 @@ class SleapRTCDashboard {
         // Settings button
         document.getElementById('settings-btn')?.addEventListener('click', () => this.showModal('settings-modal'));
 
+        // Theme toggle
+        document.getElementById('theme-toggle')?.addEventListener('click', () => this.toggleTheme());
+
         // Modal close buttons
         document.querySelectorAll('[data-close-modal]').forEach(btn => {
             btn.addEventListener('click', (e) => {
@@ -295,11 +321,6 @@ class SleapRTCDashboard {
         });
 
         // Token filter/sort event listeners
-        document.getElementById('tokens-room-filter')?.addEventListener('change', (e) => {
-            this.tokensRoomFilter = e.target.value;
-            localStorage.setItem('sleap_tokens_room', this.tokensRoomFilter);
-            this.loadTokens();
-        });
         document.getElementById('tokens-sort')?.addEventListener('change', (e) => {
             this.tokensSort = e.target.value;
             localStorage.setItem('sleap_tokens_sort', this.tokensSort);
@@ -573,25 +594,10 @@ class SleapRTCDashboard {
             this.rooms = data.rooms || [];
             this.renderRooms();
             this.updateCounts();
-            this.updateTokensRoomFilter();
         } catch (e) {
             console.error('Failed to load rooms:', e);
             container.innerHTML = `<p class="loading" style="color: var(--status-error);">Failed to load rooms: ${e.message}</p>`;
         }
-    }
-
-    updateTokensRoomFilter() {
-        // Update the room dropdown in tokens filter
-        const select = document.getElementById('tokens-room-filter');
-        if (!select) return;
-
-        const currentValue = this.tokensRoomFilter;
-        select.innerHTML = '<option value="">All Rooms</option>' +
-            this.rooms.map(room => `
-                <option value="${room.room_id}" ${room.room_id === currentValue ? 'selected' : ''}>
-                    ${room.name || room.room_id.substring(0, 8) + '...'}
-                </option>
-            `).join('');
     }
 
     updateCounts() {
@@ -648,7 +654,7 @@ class SleapRTCDashboard {
         // Create Room button at the bottom of active section
         html += `
             <div class="create-item-row">
-                <button class="btn btn-secondary btn-create-inline" onclick="app.showModal('create-room-modal')">
+                <button class="btn btn-primary btn-create-inline" onclick="app.showModal('create-room-modal')">
                     <i data-lucide="plus"></i>
                     Create Room
                 </button>
@@ -914,9 +920,6 @@ class SleapRTCDashboard {
 
         // Build query params
         const params = new URLSearchParams();
-        if (this.tokensRoomFilter) {
-            params.set('room_id', this.tokensRoomFilter);
-        }
         if (this.tokensSort) {
             params.set('sort_by', this.tokensSort);
         }
@@ -1047,7 +1050,7 @@ class SleapRTCDashboard {
         // Create Token button at the bottom of active section
         html += `
             <div class="create-item-row">
-                <button class="btn btn-secondary btn-create-inline" onclick="app.showCreateTokenModal()">
+                <button class="btn btn-primary btn-create-inline" onclick="app.showCreateTokenModal()">
                     <i data-lucide="plus"></i>
                     Create Token
                 </button>

@@ -554,6 +554,44 @@ body::before {
     accent-color: var(--accent-primary);
     width: 14px;
     height: 14px;
+    cursor: pointer;
+}
+
+/* Custom checkbox styling for better dark/light mode visibility */
+.checkbox-filter input[type="checkbox"] {
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    appearance: none;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-default);
+    border-radius: 3px;
+    position: relative;
+}
+
+.checkbox-filter input[type="checkbox"]:checked {
+    background: var(--accent-primary);
+    border-color: var(--accent-primary);
+}
+
+.checkbox-filter input[type="checkbox"]:checked::after {
+    content: '';
+    position: absolute;
+    left: 4px;
+    top: 1px;
+    width: 4px;
+    height: 8px;
+    border: solid white;
+    border-width: 0 2px 2px 0;
+    transform: rotate(45deg);
+}
+
+.checkbox-filter input[type="checkbox"]:hover {
+    border-color: var(--accent-primary);
+}
+
+.checkbox-filter input[type="checkbox"]:focus {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--accent-glow);
 }
 
 /* Token/Room card list */
@@ -680,6 +718,7 @@ body::before {
     padding: 16px 0;
     margin-top: 8px;
     border-top: 1px dashed var(--border-subtle);
+    text-align: center;
 }
 
 .btn-create-inline {
@@ -687,6 +726,17 @@ body::before {
     align-items: center;
     gap: 6px;
     padding: 10px 16px;
+}
+
+/* Spacing for expired/inactive card lists */
+.expired-rooms-list .room-card,
+.inactive-tokens-list .token-card {
+    margin-bottom: 12px;
+}
+
+.expired-rooms-list .room-card:last-child,
+.inactive-tokens-list .token-card:last-child {
+    margin-bottom: 0;
 }
 
 .token-header, .room-header {
