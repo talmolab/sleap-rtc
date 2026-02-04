@@ -410,12 +410,13 @@ class SleapRTCDashboard {
         const titles = {
             'rooms': 'Rooms',
             'tokens': 'Worker Tokens',
+            'quickstart': 'Quickstart Guide',
             'about': 'About SLEAP-RTC'
         };
         document.getElementById('page-title').textContent = titles[tabName] || tabName;
 
-        // Re-initialize Lucide icons for the About tab
-        if (tabName === 'about' && typeof lucide !== 'undefined') {
+        // Re-initialize Lucide icons for the About and Quickstart tabs
+        if ((tabName === 'about' || tabName === 'quickstart') && typeof lucide !== 'undefined') {
             lucide.createIcons();
         }
     }

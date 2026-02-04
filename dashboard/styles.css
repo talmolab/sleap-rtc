@@ -2275,6 +2275,195 @@ kbd {
     height: 16px;
 }
 
+/* Quickstart Section */
+.quickstart-steps-overview {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 20px;
+    background: var(--bg-tertiary);
+    border-radius: 8px;
+    flex-wrap: wrap;
+}
+
+.step-pill {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 16px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-default);
+    border-radius: 20px;
+    font-size: 13px;
+    font-weight: 500;
+}
+
+.step-num {
+    width: 22px;
+    height: 22px;
+    background: var(--accent-primary);
+    color: white;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.step-arrow {
+    width: 16px;
+    height: 16px;
+    color: var(--text-muted);
+}
+
+.step-icon {
+    background: var(--accent-primary) !important;
+    color: white !important;
+    font-weight: 700;
+    font-size: 18px;
+}
+
+.step-icon span {
+    color: white;
+}
+
+.optional-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-default);
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-left: 8px;
+    vertical-align: middle;
+}
+
+.quickstart-options {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 16px;
+    margin: 16px 0;
+}
+
+.option-card {
+    background: var(--bg-tertiary);
+    border-radius: 8px;
+    padding: 20px;
+}
+
+.option-card h4 {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    margin-bottom: 12px;
+    color: var(--text-primary);
+}
+
+.option-card h4 svg {
+    width: 18px;
+    height: 18px;
+    color: var(--accent-primary);
+}
+
+.option-card p {
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin-bottom: 12px;
+}
+
+.option-card .about-code {
+    margin: 12px 0 0 0;
+}
+
+.option-card .about-code code {
+    padding: 12px;
+    font-size: 12px;
+}
+
+/* Config file pre block */
+.about-code.config-file pre {
+    margin: 0;
+    padding: 16px;
+    background: transparent;
+    overflow-x: auto;
+}
+
+.about-code.config-file code {
+    display: block;
+    padding: 0;
+    white-space: pre;
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+/* Next Steps Grid */
+.next-steps-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    gap: 16px;
+}
+
+.next-step-card {
+    display: flex;
+    align-items: flex-start;
+    gap: 16px;
+    padding: 20px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-subtle);
+    border-radius: 8px;
+    text-decoration: none;
+    transition: all 0.15s;
+}
+
+.next-step-card:hover {
+    border-color: var(--accent-primary);
+    background: var(--bg-elevated);
+}
+
+.next-step-card > svg {
+    width: 24px;
+    height: 24px;
+    color: var(--accent-primary);
+    flex-shrink: 0;
+}
+
+.next-step-card h4 {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 4px;
+}
+
+.next-step-card p {
+    font-size: 13px;
+    color: var(--text-muted);
+    margin: 0;
+}
+
+/* Responsive for Quickstart */
+@media (max-width: 768px) {
+    .quickstart-steps-overview {
+        flex-direction: column;
+        gap: 12px;
+    }
+
+    .step-arrow {
+        transform: rotate(90deg);
+    }
+
+    .step-pill {
+        width: 100%;
+        justify-content: center;
+    }
+}
+
 /* Responsive for About */
 @media (max-width: 768px) {
     .architecture-diagram {
