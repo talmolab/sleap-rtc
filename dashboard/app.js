@@ -665,22 +665,38 @@ class SleapRTCDashboard {
 
         let html = '';
 
-        // Active rooms section
-        if (activeRooms.length > 0) {
-            html += `<div class="rooms-section-header">
-                <h3>Active Rooms (${activeRooms.length})</h3>
-            </div>`;
-            html += activeRooms.map(room => this.renderRoomCard(room)).join('');
-        }
-
-        // Create Room button at the bottom of active section
-        html += `
-            <div class="create-item-row">
-                <button class="btn btn-primary btn-create-inline" onclick="app.showModal('create-room-modal')">
+        // If no active rooms but there are expired ones, show empty state message
+        if (activeRooms.length === 0 && expiredRooms.length > 0) {
+            html += `
+            <div class="empty-state" style="padding: 40px 20px;">
+                <div class="empty-icon">
+                    <i data-lucide="home"></i>
+                </div>
+                <h3>No active rooms</h3>
+                <p>All your rooms have expired. Create a new room or delete the expired ones.</p>
+                <button class="btn btn-primary" onclick="app.showModal('create-room-modal')">
                     <i data-lucide="plus"></i>
                     Create Room
                 </button>
             </div>`;
+        } else {
+            // Active rooms section
+            if (activeRooms.length > 0) {
+                html += `<div class="rooms-section-header">
+                    <h3>Active Rooms (${activeRooms.length})</h3>
+                </div>`;
+                html += activeRooms.map(room => this.renderRoomCard(room)).join('');
+            }
+
+            // Create Room button at the bottom of active section
+            html += `
+                <div class="create-item-row">
+                    <button class="btn btn-primary btn-create-inline" onclick="app.showModal('create-room-modal')">
+                        <i data-lucide="plus"></i>
+                        Create Room
+                    </button>
+                </div>`;
+        }
 
         // Expired rooms section (collapsible)
         if (expiredRooms.length > 0) {
@@ -698,22 +714,6 @@ class SleapRTCDashboard {
             <div class="expired-rooms-list" style="display: ${expiredExpanded ? 'block' : 'none'};">
                 ${expiredRooms.map(room => this.renderRoomCard(room, true)).join('')}
             </div>`;
-        }
-
-        // If no active rooms but there are expired ones, show a message
-        if (activeRooms.length === 0 && expiredRooms.length > 0) {
-            html = `
-            <div class="empty-state" style="padding: 40px 20px;">
-                <div class="empty-icon">
-                    <i data-lucide="home"></i>
-                </div>
-                <h3>No active rooms</h3>
-                <p>All your rooms have expired. Create a new room or delete the expired ones.</p>
-                <button class="btn btn-primary" onclick="app.showModal('create-room-modal')">
-                    <i data-lucide="plus"></i>
-                    Create Room
-                </button>
-            </div>` + html;
         }
 
         container.innerHTML = html;
@@ -1057,22 +1057,38 @@ class SleapRTCDashboard {
 
         let html = '';
 
-        // Active tokens section
-        if (activeTokens.length > 0) {
-            html += `<div class="tokens-section-header">
-                <h3>Active Tokens (${activeTokens.length})</h3>
-            </div>`;
-            html += activeTokens.map(token => this.renderTokenCard(token, false)).join('');
-        }
-
-        // Create Token button at the bottom of active section
-        html += `
-            <div class="create-item-row">
-                <button class="btn btn-primary btn-create-inline" onclick="app.showCreateTokenModal()">
+        // If no active tokens but there are inactive ones, show empty state message
+        if (activeTokens.length === 0 && inactiveTokens.length > 0) {
+            html += `
+            <div class="empty-state" style="padding: 40px 20px;">
+                <div class="empty-icon">
+                    <i data-lucide="key-round"></i>
+                </div>
+                <h3>No active tokens</h3>
+                <p>All your tokens are expired or revoked. Create a new token or delete the inactive ones.</p>
+                <button class="btn btn-primary" onclick="app.showCreateTokenModal()">
                     <i data-lucide="plus"></i>
                     Create Token
                 </button>
             </div>`;
+        } else {
+            // Active tokens section
+            if (activeTokens.length > 0) {
+                html += `<div class="tokens-section-header">
+                    <h3>Active Tokens (${activeTokens.length})</h3>
+                </div>`;
+                html += activeTokens.map(token => this.renderTokenCard(token, false)).join('');
+            }
+
+            // Create Token button at the bottom of active section
+            html += `
+                <div class="create-item-row">
+                    <button class="btn btn-primary btn-create-inline" onclick="app.showCreateTokenModal()">
+                        <i data-lucide="plus"></i>
+                        Create Token
+                    </button>
+                </div>`;
+        }
 
         // Inactive tokens section (collapsible)
         if (inactiveTokens.length > 0) {
@@ -1090,22 +1106,6 @@ class SleapRTCDashboard {
             <div class="inactive-tokens-list" style="display: ${inactiveExpanded ? 'block' : 'none'};">
                 ${inactiveTokens.map(token => this.renderTokenCard(token, true)).join('')}
             </div>`;
-        }
-
-        // If no active tokens but there are inactive ones, show a message
-        if (activeTokens.length === 0 && inactiveTokens.length > 0) {
-            html = `
-            <div class="empty-state" style="padding: 40px 20px;">
-                <div class="empty-icon">
-                    <i data-lucide="key-round"></i>
-                </div>
-                <h3>No active tokens</h3>
-                <p>All your tokens are expired or revoked. Create a new token or delete the inactive ones.</p>
-                <button class="btn btn-primary" onclick="app.showCreateTokenModal()">
-                    <i data-lucide="plus"></i>
-                    Create Token
-                </button>
-            </div>` + html;
         }
 
         container.innerHTML = html;
