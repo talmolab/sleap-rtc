@@ -5,39 +5,113 @@ them to select one to connect to.
 """
 
 import asyncio
+from datetime import datetime, timezone
 from typing import Optional, Callable
 
 import requests
 from textual.app import ComposeResult
-from textual.containers import Container, Vertical
+from textual.containers import Container, Vertical, Horizontal
 from textual.screen import Screen
 from textual.widgets import Header, Footer, Static, ListView, ListItem, Label
 from textual.reactive import reactive
 
 from sleap_rtc.config import get_config
+from sleap_rtc.auth.credentials import get_user
+
+
+def parse_expiration(expires_at) -> Optional[datetime]:
+    """Parse expiration timestamp to datetime."""
+    if not expires_at:
+        return None
+    if isinstance(expires_at, (int, float)):
+        # Unix timestamp (seconds)
+        if expires_at < 10000000000:
+            return datetime.fromtimestamp(expires_at, tz=timezone.utc)
+        return datetime.fromtimestamp(expires_at / 1000, tz=timezone.utc)
+    if isinstance(expires_at, str):
+        try:
+            # Try ISO format
+            return datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+        except ValueError:
+            pass
+    return None
+
+
+def format_days_remaining(expires_at) -> str:
+    """Format expiration as days remaining."""
+    if not expires_at:
+        return "never"
+
+    exp_dt = parse_expiration(expires_at)
+    if not exp_dt:
+        return "?"
+
+    now = datetime.now(timezone.utc)
+    delta = exp_dt - now
+    days = delta.days
+
+    if days < 0:
+        return "expired"
+    elif days == 0:
+        return "<1d"
+    else:
+        return f"{days}d"
 
 
 class RoomListItem(ListItem):
-    """A list item representing a room."""
+    """A list item representing a room with badge-style indicators."""
+
+    # Reactive worker count: None = loading, -1 = error, >= 0 = count
+    worker_count: reactive[Optional[int]] = reactive(None, init=False)
 
     def __init__(self, room_data: dict, *args, **kwargs):
         """Initialize room list item.
 
         Args:
-            room_data: Dict with room_id, role, joined_at, etc.
+            room_data: Dict with room_id, role, joined_at, expires_at, etc.
         """
         super().__init__(*args, **kwargs)
         self.room_data = room_data
 
     def compose(self) -> ComposeResult:
-        room_id = self.room_data.get("room_id", "unknown")
         role = self.room_data.get("role", "member")
-        name = self.room_data.get("name", room_id)
+        name = self.room_data.get("name") or self.room_data.get("room_id", "unknown")
+        expires_at = self.room_data.get("expires_at")
 
-        # Role indicator
-        role_icon = "" if role == "owner" else ""
+        # Format expiration
+        exp_str = format_days_remaining(expires_at)
 
-        yield Label(f"{role_icon}  {name}")
+        # Build the display with horizontal layout
+        with Horizontal(classes="room-item-row"):
+            # Role badge
+            if role == "owner":
+                yield Static("[OWNER]", classes="role-badge owner")
+            else:
+                yield Static("[MEMBER]", classes="role-badge member")
+
+            # Room name
+            yield Static(name, classes="room-name")
+
+            # Worker indicator (updated reactively)
+            yield Static("— online", id=f"workers-{id(self)}", classes="worker-indicator")
+
+            # Expiration
+            yield Static(f"⏱ {exp_str}", classes="expiration")
+
+    def watch_worker_count(self, count: Optional[int]) -> None:
+        """Update worker indicator when count changes."""
+        try:
+            indicator = self.query_one(f"#workers-{id(self)}", Static)
+            if count is None:
+                indicator.update("— online")
+            elif count < 0:
+                indicator.update("○ ? online")
+            elif count == 0:
+                indicator.update("○ 0 online")
+            else:
+                indicator.update(f"● {count} online")
+        except Exception:
+            pass  # Widget not mounted yet
 
 
 class RoomSelectScreen(Screen):
@@ -51,9 +125,26 @@ class RoomSelectScreen(Screen):
         background: $background;
     }
 
+    /* Custom header bar */
+    #app-header {
+        width: 100%;
+        height: 1;
+        padding: 0 1;
+        background: $panel;
+    }
+
+    #header-title {
+        text-style: bold;
+    }
+
+    #header-user {
+        dock: right;
+        color: $primary;
+    }
+
     #room-container {
         align: center middle;
-        height: 100%;
+        height: 1fr;
     }
 
     #room-box {
@@ -107,6 +198,43 @@ class RoomSelectScreen(Screen):
         padding: 2;
         color: $warning;
     }
+
+    /* Room list item styling */
+    .room-item-row {
+        width: 100%;
+        height: 1;
+    }
+
+    .role-badge {
+        width: 8;
+        text-style: bold;
+    }
+
+    .role-badge.owner {
+        color: $primary;
+    }
+
+    .role-badge.member {
+        color: $text-muted;
+    }
+
+    .room-name {
+        width: 1fr;
+        padding-left: 1;
+    }
+
+    .worker-indicator {
+        width: 12;
+        text-align: right;
+        color: $text-muted;
+    }
+
+    .expiration {
+        width: 10;
+        text-align: right;
+        color: $text-muted;
+        padding-right: 1;
+    }
     """
 
     BINDINGS = [
@@ -135,7 +263,15 @@ class RoomSelectScreen(Screen):
         self.rooms: list[dict] = []
 
     def compose(self) -> ComposeResult:
-        yield Header()
+        # Get user info for profile display
+        user = get_user()
+        username = user.get("username", "unknown") if user else "unknown"
+
+        # Custom header with profile
+        with Horizontal(id="app-header"):
+            yield Static("sleap-rtc", id="header-title")
+            yield Static(f"👤 {username}", id="header-user")
+
         yield Container(
             Vertical(
                 Static("Select a Room", classes="title"),
@@ -225,22 +361,39 @@ class RoomSelectScreen(Screen):
             self.error_message = f"Request failed: {e}"
 
     def _populate_room_list(self) -> None:
-        """Populate the room list with fetched rooms."""
+        """Populate the room list with fetched rooms (filtered, non-expired only)."""
         room_list = self.query_one("#room-list", ListView)
         room_list.clear()
 
-        if not self.rooms:
+        # Filter out expired rooms
+        now = datetime.now(timezone.utc)
+        active_rooms = []
+        for room in self.rooms:
+            expires_at = room.get("expires_at")
+            if expires_at:
+                exp_dt = parse_expiration(expires_at)
+                if exp_dt and exp_dt <= now:
+                    continue  # Skip expired rooms
+            active_rooms.append(room)
+
+        if not active_rooms:
             # Show "no rooms" message
-            item = ListItem(Label("No rooms found. Create one with: sleap-rtc room create"))
+            item = ListItem(Label("No active rooms. Create one with: sleap-rtc room create"))
             room_list.append(item)
             return
 
-        for room in self.rooms:
+        # Create list items and track them for worker discovery
+        self._room_items: list[tuple[dict, RoomListItem]] = []
+        for room in active_rooms:
             item = RoomListItem(room)
             room_list.append(item)
+            self._room_items.append((room, item))
 
         # Focus the list
         room_list.focus()
+
+        # Start lazy loading worker counts
+        asyncio.create_task(self._fetch_worker_counts())
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         """Handle room selection."""
@@ -262,3 +415,92 @@ class RoomSelectScreen(Screen):
     def action_quit(self) -> None:
         """Quit the application."""
         self.app.exit()
+
+    async def _fetch_worker_counts(self) -> None:
+        """Fetch worker counts for all rooms in background."""
+        if not hasattr(self, "_room_items"):
+            return
+
+        # Fetch worker counts concurrently
+        tasks = []
+        for room_data, item in self._room_items:
+            task = asyncio.create_task(
+                self._discover_workers_for_room(room_data, item)
+            )
+            tasks.append(task)
+
+        # Wait for all to complete (with individual error handling)
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def _discover_workers_for_room(
+        self, room_data: dict, item: RoomListItem
+    ) -> None:
+        """Discover workers for a single room and update the list item.
+
+        Args:
+            room_data: Room data dict with room_id.
+            item: The RoomListItem to update.
+        """
+        import json
+        import websockets
+        from sleap_rtc.auth.credentials import get_valid_jwt, get_user
+
+        room_id = room_data.get("room_id")
+        if not room_id:
+            item.worker_count = -1
+            return
+
+        config = get_config()
+        ws_url = config.signaling_websocket
+
+        try:
+            jwt_token = get_valid_jwt()
+            user = get_user()
+            peer_id = user.get("username", "tui-probe") if user else "tui-probe"
+
+            async with websockets.connect(ws_url) as ws:
+                # Register with room (minimal registration for discovery)
+                register_msg = json.dumps({
+                    "type": "register",
+                    "peer_id": f"{peer_id}-probe-{room_id[:8]}",
+                    "room_id": room_id,
+                    "token": "",  # JWT auth, no room token needed
+                    "role": "client",
+                    "jwt": jwt_token,
+                    "metadata": {"tags": ["probe"]},
+                })
+                await ws.send(register_msg)
+
+                # Wait for registration response
+                response = await asyncio.wait_for(ws.recv(), timeout=5.0)
+                data = json.loads(response)
+
+                if data.get("type") != "registered_auth":
+                    item.worker_count = -1
+                    return
+
+                # Discover workers
+                discover_msg = json.dumps({
+                    "type": "discover_peers",
+                    "from_peer_id": f"{peer_id}-probe-{room_id[:8]}",
+                    "filters": {
+                        "role": "worker",
+                        "room_id": room_id,
+                        "tags": ["sleap-rtc"],
+                    },
+                })
+                await ws.send(discover_msg)
+
+                # Get worker list
+                response = await asyncio.wait_for(ws.recv(), timeout=5.0)
+                data = json.loads(response)
+
+                if data.get("type") == "peer_list":
+                    workers = data.get("peers", [])
+                    item.worker_count = len(workers)
+                else:
+                    item.worker_count = -1
+
+        except Exception:
+            # Discovery failed - show error state
+            item.worker_count = -1

@@ -39,6 +39,7 @@ class BrowserScreen(Screen):
 
     /* ===== Header ===== */
     #app-header {
+        width: 100%;
         height: 1;
         padding: 0 1;
         background: $panel;
@@ -46,6 +47,17 @@ class BrowserScreen(Screen):
 
     #header-title {
         text-style: bold;
+    }
+
+    #header-room {
+        color: $text-muted;
+        margin-left: 2;
+    }
+
+    #header-user {
+        dock: right;
+        color: $primary;
+        margin-right: 2;
     }
 
     #header-status {
@@ -200,9 +212,16 @@ class BrowserScreen(Screen):
         self._tree_loaded = False
 
     def compose(self) -> ComposeResult:
+        # Get user info for profile display
+        from sleap_rtc.auth.credentials import get_user
+        user = get_user()
+        username = user.get("username", "unknown") if user else "unknown"
+
         # Custom header
         with Horizontal(id="app-header"):
             yield Static("sleap-rtc", id="header-title")
+            yield Static(f"[{self.room_id[:12]}...]" if len(self.room_id) > 15 else f"[{self.room_id}]", id="header-room")
+            yield Static(f"👤 {username}", id="header-user")
             yield Static("○ Disconnected", id="header-status")
 
         with Container(id="browser-main"):

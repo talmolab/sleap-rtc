@@ -4,9 +4,42 @@ This module provides the TUIApp class that manages the overall TUI experience,
 including login flow, room selection, and file browsing.
 """
 
+import logging
+import sys
+from pathlib import Path
 from typing import Optional
 
 from textual.app import App
+
+
+def _configure_tui_logging():
+    """Configure logging to write to file instead of stderr.
+
+    Textual apps need logging redirected to a file, otherwise log messages
+    will corrupt the terminal UI.
+    """
+    # Remove any existing handlers from root logger
+    root = logging.getLogger()
+    for handler in root.handlers[:]:
+        root.removeHandler(handler)
+
+    # Set up file handler
+    log_file = Path.home() / ".sleap-rtc" / "tui.log"
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+
+    file_handler = logging.FileHandler(log_file, mode="w")
+    file_handler.setLevel(logging.DEBUG)
+    file_handler.setFormatter(
+        logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+    )
+
+    root.addHandler(file_handler)
+    root.setLevel(logging.DEBUG)
+
+    # Also silence some noisy libraries
+    logging.getLogger("aiortc").setLevel(logging.WARNING)
+    logging.getLogger("aioice").setLevel(logging.WARNING)
+    logging.getLogger("websockets").setLevel(logging.WARNING)
 from textual.binding import Binding
 
 from sleap_rtc.tui.screens.login import LoginScreen
@@ -151,5 +184,8 @@ def run_tui(
         token: Optional room token (not required for JWT auth).
         room_secret: Optional room secret for PSK authentication (CLI override).
     """
+    # Redirect logging to file to avoid corrupting TUI display
+    _configure_tui_logging()
+
     app = TUIApp(room_id=room_id, token=token, room_secret=room_secret)
     app.run()
