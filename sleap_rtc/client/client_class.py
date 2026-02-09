@@ -48,6 +48,13 @@ from sleap_rtc.protocol import (
     MSG_AUTH_RESPONSE,
     MSG_AUTH_SUCCESS,
     MSG_AUTH_FAILURE,
+    # Structured job submission
+    MSG_JOB_SUBMIT,
+    MSG_JOB_ACCEPTED,
+    MSG_JOB_REJECTED,
+    MSG_JOB_PROGRESS,
+    MSG_JOB_COMPLETE,
+    MSG_JOB_FAILED,
 )
 from sleap_rtc.auth.psk import compute_hmac
 from sleap_rtc.auth.secret_resolver import resolve_secret
@@ -116,6 +123,10 @@ class RTCClient:
         self._authenticated = False  # Whether PSK authentication completed
         self._auth_event = asyncio.Event()  # Signaled when auth completes (success or failure)
         self._auth_failed_reason: Optional[str] = None  # Reason if auth failed
+
+        # Structured job submission
+        self.job_spec = None  # TrainJobSpec or TrackJobSpec instance
+        self.job_response_queue = asyncio.Queue()  # Queue for job protocol responses
 
     def parse_session_string(self, session_string: str):
         prefix = "sleap-session:"
@@ -967,6 +978,12 @@ class RTCClient:
                 print("Check that the room secret matches the worker's configuration.")
                 return
 
+        # Handle structured job submission if job_spec is set
+        if self.job_spec:
+            logging.info(f"Submitting structured job: {self.job_spec.__class__.__name__}")
+            await self.submit_job()
+            return
+
         # Determine the worker path to use
         resolved_path = None
 
@@ -1132,6 +1149,11 @@ class RTCClient:
                 return
             if message.startswith(MSG_AUTH_FAILURE):
                 self._handle_auth_failure(message)
+                return
+
+            # Handle structured job submission responses (JOB_*)
+            if message.startswith("JOB_"):
+                await self.job_response_queue.put(message)
                 return
 
             # Handle filesystem browser responses (FS_*)
@@ -1924,6 +1946,207 @@ class RTCClient:
         pc.on("iceconnectionstatechange", self.on_iceconnectionstatechange)
         return pc
 
+    async def submit_job(self, allow_path_correction: bool = True):
+        """Submit a structured job spec and wait for completion.
+
+        Sends JOB_SUBMIT message with the job spec, then handles all job
+        protocol messages until completion or failure.
+
+        Args:
+            allow_path_correction: If True, offer to correct paths when
+                JOB_REJECTED is received with path errors.
+
+        Requires self.job_spec to be set before calling.
+        """
+        if not self.job_spec:
+            logging.error("No job spec set for submission")
+            return
+
+        if not self.data_channel or self.data_channel.readyState != "open":
+            logging.error("Data channel not ready for job submission")
+            return
+
+        # Generate job ID and store for tracking
+        import uuid
+        job_id = str(uuid.uuid4())[:8]
+        self.current_job_id = job_id
+
+        # Build JOB_SUBMIT message: JOB_SUBMIT::{job_id}::{spec_json}
+        spec_json = self.job_spec.to_json()
+        submit_msg = format_message(MSG_JOB_SUBMIT, f"{job_id}{MSG_SEPARATOR}{spec_json}")
+
+        logging.info(f"Submitting job {job_id}: {self.job_spec.__class__.__name__}")
+        self.data_channel.send(submit_msg)
+
+        # Wait for job responses
+        while True:
+            try:
+                response = await asyncio.wait_for(
+                    self.job_response_queue.get(),
+                    timeout=600.0  # 10 minute timeout for long-running jobs
+                )
+            except asyncio.TimeoutError:
+                logging.error(f"Job {job_id} timed out waiting for response")
+                print(f"\nError: Job timed out after 10 minutes")
+                break
+
+            # Parse response
+            if response.startswith(MSG_JOB_ACCEPTED):
+                parts = response.split(MSG_SEPARATOR, 2)
+                accepted_job_id = parts[1] if len(parts) > 1 else "unknown"
+                logging.info(f"Job {accepted_job_id} accepted by worker")
+                print(f"\nJob accepted by worker. Starting execution...")
+
+            elif response.startswith(MSG_JOB_REJECTED):
+                parts = response.split(MSG_SEPARATOR, 2)
+                rejected_job_id = parts[1] if len(parts) > 1 else "unknown"
+                error_json = parts[2] if len(parts) > 2 else "{}"
+                try:
+                    error_data = json.loads(error_json)
+                    errors = error_data.get("errors", [])
+                    logging.error(f"Job {rejected_job_id} rejected: {errors}")
+                    print(f"\nJob rejected by worker:")
+                    for err in errors:
+                        print(f"  - {err.get('field', 'unknown')}: {err.get('message', 'unknown error')}")
+
+                    # Check for path-related errors and offer correction
+                    if allow_path_correction and not self.non_interactive:
+                        corrected = await self._handle_path_correction(errors)
+                        if corrected:
+                            # Resubmit with corrected spec
+                            continue
+                except json.JSONDecodeError:
+                    logging.error(f"Job {rejected_job_id} rejected: {error_json}")
+                    print(f"\nJob rejected: {error_json}")
+                break
+
+            elif response.startswith(MSG_JOB_PROGRESS):
+                parts = response.split(MSG_SEPARATOR, 2)
+                progress_job_id = parts[1] if len(parts) > 1 else "unknown"
+                progress_data = parts[2] if len(parts) > 2 else ""
+                # Print progress to console (this is job output)
+                if progress_data:
+                    print(progress_data, end="", flush=True)
+
+            elif response.startswith(MSG_JOB_COMPLETE):
+                parts = response.split(MSG_SEPARATOR, 2)
+                complete_job_id = parts[1] if len(parts) > 1 else "unknown"
+                result_json = parts[2] if len(parts) > 2 else "{}"
+                try:
+                    result_data = json.loads(result_json)
+                    output_path = result_data.get("output_path", "")
+                    logging.info(f"Job {complete_job_id} completed successfully")
+                    print(f"\n\nJob completed successfully!")
+                    if output_path:
+                        print(f"Output: {output_path}")
+                except json.JSONDecodeError:
+                    logging.info(f"Job {complete_job_id} completed")
+                    print(f"\n\nJob completed!")
+                break
+
+            elif response.startswith(MSG_JOB_FAILED):
+                parts = response.split(MSG_SEPARATOR, 2)
+                failed_job_id = parts[1] if len(parts) > 1 else "unknown"
+                error_msg = parts[2] if len(parts) > 2 else "Unknown error"
+                logging.error(f"Job {failed_job_id} failed: {error_msg}")
+                print(f"\n\nJob failed: {error_msg}")
+                break
+
+            else:
+                logging.warning(f"Unknown job response: {response[:50]}...")
+
+    async def _handle_path_correction(self, errors: list) -> bool:
+        """Handle path correction for JOB_REJECTED errors.
+
+        Checks for path-related errors and offers to browse the worker
+        filesystem to correct them.
+
+        Args:
+            errors: List of error dictionaries from JOB_REJECTED.
+
+        Returns:
+            True if path was corrected and job should be resubmitted,
+            False otherwise.
+        """
+        from sleap_rtc.client.directory_browser import DirectoryBrowser
+
+        # Path error codes that can be corrected
+        PATH_ERROR_CODES = {"PATH_NOT_FOUND", "ACCESS_DENIED", "NOT_ALLOWED"}
+
+        # Find first path error
+        path_error = None
+        for err in errors:
+            code = err.get("code", "")
+            if code in PATH_ERROR_CODES:
+                path_error = err
+                break
+
+        if not path_error:
+            return False
+
+        field = path_error.get("field", "unknown")
+        invalid_path = path_error.get("value", "")
+
+        print(f"\nPath error detected for '{field}': {invalid_path}")
+        print("Would you like to browse the worker filesystem to find the correct path?")
+
+        try:
+            choice = input("[y/N]: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            return False
+
+        if choice != "y":
+            return False
+
+        # Determine file filter based on field name
+        file_filter = None
+        if "labels" in field.lower() or "data" in field.lower() or "slp" in field.lower():
+            file_filter = ".slp"
+        elif "config" in field.lower():
+            file_filter = ".yaml"
+        elif "model" in field.lower():
+            file_filter = None  # Models are directories
+
+        # Determine start path (parent of invalid path or root)
+        import os
+        start_path = os.path.dirname(invalid_path) if invalid_path else "/"
+        if not start_path or start_path == invalid_path:
+            start_path = "/"
+
+        # Create and run browser
+        browser = DirectoryBrowser(
+            send_message=self.data_channel.send,
+            receive_response=self.fs_response_queue.get,
+            start_path=start_path,
+            file_filter=file_filter,
+            title=f"Select correct path for '{field}':",
+        )
+
+        selected_path = await browser.run()
+
+        if not selected_path:
+            print("Path correction cancelled.")
+            return False
+
+        # Update job spec with corrected path
+        if hasattr(self.job_spec, field):
+            setattr(self.job_spec, field, selected_path)
+            print(f"\nUpdated {field} to: {selected_path}")
+
+            # Resubmit job
+            print("Resubmitting job with corrected path...")
+            import uuid
+            job_id = str(uuid.uuid4())[:8]
+            self.current_job_id = job_id
+
+            spec_json = self.job_spec.to_json()
+            submit_msg = format_message(MSG_JOB_SUBMIT, f"{job_id}{MSG_SEPARATOR}{spec_json}")
+            self.data_channel.send(submit_msg)
+            return True
+        else:
+            print(f"Warning: Could not update field '{field}' in job spec")
+            return False
+
     async def run_client(
         self,
         file_path: str = None,
@@ -1940,6 +2163,7 @@ class RTCClient:
         non_interactive: bool = False,
         mount_label: str = None,
         room_secret: str = None,
+        job_spec=None,
     ):
         """Sends initial SDP offer to worker peer and establishes both connection & datachannel to be used by both parties.
 
@@ -1959,6 +2183,8 @@ class RTCClient:
             mount_label: Specific mount label to search (skips mount selection)
             room_secret: Optional room secret for P2P PSK authentication. If not provided,
                 will try to resolve from SLEAP_ROOM_SECRET env var, filesystem, or config.
+            job_spec: Optional TrainJobSpec or TrackJobSpec for structured job submission.
+                If provided, uses the new job submission protocol instead of file transfer.
         Returns:
             None
         """
@@ -1973,6 +2199,9 @@ class RTCClient:
             self.non_interactive = non_interactive
             self.mount_label = mount_label
             self.room_id = room_id
+
+            # Structured job submission
+            self.job_spec = job_spec
 
             # Initialize reconnect attempts.
             logging.info("Setting up RTC data channel reconnect attempts...")
