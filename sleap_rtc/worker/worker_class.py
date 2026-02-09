@@ -60,6 +60,21 @@ from sleap_rtc.protocol import (
     MSG_AUTH_RESPONSE,
     MSG_AUTH_SUCCESS,
     MSG_AUTH_FAILURE,
+    # Structured job submission
+    MSG_JOB_SUBMIT,
+    MSG_JOB_ACCEPTED,
+    MSG_JOB_REJECTED,
+    MSG_JOB_PROGRESS,
+    MSG_JOB_COMPLETE,
+    MSG_JOB_FAILED,
+)
+from sleap_rtc.jobs import (
+    TrainJobSpec,
+    TrackJobSpec,
+    parse_job_spec,
+    JobValidator,
+    ValidationError,
+    CommandBuilder,
 )
 from sleap_rtc.worker.capabilities import WorkerCapabilities
 from sleap_rtc.worker.job_executor import JobExecutor
@@ -1974,6 +1989,79 @@ class RTCWorkerClient:
 
         return f"{MSG_FS_CHECK_VIDEOS_RESPONSE}{MSG_SEPARATOR}{json.dumps(result)}"
 
+    async def handle_job_submit(self, channel: RTCDataChannel, message: str) -> None:
+        """Handle JOB_SUBMIT message for structured job submission.
+
+        Validates the job specification, and either accepts (starts execution)
+        or rejects (returns validation errors) the job.
+
+        Args:
+            channel: The data channel for communication with the Client.
+            message: The JOB_SUBMIT::{json_spec} message.
+        """
+        try:
+            # Parse the JSON spec from the message
+            parts = message.split(MSG_SEPARATOR, 1)
+            if len(parts) < 2 or not parts[1]:
+                error_response = json.dumps([{
+                    "field": "spec",
+                    "message": "Job specification JSON is required",
+                }])
+                channel.send(f"{MSG_JOB_REJECTED}{MSG_SEPARATOR}{error_response}")
+                return
+
+            json_spec = parts[1]
+
+            # Parse the job spec
+            try:
+                spec = parse_job_spec(json_spec)
+            except (json.JSONDecodeError, ValueError) as e:
+                error_response = json.dumps([{
+                    "field": "spec",
+                    "message": f"Invalid job specification: {e}",
+                }])
+                channel.send(f"{MSG_JOB_REJECTED}{MSG_SEPARATOR}{error_response}")
+                return
+
+            # Validate the spec using JobValidator
+            validator = JobValidator(file_manager=self.file_manager)
+            errors = validator.validate(spec)
+
+            if errors:
+                # Send JOB_REJECTED with validation errors
+                error_dicts = [e.to_dict() for e in errors]
+                error_response = json.dumps(error_dicts)
+                logging.warning(f"Job rejected with {len(errors)} validation error(s)")
+                channel.send(f"{MSG_JOB_REJECTED}{MSG_SEPARATOR}{error_response}")
+                return
+
+            # Generate job ID and send JOB_ACCEPTED
+            job_id = f"job_{uuid.uuid4().hex[:8]}"
+            logging.info(f"Job accepted: {job_id}")
+            channel.send(f"{MSG_JOB_ACCEPTED}{MSG_SEPARATOR}{job_id}")
+
+            # Build the command using CommandBuilder
+            builder = CommandBuilder()
+            if isinstance(spec, TrainJobSpec):
+                cmd = builder.build_train_command(spec)
+                await self.job_executor.execute_from_spec(
+                    channel, cmd, job_id, job_type="train"
+                )
+            elif isinstance(spec, TrackJobSpec):
+                cmd = builder.build_track_command(spec)
+                await self.job_executor.execute_from_spec(
+                    channel, cmd, job_id, job_type="track"
+                )
+
+        except Exception as e:
+            logging.error(f"Error handling job submit: {e}")
+            error_response = json.dumps([{
+                "field": "internal",
+                "message": f"Internal error: {e}",
+            }])
+            if channel.readyState == "open":
+                channel.send(f"{MSG_JOB_REJECTED}{MSG_SEPARATOR}{error_response}")
+
     async def _process_worker_input_path(self, channel):
         """Process a job from a worker input path (no file transfer).
 
@@ -2169,6 +2257,12 @@ class RTCWorkerClient:
                             video_check = self._check_slp_videos_if_needed()
                             if video_check is not None:
                                 channel.send(video_check)
+                    return
+
+                # Handle structured job submission (JOB_SUBMIT)
+                if message.startswith(MSG_JOB_SUBMIT):
+                    logging.info(f"Handling job submit message")
+                    await self.handle_job_submit(channel, message)
                     return
 
                 # Detect package type (track or train)
