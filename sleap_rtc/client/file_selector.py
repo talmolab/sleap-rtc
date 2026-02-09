@@ -674,29 +674,29 @@ class WorkerSelector:
             for i, worker in enumerate(self.workers):
                 selected = i == self.selected_index
                 peer_id = worker.get("peer_id", "unknown")
+                # Support both direct properties and metadata.properties structure
                 props = worker.get("properties", {})
+                if not props and "metadata" in worker:
+                    props = worker.get("metadata", {}).get("properties", {})
+
                 name = props.get("name", "")
-                platform = props.get("platform", "unknown")
-                status = props.get("status", "available")
+                gpu_model = props.get("gpu_model", "Unknown GPU")
+                gpu_memory_mb = props.get("gpu_memory_mb", 0)
+                gpu_memory_gb = gpu_memory_mb / 1024 if gpu_memory_mb else 0
 
                 # Show name if available, otherwise truncated peer_id
-                display_name = name if name else peer_id[:16]
+                display_name = name if name else peer_id[:20]
 
                 if selected:
-                    # Selected: bold cyan with status coloring
-                    lines.append(("bold fg:ansicyan", f"> {display_name}"))
-                    lines.append(("fg:ansibrightblack", f"  ({platform})  "))
-                    if status == "available":
-                        lines.append(("fg:ansigreen", f"{status}\n"))
-                    else:
-                        lines.append(("fg:ansiyellow", f"{status}\n"))
+                    # Selected: bold cyan with GPU info
+                    lines.append(("bold fg:ansicyan", f"> {display_name}\n"))
+                    lines.append(("fg:ansibrightblack", f"    "))
+                    lines.append(("fg:ansiwhite", f"{gpu_model}"))
+                    lines.append(("fg:ansibrightblack", f"  •  "))
+                    lines.append(("fg:ansigreen", f"{gpu_memory_gb:.1f} GB\n"))
                 else:
-                    lines.append(("", f"  {display_name}"))
-                    lines.append(("fg:ansibrightblack", f"  ({platform})  "))
-                    if status == "available":
-                        lines.append(("fg:ansigreen", f"{status}\n"))
-                    else:
-                        lines.append(("fg:ansiyellow", f"{status}\n"))
+                    lines.append(("", f"  {display_name}\n"))
+                    lines.append(("fg:ansibrightblack", f"    {gpu_model}  •  {gpu_memory_gb:.1f} GB\n"))
 
             # Help text with highlighted keys (matching rich-click style)
             lines.append(("", "\n"))
@@ -739,17 +739,23 @@ class WorkerSelector:
 
             for i, worker in enumerate(self.workers, 1):
                 peer_id = worker.get("peer_id", "unknown")
+                # Support both direct properties and metadata.properties structure
                 props = worker.get("properties", {})
+                if not props and "metadata" in worker:
+                    props = worker.get("metadata", {}).get("properties", {})
+
                 name = props.get("name", "")
-                platform = props.get("platform", "unknown")
-                status = props.get("status", "available")
+                gpu_model = props.get("gpu_model", "Unknown GPU")
+                gpu_memory_mb = props.get("gpu_memory_mb", 0)
+                gpu_memory_gb = gpu_memory_mb / 1024 if gpu_memory_mb else 0
 
                 # Show name if available, otherwise peer_id
-                display_name = name if name else peer_id[:12]
-                status_color = "green" if status == "available" else "yellow"
+                display_name = name if name else peer_id[:20]
                 console.print(
-                    f"  [bold cyan]{i}.[/bold cyan] {display_name}  "
-                    f"[dim]({platform})[/dim] [{status_color}]{status}[/{status_color}]"
+                    f"  [bold cyan]{i}.[/bold cyan] {display_name}"
+                )
+                console.print(
+                    f"      [dim]{gpu_model}[/dim]  •  [green]{gpu_memory_gb:.1f} GB[/green]"
                 )
 
             console.print()
@@ -763,10 +769,19 @@ class WorkerSelector:
 
             for i, worker in enumerate(self.workers, 1):
                 peer_id = worker.get("peer_id", "unknown")
+                # Support both direct properties and metadata.properties structure
                 props = worker.get("properties", {})
-                platform = props.get("platform", "unknown")
-                status = props.get("status", "available")
-                print(f"  {i}. {peer_id}  ({platform}, {status})")
+                if not props and "metadata" in worker:
+                    props = worker.get("metadata", {}).get("properties", {})
+
+                name = props.get("name", "")
+                gpu_model = props.get("gpu_model", "Unknown GPU")
+                gpu_memory_mb = props.get("gpu_memory_mb", 0)
+                gpu_memory_gb = gpu_memory_mb / 1024 if gpu_memory_mb else 0
+
+                display_name = name if name else peer_id[:20]
+                print(f"  {i}. {display_name}")
+                print(f"      {gpu_model}  •  {gpu_memory_gb:.1f} GB")
 
             print()
             if self.allow_cancel:

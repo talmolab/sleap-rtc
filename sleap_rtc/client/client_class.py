@@ -1620,7 +1620,7 @@ class RTCClient:
         return peer_id
 
     async def _prompt_worker_selection(self, workers: list) -> str:
-        """Display workers and prompt user to select one.
+        """Display workers and prompt user to select one using prompt_toolkit.
 
         Args:
             workers: List of worker peer info dicts
@@ -1628,62 +1628,25 @@ class RTCClient:
         Returns:
             Selected worker peer_id
         """
-        while True:
-            print("\n" + "=" * 80)
-            print("Available Workers:")
-            print("=" * 80)
+        from sleap_rtc.client.file_selector import WorkerSelector
 
-            for i, worker in enumerate(workers, 1):
-                peer_id = worker["peer_id"]
-                metadata = worker.get("metadata", {}).get("properties", {})
-                gpu_model = metadata.get("gpu_model", "Unknown")
-                gpu_memory = metadata.get("gpu_memory_mb", 0)
-                cuda_version = metadata.get("cuda_version", "Unknown")
-                hostname = metadata.get("hostname", "Unknown")
+        if not workers:
+            return None
 
-                print(f"\n  {i}. {peer_id}")
-                print(f"     GPU Model:    {gpu_model}")
-                print(f"     GPU Memory:   {gpu_memory} MB")
-                print(f"     CUDA Version: {cuda_version}")
-                print(f"     Hostname:     {hostname}")
-                print(f"     Transfer:     RTC")
+        selector = WorkerSelector(
+            workers=workers,
+            title="Select a worker:",
+            allow_cancel=True,
+        )
+        selected = await selector.run()
 
-            print("\n" + "=" * 80)
-            print(
-                "Commands: Enter worker number (1-{}), or 'refresh' to update list".format(
-                    len(workers)
-                )
-            )
-            print("=" * 80)
+        if selected is None:
+            logging.info("Worker selection cancelled")
+            return None
 
-            choice = input("\nSelect worker: ").strip().lower()
-
-            if choice == "refresh":
-                logging.info("Refreshing worker list...")
-                # Re-query workers
-                refreshed_workers = await self._discover_workers_in_room(
-                    room_id=self.current_room_id, min_gpu_memory=None
-                )
-                if refreshed_workers:
-                    workers = refreshed_workers
-                    continue
-                else:
-                    print("No workers found. Returning empty list.")
-                    workers = []
-                    continue
-
-            try:
-                idx = int(choice) - 1
-                if 0 <= idx < len(workers):
-                    selected_worker = workers[idx]["peer_id"]
-                    print(f"\nSelected: {selected_worker}")
-                    return selected_worker
-                else:
-                    print(
-                        f"Invalid selection. Please enter a number between 1 and {len(workers)}"
-                    )
-            except ValueError:
-                print("Invalid input. Please enter a number or 'refresh'")
+        peer_id = selected.get("peer_id")
+        logging.info(f"Selected worker: {peer_id}")
+        return peer_id
 
     async def _collect_job_responses(self, job_id: str, timeout: float) -> list:
         """Collect job responses from workers.
