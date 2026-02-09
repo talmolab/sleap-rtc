@@ -15,8 +15,11 @@ from typing import List, Optional, Callable, Any
 from sleap_rtc.protocol import (
     MSG_FS_LIST_DIR,
     MSG_FS_LIST_RESPONSE,
+    MSG_FS_GET_MOUNTS,
+    MSG_FS_MOUNTS_RESPONSE,
     MSG_FS_ERROR,
     MSG_SEPARATOR,
+    FS_ERROR_ACCESS_DENIED,
     format_message,
 )
 
@@ -121,11 +124,66 @@ class DirectoryBrowser:
         self.selected_path: Optional[str] = None
         self.error_message: Optional[str] = None
         self.loading = False
+        self.showing_mounts = False  # True when showing mount selection
+
+    async def _fetch_mounts(self) -> List[dict]:
+        """Fetch available mounts from worker.
+
+        Returns:
+            List of mount dicts with 'path' and 'label' keys.
+        """
+        self.send_message(MSG_FS_GET_MOUNTS)
+
+        try:
+            response = await asyncio.wait_for(self.receive_response(), timeout=30.0)
+        except asyncio.TimeoutError:
+            return []
+
+        if response.startswith(MSG_FS_MOUNTS_RESPONSE):
+            try:
+                json_str = response.split(MSG_SEPARATOR, 1)[1]
+                return json.loads(json_str)
+            except (json.JSONDecodeError, IndexError):
+                return []
+
+        return []
+
+    async def _show_mounts(self) -> None:
+        """Show available mounts as directory entries."""
+        self.loading = True
+        self.error_message = None
+        self.showing_mounts = True
+
+        mounts = await self._fetch_mounts()
+
+        if not mounts:
+            self.error_message = "No accessible mounts available"
+            self.entries = []
+        else:
+            # Convert mounts to directory entries
+            self.entries = []
+            for mount in mounts:
+                path = mount.get("path", "")
+                label = mount.get("label", "")
+                name = f"{label} ({path})" if label else path
+                self.entries.append(DirectoryEntry(
+                    name=name,
+                    entry_type="directory",
+                    size=0,
+                    modified=0,
+                ))
+            # Store mount paths for navigation
+            self._mount_paths = [m.get("path", "") for m in mounts]
+
+        self.current_path = "/ (Select a mount)"
+        self.selected_index = 0
+        self.loading = False
 
     async def _refresh_listing(self) -> None:
         """Fetch directory listing from worker."""
         self.loading = True
         self.error_message = None
+        self.showing_mounts = False
 
         # Send FS_LIST_DIR request
         message = format_message(MSG_FS_LIST_DIR, self.current_path, "0")
@@ -143,7 +201,16 @@ class DirectoryBrowser:
         # Parse response
         if response.startswith(MSG_FS_ERROR):
             parts = response.split(MSG_SEPARATOR)
-            self.error_message = parts[2] if len(parts) > 2 else "Unknown error"
+            error_code = parts[1] if len(parts) > 1 else ""
+            error_msg = parts[2] if len(parts) > 2 else "Unknown error"
+
+            # If access denied, fall back to showing mounts
+            if error_code == FS_ERROR_ACCESS_DENIED:
+                self.loading = False
+                await self._show_mounts()
+                return
+
+            self.error_message = error_msg
             self.entries = []
         elif response.startswith(MSG_FS_LIST_RESPONSE):
             try:
@@ -194,14 +261,25 @@ class DirectoryBrowser:
         self.selected_index = 0
         return True
 
-    def _navigate_into(self, entry: DirectoryEntry) -> bool:
-        """Navigate into a directory. Returns True if path changed."""
+    def _navigate_into(self, entry: DirectoryEntry, index: int = None) -> bool:
+        """Navigate into a directory. Returns True if path changed.
+
+        Args:
+            entry: The directory entry to navigate into.
+            index: The index of the entry (used when showing mounts).
+        """
         if not entry.is_directory:
             return False
 
-        new_path = os.path.join(self.current_path, entry.name)
-        self.current_path = new_path
+        # If showing mounts, use the stored mount path
+        if self.showing_mounts and hasattr(self, '_mount_paths') and index is not None:
+            self.current_path = self._mount_paths[index]
+        else:
+            new_path = os.path.join(self.current_path, entry.name)
+            self.current_path = new_path
+
         self.selected_index = 0
+        self.showing_mounts = False
         return True
 
     def _select_file(self, entry: DirectoryEntry) -> bool:
@@ -263,7 +341,7 @@ class DirectoryBrowser:
 
             entry = self.entries[self.selected_index]
             if entry.is_directory:
-                self._navigate_into(entry)
+                self._navigate_into(entry, index=self.selected_index)
                 refresh_needed[0] = True
                 event.app.exit()
             else:
@@ -274,6 +352,9 @@ class DirectoryBrowser:
         @kb.add("left")
         @kb.add("h")
         def go_back(event):
+            # Can't go back when showing mount selection
+            if self.showing_mounts:
+                return
             if self._navigate_up():
                 refresh_needed[0] = True
                 event.app.exit()
@@ -422,7 +503,7 @@ class DirectoryBrowser:
                     if 0 <= idx < len(self.entries):
                         entry = self.entries[idx]
                         if entry.is_directory:
-                            self._navigate_into(entry)
+                            self._navigate_into(entry, index=idx)
                             await self._refresh_listing()
                         else:
                             self._select_file(entry)

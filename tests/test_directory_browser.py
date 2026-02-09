@@ -147,9 +147,37 @@ class TestDirectoryBrowser:
         assert browser.entries[1].name == "file.slp"
 
     @pytest.mark.asyncio
-    async def test_refresh_listing_error(self):
-        """Test directory listing with error response."""
-        response = self.make_error_response("Access denied", "ACCESS_DENIED")
+    async def test_refresh_listing_access_denied_falls_back_to_mounts(self):
+        """Test that ACCESS_DENIED falls back to showing mounts."""
+        error_response = self.make_error_response("Access denied", "ACCESS_DENIED")
+        mounts_response = "FS_MOUNTS_RESPONSE::" + json.dumps([
+            {"path": "/data", "label": "Data"},
+            {"path": "/models", "label": "Models"},
+        ])
+
+        send_mock = MagicMock()
+        # First call returns error, second call returns mounts
+        receive_mock = AsyncMock(side_effect=[error_response, mounts_response])
+
+        browser = DirectoryBrowser(
+            send_message=send_mock,
+            receive_response=receive_mock,
+            start_path="/invalid/path",
+        )
+
+        await browser._refresh_listing()
+
+        # Should show mounts instead of error
+        assert len(browser.entries) == 2
+        assert browser.showing_mounts is True
+        assert browser.error_message is None
+        assert "Data" in browser.entries[0].name
+        assert "Models" in browser.entries[1].name
+
+    @pytest.mark.asyncio
+    async def test_refresh_listing_error_non_access_denied(self):
+        """Test directory listing with non-ACCESS_DENIED error."""
+        response = self.make_error_response("Path not found", "PATH_NOT_FOUND")
 
         send_mock = MagicMock()
         receive_mock = AsyncMock(return_value=response)
@@ -163,7 +191,7 @@ class TestDirectoryBrowser:
         await browser._refresh_listing()
 
         assert len(browser.entries) == 0
-        assert browser.error_message == "Access denied"
+        assert browser.error_message == "Path not found"
 
     @pytest.mark.asyncio
     async def test_refresh_listing_timeout(self):
