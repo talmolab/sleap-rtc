@@ -2065,7 +2065,7 @@ class RTCClient:
         if "labels" in field.lower() or "data" in field.lower() or "slp" in field.lower():
             file_filter = ".slp"
         elif "config" in field.lower():
-            file_filter = ".yaml"
+            file_filter = ".yaml,.json"  # Support both YAML and JSON configs
         elif "model" in field.lower():
             file_filter = None  # Models are directories
 

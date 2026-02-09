@@ -370,5 +370,5 @@ class TestBrowseForFile:
         )
 
         assert browser.current_path == "/test"
-        assert browser.file_filter == ".slp"
+        assert browser.file_filters == [".slp"]
         assert browser.title == "Test browser"

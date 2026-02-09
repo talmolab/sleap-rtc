@@ -132,14 +132,20 @@ class DirectoryBrowser:
             send_message: Function to send messages to worker (data_channel.send).
             receive_response: Async function to receive FS responses.
             start_path: Starting directory path.
-            file_filter: Optional file extension filter (e.g., ".slp", ".yaml").
+            file_filter: Optional file extension filter. Can be a single extension
+                (e.g., ".slp") or comma-separated extensions (e.g., ".yaml,.json").
             title: Title to display above the browser.
         """
         self.send_message = send_message
         self.receive_response = receive_response
         self.current_path = start_path
-        self.file_filter = file_filter.lower() if file_filter else None
         self.title = title
+
+        # Parse file filter - support comma-separated extensions
+        if file_filter:
+            self.file_filters = [ext.strip().lower() for ext in file_filter.split(",")]
+        else:
+            self.file_filters = None
 
         self.entries: List[DirectoryEntry] = []
         self.selected_index = 0
@@ -251,10 +257,12 @@ class DirectoryBrowser:
                     self.entries = [DirectoryEntry.from_dict(e) for e in raw_entries]
 
                     # Apply file filter (keep all directories, filter files)
-                    if self.file_filter:
+                    if self.file_filters:
                         self.entries = [
                             e for e in self.entries
-                            if e.is_directory or e.name.lower().endswith(self.file_filter)
+                            if e.is_directory or any(
+                                e.name.lower().endswith(ext) for ext in self.file_filters
+                            )
                         ]
 
                     # Reset selection if out of bounds
@@ -469,8 +477,9 @@ class DirectoryBrowser:
             lines.append(("bold fg:ansiyellow", "Esc"))
             lines.append(("fg:ansibrightblack", "] Cancel\n"))
 
-            if self.file_filter:
-                lines.append(("fg:ansibrightblack", f"Filter: *{self.file_filter}\n"))
+            if self.file_filters:
+                filter_str = ", ".join(f"*{ext}" for ext in self.file_filters)
+                lines.append(("fg:ansibrightblack", f"Filter: {filter_str}\n"))
 
             return FormattedText(lines)
 
