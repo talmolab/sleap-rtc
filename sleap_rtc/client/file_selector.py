@@ -94,6 +94,125 @@ def _format_size(size_bytes: int) -> str:
         return f"{size_bytes / (1024 * 1024 * 1024):.1f} GB"
 
 
+async def confirm_prompt(message: str, details: str = None) -> bool:
+    """Display a confirmation prompt with Y/N options.
+
+    Uses prompt_toolkit for interactive terminals, falls back to input() otherwise.
+
+    Args:
+        message: The question to ask (e.g., "Browse filesystem?")
+        details: Optional details to show above the question
+
+    Returns:
+        True if user confirms, False otherwise
+    """
+    if _is_interactive_terminal():
+        try:
+            from prompt_toolkit import Application
+            from prompt_toolkit.key_binding import KeyBindings
+            from prompt_toolkit.layout import Layout
+            from prompt_toolkit.layout.containers import Window
+            from prompt_toolkit.layout.controls import FormattedTextControl
+            from prompt_toolkit.formatted_text import FormattedText
+
+            result = [None]
+            selected_yes = [True]  # Default to Yes
+
+            kb = KeyBindings()
+
+            @kb.add("left")
+            @kb.add("h")
+            def move_left(event):
+                selected_yes[0] = True
+
+            @kb.add("right")
+            @kb.add("l")
+            def move_right(event):
+                selected_yes[0] = False
+
+            @kb.add("y")
+            def select_yes(event):
+                result[0] = True
+                event.app.exit()
+
+            @kb.add("n")
+            def select_no(event):
+                result[0] = False
+                event.app.exit()
+
+            @kb.add("enter")
+            def confirm(event):
+                result[0] = selected_yes[0]
+                event.app.exit()
+
+            @kb.add("escape")
+            @kb.add("q")
+            @kb.add("c-c")
+            def cancel(event):
+                result[0] = False
+                event.app.exit()
+
+            def get_formatted_text():
+                lines = []
+                if details:
+                    lines.append(("fg:ansiyellow", f"\n{details}\n"))
+                lines.append(("", f"\n{message}\n\n"))
+
+                # Yes/No buttons
+                if selected_yes[0]:
+                    lines.append(("bold fg:ansigreen bg:ansibrightblack", " Yes "))
+                    lines.append(("", "  "))
+                    lines.append(("fg:ansibrightblack", " No "))
+                else:
+                    lines.append(("fg:ansibrightblack", " Yes "))
+                    lines.append(("", "  "))
+                    lines.append(("bold fg:ansired bg:ansibrightblack", " No "))
+
+                lines.append(("", "\n\n"))
+                lines.append(("fg:ansibrightblack", "["))
+                lines.append(("bold fg:ansiyellow", "←/→"))
+                lines.append(("fg:ansibrightblack", "] Select  ["))
+                lines.append(("bold fg:ansigreen", "Enter"))
+                lines.append(("fg:ansibrightblack", "] Confirm  ["))
+                lines.append(("bold fg:ansiyellow", "y/n"))
+                lines.append(("fg:ansibrightblack", "] Quick select\n"))
+                return FormattedText(lines)
+
+            layout = Layout(Window(content=FormattedTextControl(get_formatted_text)))
+            app = Application(
+                layout=layout,
+                key_bindings=kb,
+                full_screen=False,
+                mouse_support=False,
+            )
+
+            await app.run_async()
+            return result[0] if result[0] is not None else False
+
+        except ImportError:
+            pass  # Fall through to simple input
+        except Exception:
+            pass  # Fall through to simple input
+
+    # Fallback to simple input
+    console = _get_console()
+    if console:
+        if details:
+            console.print(f"\n[yellow]{details}[/yellow]")
+        console.print(f"\n{message}")
+        console.print("[dim]Enter 'y' for Yes, 'n' for No[/dim]")
+    else:
+        if details:
+            print(f"\n{details}")
+        print(f"\n{message}")
+
+    try:
+        choice = input("[y/N]: ").strip().lower()
+        return choice == "y"
+    except (EOFError, KeyboardInterrupt):
+        return False
+
+
 class FileCandidate:
     """Represents a file candidate from resolution results."""
 

@@ -2047,18 +2047,17 @@ class RTCClient:
         if not path_error:
             return False
 
+        from sleap_rtc.client.file_selector import confirm_prompt
+
         field = path_error.get("field", "unknown")
         invalid_path = path_error.get("path", "")
 
-        print(f"\nPath error detected for '{field}': {invalid_path}")
-        print("Would you like to browse the worker filesystem to find the correct path?")
+        confirmed = await confirm_prompt(
+            message="Would you like to browse the worker filesystem to find the correct path?",
+            details=f"Path error for '{field}': {invalid_path}",
+        )
 
-        try:
-            choice = input("[y/N]: ").strip().lower()
-        except (EOFError, KeyboardInterrupt):
-            return False
-
-        if choice != "y":
+        if not confirmed:
             return False
 
         # Determine file filter based on field name
