@@ -29,6 +29,7 @@ class CommandBuilder:
         self,
         spec: TrainJobSpec,
         zmq_ports: Optional[Dict[str, int]] = None,
+        config_index: int = 0,
     ) -> List[str]:
         """Build sleap-nn train command from job spec.
 
@@ -36,20 +37,21 @@ class CommandBuilder:
             spec: Validated TrainJobSpec
             zmq_ports: Optional dict with 'controller' and 'publish' ports
                       for ZMQ progress reporting
+            config_index: Index of config to use when spec has multiple configs
 
         Returns:
             Command as list of strings
 
         Example:
             >>> builder = CommandBuilder()
-            >>> spec = TrainJobSpec(config_path="/vast/project/centroid.yaml")
+            >>> spec = TrainJobSpec(config_paths=["/vast/project/centroid.yaml"])
             >>> cmd = builder.build_train_command(spec)
             >>> # ['sleap-nn', 'train', '--config-name', 'centroid.yaml', ...]
         """
         cmd = ["sleap-nn", "train"]
 
         # Config path - split into name and directory
-        config_path = Path(spec.config_path)
+        config_path = Path(spec.config_paths[config_index])
         cmd.extend(["--config-name", config_path.name])
         cmd.extend(["--config-dir", str(config_path.parent)])
 
@@ -86,6 +88,28 @@ class CommandBuilder:
         cmd.append(f"trainer_config.zmq.publish_port={ports.get('publish', 9001)}")
 
         return cmd
+
+    def build_train_commands(
+        self,
+        spec: TrainJobSpec,
+        zmq_ports: Optional[Dict[str, int]] = None,
+    ) -> List[List[str]]:
+        """Build sleap-nn train commands for all configs in spec.
+
+        For multi-model training (e.g., top-down with centroid + centered_instance),
+        this returns a list of commands to be executed sequentially.
+
+        Args:
+            spec: Validated TrainJobSpec with one or more configs
+            zmq_ports: Optional dict with 'controller' and 'publish' ports
+
+        Returns:
+            List of commands, each as a list of strings
+        """
+        commands = []
+        for i in range(len(spec.config_paths)):
+            commands.append(self.build_train_command(spec, zmq_ports, config_index=i))
+        return commands
 
     def build_track_command(self, spec: TrackJobSpec) -> List[str]:
         """Build sleap-nn track command from job spec.

@@ -1307,7 +1307,8 @@ def worker(api_key, room, token, working_dir, name, room_secret):
     "-c",
     type=str,
     required=False,
-    help="Path to sleap-nn config YAML file on worker filesystem.",
+    multiple=True,
+    help="Path to sleap-nn config YAML file on worker filesystem. Can be specified multiple times for multi-model training (e.g., top-down: centroid + centered_instance).",
 )
 @click.option(
     "--labels",
@@ -1466,7 +1467,8 @@ def train(**kwargs):
     room_secret = kwargs.pop("room_secret", None)
 
     # Extract job specification options (new structured flow)
-    config_path = kwargs.pop("config", None)
+    # --config is multiple=True, so it's a tuple
+    config_paths = kwargs.pop("config", ())
     labels_path = kwargs.pop("labels", None)
     val_labels_path = kwargs.pop("val_labels", None)
     max_epochs = kwargs.pop("max_epochs", None)
@@ -1479,13 +1481,13 @@ def train(**kwargs):
     pkg_path = kwargs.pop("pkg_path", None)
 
     # Validation: --config and --pkg-path are mutually exclusive
-    if config_path and pkg_path:
+    if config_paths and pkg_path:
         logger.error("--config and --pkg-path are mutually exclusive.")
         logger.error("Use --config for the new workflow (recommended).")
         sys.exit(1)
 
     # Validation: Must provide either --config or --pkg-path
-    if not config_path and not pkg_path:
+    if not config_paths and not pkg_path:
         logger.error("Must provide a job specification:")
         logger.error("  --config PATH (recommended: sleap-nn config YAML)")
         logger.error("  --pkg-path PATH (deprecated: training package)")
@@ -1566,11 +1568,14 @@ def train(**kwargs):
         logger.info(f"Using mount filter: {mount_label}")
 
     # Branch based on job specification type
-    if config_path:
+    if config_paths:
         # New structured job submission flow
-        logger.info("Using structured job submission (--config)")
+        if len(config_paths) == 1:
+            logger.info(f"Using structured job submission with 1 config")
+        else:
+            logger.info(f"Using structured job submission with {len(config_paths)} configs (multi-model training)")
         job_spec = TrainJobSpec(
-            config_path=config_path,
+            config_paths=list(config_paths),
             labels_path=labels_path,
             val_labels_path=val_labels_path,
             max_epochs=max_epochs,

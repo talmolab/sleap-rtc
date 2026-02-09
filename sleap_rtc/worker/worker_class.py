@@ -2043,13 +2043,22 @@ class RTCWorkerClient:
             logging.info(f"Job accepted: {job_id} (client ID: {client_job_id})")
             channel.send(f"{MSG_JOB_ACCEPTED}{MSG_SEPARATOR}{job_id}")
 
-            # Build the command using CommandBuilder
+            # Build and execute commands using CommandBuilder
             builder = CommandBuilder()
             if isinstance(spec, TrainJobSpec):
-                cmd = builder.build_train_command(spec)
-                await self.job_executor.execute_from_spec(
-                    channel, cmd, job_id, job_type="train"
-                )
+                # Build commands for all configs (supports multi-model training)
+                commands = builder.build_train_commands(spec)
+                total_configs = len(commands)
+
+                for i, cmd in enumerate(commands):
+                    config_name = Path(spec.config_paths[i]).stem
+                    if total_configs > 1:
+                        logging.info(f"Training model {i+1}/{total_configs}: {config_name}")
+                        channel.send(f"Training model {i+1}/{total_configs}: {config_name}\n")
+
+                    await self.job_executor.execute_from_spec(
+                        channel, cmd, f"{job_id}_{i}" if total_configs > 1 else job_id, job_type="train"
+                    )
             elif isinstance(spec, TrackJobSpec):
                 cmd = builder.build_track_command(spec)
                 await self.job_executor.execute_from_spec(

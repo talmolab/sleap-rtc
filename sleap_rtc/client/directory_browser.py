@@ -368,8 +368,8 @@ class DirectoryBrowser:
         await self._refresh_listing()
 
         kb = KeyBindings()
-        refresh_needed = [False]
-        app_ref = [None]
+        pending_refresh = [False]  # Flag to trigger refresh after app.run() returns
+        stay_in_app = [True]  # Flag to keep the main loop running
 
         @kb.add("up")
         @kb.add("k")
@@ -393,10 +393,12 @@ class DirectoryBrowser:
             entry = self.entries[self.selected_index]
             if entry.is_directory:
                 self._navigate_into(entry, index=self.selected_index)
-                refresh_needed[0] = True
+                # Mark for refresh but don't exit fullscreen
+                pending_refresh[0] = True
                 event.app.exit()
             else:
                 self._select_file(entry)
+                stay_in_app[0] = False
                 event.app.exit()
 
         @kb.add("backspace")
@@ -407,18 +409,21 @@ class DirectoryBrowser:
             if self.showing_mounts:
                 return
             if self._navigate_up():
-                refresh_needed[0] = True
+                # Mark for refresh but don't exit fullscreen
+                pending_refresh[0] = True
                 event.app.exit()
 
         @kb.add("escape")
         @kb.add("q")
         def cancel(event):
             self.cancelled = True
+            stay_in_app[0] = False
             event.app.exit()
 
         @kb.add("c-c")
         def ctrl_c(event):
             self.cancelled = True
+            stay_in_app[0] = False
             event.app.exit()
 
         def get_formatted_text():
@@ -483,20 +488,22 @@ class DirectoryBrowser:
 
             return FormattedText(lines)
 
-        # Run browser loop
-        while not self.cancelled and not self.selected_path:
-            layout = Layout(
-                Window(content=FormattedTextControl(get_formatted_text))
-            )
+        # Create layout once
+        layout = Layout(
+            Window(content=FormattedTextControl(get_formatted_text))
+        )
 
-            app = Application(
-                layout=layout,
-                key_bindings=kb,
-                full_screen=False,
-                mouse_support=False,
-            )
-            app_ref[0] = app
+        # Create app with erase_when_done=False to prevent screen clearing between runs
+        app = Application(
+            layout=layout,
+            key_bindings=kb,
+            full_screen=True,
+            mouse_support=False,
+            erase_when_done=False,  # Keep content on screen between runs
+        )
 
+        # Run app loop - stay in fullscreen mode until done
+        while stay_in_app[0] and not self.cancelled and not self.selected_path:
             def run_app():
                 app.run()
 
@@ -508,8 +515,9 @@ class DirectoryBrowser:
             except RuntimeError:
                 app.run()
 
-            if refresh_needed[0]:
-                refresh_needed[0] = False
+            # Handle pending refresh (fetch new directory contents)
+            if pending_refresh[0]:
+                pending_refresh[0] = False
                 await self._refresh_listing()
 
         return self.selected_path

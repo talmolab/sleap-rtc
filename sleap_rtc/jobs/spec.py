@@ -14,7 +14,8 @@ class TrainJobSpec:
     """Specification for a training job.
 
     Attributes:
-        config_path: Full path to config YAML file (required)
+        config_path: Full path to config YAML file (for single model training)
+        config_paths: List of config paths (for multi-model training like top-down)
         labels_path: Override for data_config.train_labels_path
         val_labels_path: Override for data_config.val_labels_path
         max_epochs: Maximum training epochs
@@ -22,9 +23,16 @@ class TrainJobSpec:
         learning_rate: Learning rate for optimizer
         run_name: Name for the training run (used in checkpoint directory)
         resume_ckpt_path: Path to checkpoint for resuming training
+
+    Note:
+        Either config_path or config_paths should be provided, not both.
+        If both are provided, config_paths takes precedence.
+        For top-down training, provide both centroid and centered_instance configs
+        in config_paths - they will be trained sequentially.
     """
 
-    config_path: str
+    config_path: Optional[str] = None
+    config_paths: List[str] = field(default_factory=list)
     labels_path: Optional[str] = None
     val_labels_path: Optional[str] = None
     max_epochs: Optional[int] = None
@@ -33,11 +41,20 @@ class TrainJobSpec:
     run_name: Optional[str] = None
     resume_ckpt_path: Optional[str] = None
 
+    def __post_init__(self):
+        """Normalize config_path/config_paths after initialization."""
+        # If config_path is provided but config_paths is empty, use config_path
+        if self.config_path and not self.config_paths:
+            self.config_paths = [self.config_path]
+        # Ensure we have at least one config
+        if not self.config_paths and not self.config_path:
+            raise ValueError("Must provide either config_path or config_paths")
+
     def to_json(self) -> str:
         """Serialize spec to JSON string."""
         data = {"type": "train", **asdict(self)}
-        # Remove None values for cleaner JSON
-        data = {k: v for k, v in data.items() if v is not None}
+        # Remove None values and empty lists for cleaner JSON
+        data = {k: v for k, v in data.items() if v is not None and v != []}
         return json.dumps(data)
 
     @classmethod
@@ -45,12 +62,16 @@ class TrainJobSpec:
         """Deserialize spec from JSON string."""
         parsed = json.loads(data)
         parsed.pop("type", None)
+        # Handle backward compatibility: config_path -> config_paths
+        # Keep both fields for compatibility when coming from old format
+        if "config_path" in parsed and "config_paths" not in parsed:
+            parsed["config_paths"] = [parsed["config_path"]]
         return cls(**parsed)
 
     def to_dict(self) -> dict:
         """Convert spec to dictionary with type field."""
         data = {"type": "train", **asdict(self)}
-        return {k: v for k, v in data.items() if v is not None}
+        return {k: v for k, v in data.items() if v is not None and v != []}
 
     @classmethod
     def from_dict(cls, data: dict) -> "TrainJobSpec":

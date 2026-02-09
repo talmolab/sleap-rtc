@@ -2076,12 +2076,17 @@ class RTCClient:
             start_path = "/"
 
         # Create and run browser
+        # Build title with both field name and the invalid path
+        title = f"Select correct path for '{field}':"
+        if invalid_path:
+            title += f"\n  (was: {invalid_path})"
+
         browser = DirectoryBrowser(
             send_message=self.data_channel.send,
             receive_response=self.fs_response_queue.get,
             start_path=start_path,
             file_filter=file_filter,
-            title=f"Select correct path for '{field}':",
+            title=title,
         )
 
         selected_path = await browser.run()

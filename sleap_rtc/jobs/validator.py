@@ -107,10 +107,21 @@ class JobValidator:
         """
         errors = []
 
-        # Validate config path (required)
-        error = self._validate_path(spec.config_path, "config_path", must_exist=True)
-        if error:
-            errors.append(error)
+        # Validate config paths (at least one required)
+        if not spec.config_paths:
+            errors.append(
+                ValidationError(
+                    field="config_paths",
+                    message="At least one config path is required",
+                )
+            )
+        else:
+            for i, config_path in enumerate(spec.config_paths):
+                # Use indexed field name for multiple configs
+                field_name = f"config_path[{i}]" if len(spec.config_paths) > 1 else "config_path"
+                error = self._validate_path(config_path, field_name, must_exist=True)
+                if error:
+                    errors.append(error)
 
         # Validate labels path if provided
         if spec.labels_path:
