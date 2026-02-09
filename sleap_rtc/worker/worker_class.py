@@ -1997,30 +1997,33 @@ class RTCWorkerClient:
 
         Args:
             channel: The data channel for communication with the Client.
-            message: The JOB_SUBMIT::{json_spec} message.
+            message: The JOB_SUBMIT::{job_id}::{json_spec} message.
         """
         try:
-            # Parse the JSON spec from the message
-            parts = message.split(MSG_SEPARATOR, 1)
-            if len(parts) < 2 or not parts[1]:
-                error_response = json.dumps([{
+            # Parse the message: JOB_SUBMIT::{job_id}::{json_spec}
+            parts = message.split(MSG_SEPARATOR, 2)
+            if len(parts) < 3 or not parts[2]:
+                client_job_id = parts[1] if len(parts) > 1 else "unknown"
+                error_response = json.dumps({"errors": [{
                     "field": "spec",
                     "message": "Job specification JSON is required",
-                }])
-                channel.send(f"{MSG_JOB_REJECTED}{MSG_SEPARATOR}{error_response}")
+                }]})
+                channel.send(f"{MSG_JOB_REJECTED}{MSG_SEPARATOR}{client_job_id}{MSG_SEPARATOR}{error_response}")
                 return
 
-            json_spec = parts[1]
+            client_job_id = parts[1]  # Job ID from client (for tracking)
+            json_spec = parts[2]
+            logging.info(f"Received job submission with client ID: {client_job_id}")
 
             # Parse the job spec
             try:
                 spec = parse_job_spec(json_spec)
             except (json.JSONDecodeError, ValueError) as e:
-                error_response = json.dumps([{
+                error_response = json.dumps({"errors": [{
                     "field": "spec",
                     "message": f"Invalid job specification: {e}",
-                }])
-                channel.send(f"{MSG_JOB_REJECTED}{MSG_SEPARATOR}{error_response}")
+                }]})
+                channel.send(f"{MSG_JOB_REJECTED}{MSG_SEPARATOR}{client_job_id}{MSG_SEPARATOR}{error_response}")
                 return
 
             # Validate the spec using JobValidator
@@ -2030,14 +2033,14 @@ class RTCWorkerClient:
             if errors:
                 # Send JOB_REJECTED with validation errors
                 error_dicts = [e.to_dict() for e in errors]
-                error_response = json.dumps(error_dicts)
+                error_response = json.dumps({"errors": error_dicts})
                 logging.warning(f"Job rejected with {len(errors)} validation error(s)")
-                channel.send(f"{MSG_JOB_REJECTED}{MSG_SEPARATOR}{error_response}")
+                channel.send(f"{MSG_JOB_REJECTED}{MSG_SEPARATOR}{client_job_id}{MSG_SEPARATOR}{error_response}")
                 return
 
             # Generate job ID and send JOB_ACCEPTED
             job_id = f"job_{uuid.uuid4().hex[:8]}"
-            logging.info(f"Job accepted: {job_id}")
+            logging.info(f"Job accepted: {job_id} (client ID: {client_job_id})")
             channel.send(f"{MSG_JOB_ACCEPTED}{MSG_SEPARATOR}{job_id}")
 
             # Build the command using CommandBuilder
@@ -2055,12 +2058,18 @@ class RTCWorkerClient:
 
         except Exception as e:
             logging.error(f"Error handling job submit: {e}")
-            error_response = json.dumps([{
+            # Try to extract client_job_id for error response
+            try:
+                parts = message.split(MSG_SEPARATOR, 2)
+                client_job_id = parts[1] if len(parts) > 1 else "unknown"
+            except Exception:
+                client_job_id = "unknown"
+            error_response = json.dumps({"errors": [{
                 "field": "internal",
                 "message": f"Internal error: {e}",
-            }])
+            }]})
             if channel.readyState == "open":
-                channel.send(f"{MSG_JOB_REJECTED}{MSG_SEPARATOR}{error_response}")
+                channel.send(f"{MSG_JOB_REJECTED}{MSG_SEPARATOR}{client_job_id}{MSG_SEPARATOR}{error_response}")
 
     async def _process_worker_input_path(self, channel):
         """Process a job from a worker input path (no file transfer).
