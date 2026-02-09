@@ -7,10 +7,33 @@ when job submission fails due to invalid paths.
 
 import asyncio
 import json
+import logging
 import os
 import sys
+from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Optional, Callable, Any
+
+
+@contextmanager
+def suppress_logging():
+    """Temporarily suppress all logging output.
+
+    Used during interactive UI sessions to prevent log messages
+    from interfering with the terminal display.
+    """
+    # Get the root logger and save its current level
+    root_logger = logging.getLogger()
+    original_level = root_logger.level
+
+    # Disable all logging
+    root_logger.setLevel(logging.CRITICAL + 1)
+
+    try:
+        yield
+    finally:
+        # Restore original level
+        root_logger.setLevel(original_level)
 
 from sleap_rtc.protocol import (
     MSG_FS_LIST_DIR,
@@ -313,6 +336,26 @@ class DirectoryBrowser:
         from prompt_toolkit.layout.controls import FormattedTextControl
         from prompt_toolkit.formatted_text import FormattedText
 
+        # Suppress logging during the entire interactive session to prevent
+        # log messages from cluttering the terminal display
+        root_logger = logging.getLogger()
+        original_level = root_logger.level
+        root_logger.setLevel(logging.CRITICAL + 1)
+
+        try:
+            return await self._run_interactive_impl(
+                Application, KeyBindings, Layout, Window,
+                FormattedTextControl, FormattedText
+            )
+        finally:
+            # Restore logging
+            root_logger.setLevel(original_level)
+
+    async def _run_interactive_impl(
+        self, Application, KeyBindings, Layout, Window,
+        FormattedTextControl, FormattedText
+    ) -> Optional[str]:
+        """Implementation of interactive browser with logging suppressed."""
         # Initial directory listing
         await self._refresh_listing()
 
@@ -397,19 +440,17 @@ class DirectoryBrowser:
                     selected = i == self.selected_index
 
                     if entry.is_directory:
-                        icon = "📁 " if selected else "   "
                         if selected:
-                            lines.append(("bold fg:ansicyan", f"> {icon}{entry.name}/\n"))
+                            lines.append(("bold fg:ansicyan", f"> {entry.name}/\n"))
                         else:
-                            lines.append(("fg:ansicyan", f"  {icon}{entry.name}/\n"))
+                            lines.append(("fg:ansicyan", f"  {entry.name}/\n"))
                     else:
-                        icon = "📄 " if selected else "   "
                         size_str = _format_size(entry.size)
                         if selected:
-                            lines.append(("bold fg:ansiwhite", f"> {icon}{entry.name}"))
+                            lines.append(("bold fg:ansiwhite", f"> {entry.name}"))
                             lines.append(("fg:ansibrightblack", f"  ({size_str})\n"))
                         else:
-                            lines.append(("", f"  {icon}{entry.name}"))
+                            lines.append(("", f"  {entry.name}"))
                             lines.append(("fg:ansibrightblack", f"  ({size_str})\n"))
 
                 remaining = len(self.entries) - visible_end
@@ -478,10 +519,10 @@ class DirectoryBrowser:
             else:
                 for i, entry in enumerate(self.entries):
                     if entry.is_directory:
-                        print(f"  [{i + 1}] 📁 {entry.name}/")
+                        print(f"  [{i + 1}] {entry.name}/")
                     else:
                         size_str = _format_size(entry.size)
-                        print(f"  [{i + 1}] 📄 {entry.name} ({size_str})")
+                        print(f"  [{i + 1}] {entry.name} ({size_str})")
 
             print("\nEnter number to select, '..' to go up, or 'q' to cancel:")
 
