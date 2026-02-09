@@ -63,7 +63,8 @@ def run_RTCclient(
         "mount_label": mount_label,
     }
 
-    # Add any additional kwargs
+    # Add any additional kwargs, excluding jwt_token (run_client fetches it internally)
+    kwargs.pop("jwt_token", None)
     method_kwargs.update(kwargs)
 
     # Run the async method
@@ -121,7 +122,8 @@ def run_job_submit(
         "room_secret": room_secret,
     }
 
-    # Add any additional kwargs
+    # Add any additional kwargs, excluding jwt_token (run_client fetches it internally)
+    kwargs.pop("jwt_token", None)
     method_kwargs.update(kwargs)
 
     # Run the async method
