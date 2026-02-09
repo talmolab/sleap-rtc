@@ -20,16 +20,20 @@ class ValidationError:
     Attributes:
         field: Name of the field that failed validation
         message: Human-readable error message
+        code: Error code for programmatic handling (e.g., PATH_NOT_FOUND)
         path: The invalid path (if path-related error)
     """
 
     field: str
     message: str
+    code: Optional[str] = None
     path: Optional[str] = None
 
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
         result = {"field": self.field, "message": self.message}
+        if self.code is not None:
+            result["code"] = self.code
         if self.path is not None:
             result["path"] = self.path
         return result
@@ -40,6 +44,7 @@ class ValidationError:
         return cls(
             field=data["field"],
             message=data["message"],
+            code=data.get("code"),
             path=data.get("path"),
         )
 
@@ -242,15 +247,21 @@ class JobValidator:
         try:
             resolved = Path(path).resolve()
         except (OSError, ValueError) as e:
-            return ValidationError(field, f"Invalid path: {e}", path)
+            return ValidationError(
+                field, f"Invalid path: {e}", code="INVALID_PATH", path=path
+            )
 
         # Check path is within allowed mounts
         if not self._is_path_allowed(resolved):
-            return ValidationError(field, "Path not within allowed mounts", path)
+            return ValidationError(
+                field, "Path not within allowed mounts", code="NOT_ALLOWED", path=path
+            )
 
         # Check path exists
         if must_exist and not resolved.exists():
-            return ValidationError(field, "Path does not exist", path)
+            return ValidationError(
+                field, "Path does not exist", code="PATH_NOT_FOUND", path=path
+            )
 
         return None
 

@@ -40,12 +40,14 @@ class TestValidationError:
         error = ValidationError(
             field="labels_path",
             message="Path not within allowed mounts",
+            code="NOT_ALLOWED",
             path="/etc/passwd",
         )
         d = error.to_dict()
 
         assert d["field"] == "labels_path"
         assert d["message"] == "Path not within allowed mounts"
+        assert d["code"] == "NOT_ALLOWED"
         assert d["path"] == "/etc/passwd"
 
     def test_to_dict_without_path(self):
@@ -58,6 +60,7 @@ class TestValidationError:
 
         assert d["field"] == "batch_size"
         assert d["message"] == "Value must be between 1 and 256"
+        assert "code" not in d
         assert "path" not in d
 
     def test_from_dict(self):
@@ -65,12 +68,14 @@ class TestValidationError:
         d = {
             "field": "config_path",
             "message": "Path does not exist",
+            "code": "PATH_NOT_FOUND",
             "path": "/missing/file.yaml",
         }
         error = ValidationError.from_dict(d)
 
         assert error.field == "config_path"
         assert error.message == "Path does not exist"
+        assert error.code == "PATH_NOT_FOUND"
         assert error.path == "/missing/file.yaml"
 
 
@@ -109,6 +114,7 @@ class TestJobValidatorTrainSpec:
         errors = validator.validate_train_spec(spec)
         assert len(errors) == 1
         assert errors[0].field == "config_path"
+        assert errors[0].code == "NOT_ALLOWED"
         assert "not within allowed mounts" in errors[0].message
 
     def test_path_does_not_exist(self, tmp_path):
@@ -122,6 +128,7 @@ class TestJobValidatorTrainSpec:
         errors = validator.validate_train_spec(spec)
         assert len(errors) == 1
         assert errors[0].field == "config_path"
+        assert errors[0].code == "PATH_NOT_FOUND"
         assert "does not exist" in errors[0].message
         assert errors[0].path == str(missing_file)
 

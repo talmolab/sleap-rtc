@@ -2085,7 +2085,7 @@ class RTCClient:
             return False
 
         field = path_error.get("field", "unknown")
-        invalid_path = path_error.get("value", "")
+        invalid_path = path_error.get("path", "")
 
         print(f"\nPath error detected for '{field}': {invalid_path}")
         print("Would you like to browse the worker filesystem to find the correct path?")
