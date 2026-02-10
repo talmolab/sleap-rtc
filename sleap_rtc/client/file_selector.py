@@ -1161,8 +1161,9 @@ class JobSpecConfirmation:
                 field_name = err.get("field", "")
                 err_path = err.get("path", "")
 
-                # Match config.train_labels_path or config[N].train_labels_path
-                match = re.match(r"config(?:\[\d+\])?\.(\w+)", field_name)
+                # Match config.train_labels_path, config[N].train_labels_path,
+                # config.train_labels_path[N], or config[N].train_labels_path[N]
+                match = re.match(r"config(?:\[\d+\])?\.(\w+)(?:\[\d+\])?", field_name)
                 if match:
                     internal_field = match.group(1)
 

@@ -407,42 +407,38 @@ class JobValidator:
         if not spec.labels_path:
             train_labels = data_config.get("train_labels_path")
             if train_labels is not None:
-                # Check if it's a string (not a list - common YAML mistake)
-                if not isinstance(train_labels, str):
-                    errors.append(
-                        ValidationError(
-                            field=f"{config_prefix}train_labels_path",
-                            message=f"train_labels_path must be a string, got {type(train_labels).__name__}",
-                            code="CONFIG_INVALID_TYPE",
-                            path=str(train_labels),
-                        )
-                    )
-                else:
+                # sleap-nn accepts both string and list for train_labels_path
+                if isinstance(train_labels, str):
                     error = self._validate_path(
                         train_labels, f"{config_prefix}train_labels_path", must_exist=True
                     )
                     if error:
                         errors.append(error)
+                elif isinstance(train_labels, list):
+                    for i, path in enumerate(train_labels):
+                        if isinstance(path, str):
+                            field_name = f"{config_prefix}train_labels_path[{i}]"
+                            error = self._validate_path(path, field_name, must_exist=True)
+                            if error:
+                                errors.append(error)
 
         # Validate val_labels_path if not overridden by spec.val_labels_path
         if not spec.val_labels_path:
             val_labels = data_config.get("val_labels_path")
             if val_labels is not None:
-                # Check if it's a string (not a list - common YAML mistake)
-                if not isinstance(val_labels, str):
-                    errors.append(
-                        ValidationError(
-                            field=f"{config_prefix}val_labels_path",
-                            message=f"val_labels_path must be a string, got {type(val_labels).__name__}",
-                            code="CONFIG_INVALID_TYPE",
-                            path=str(val_labels),
-                        )
-                    )
-                else:
+                # sleap-nn accepts both string and list for val_labels_path
+                if isinstance(val_labels, str):
                     error = self._validate_path(
                         val_labels, f"{config_prefix}val_labels_path", must_exist=True
                     )
                     if error:
                         errors.append(error)
+                elif isinstance(val_labels, list):
+                    for i, path in enumerate(val_labels):
+                        if isinstance(path, str):
+                            field_name = f"{config_prefix}val_labels_path[{i}]"
+                            error = self._validate_path(path, field_name, must_exist=True)
+                            if error:
+                                errors.append(error)
 
         return errors

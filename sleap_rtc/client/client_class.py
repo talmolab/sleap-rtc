@@ -2164,8 +2164,9 @@ class RTCClient:
         # Update job spec with corrected path
         import re
 
-        # Check for config internal path like config.train_labels_path or config[0].train_labels_path
-        config_internal_match = re.match(r"config(?:\[\d+\])?\.(\w+)", field)
+        # Check for config internal path like config.train_labels_path, config[0].train_labels_path,
+        # config.train_labels_path[0], or config[0].train_labels_path[0]
+        config_internal_match = re.match(r"config(?:\[\d+\])?\.(\w+)(?:\[\d+\])?", field)
         if config_internal_match:
             internal_field = config_internal_match.group(1)
 
