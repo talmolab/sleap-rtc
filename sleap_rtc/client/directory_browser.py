@@ -426,6 +426,16 @@ class DirectoryBrowser:
             stay_in_app[0] = False
             event.app.exit()
 
+        @kb.add("d")
+        @kb.add("s-enter")  # Shift+Enter
+        def select_current_directory(event):
+            """Select the current directory (for model paths that are directories)."""
+            if self.showing_mounts:
+                return
+            self.selected_path = self.current_path
+            stay_in_app[0] = False
+            event.app.exit()
+
         def get_formatted_text():
             """Generate formatted text for display."""
             lines = []
@@ -477,7 +487,9 @@ class DirectoryBrowser:
             lines.append(("fg:ansibrightblack", "] Navigate  ["))
             lines.append(("bold fg:ansigreen", "Enter"))
             lines.append(("fg:ansibrightblack", "] Select  ["))
-            lines.append(("bold fg:ansiyellow", "←/Backspace"))
+            lines.append(("bold fg:ansigreen", "d"))
+            lines.append(("fg:ansibrightblack", "] Select Folder  ["))
+            lines.append(("bold fg:ansiyellow", "←"))
             lines.append(("fg:ansibrightblack", "] Back  ["))
             lines.append(("bold fg:ansiyellow", "Esc"))
             lines.append(("fg:ansibrightblack", "] Cancel\n"))

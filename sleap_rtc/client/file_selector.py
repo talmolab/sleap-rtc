@@ -1092,26 +1092,26 @@ class JobSpecConfirmation:
 
     def _build_field_list(self):
         """Build list of fields that can be edited."""
-        import os
         import re
         self.fields = []
 
         def add_field(name, label, value, file_filter, list_field=None, list_index=None,
                       maps_to_override=None):
-            """Helper to add a field with path existence check.
+            """Helper to add a field.
 
             Args:
                 maps_to_override: If set, corrections to this field will update
                     the specified job spec field instead (for config internal paths).
             """
-            # Check if path exists locally (as a hint - worker will do final validation)
-            path_exists = os.path.exists(value) if value else False
+            # Don't check local path existence - it's misleading since paths
+            # need to exist on worker, not locally. Paths are only marked as
+            # verified (path_exists=True) when selected via the file browser.
             field = {
                 "name": name,
                 "label": label,
                 "value": value,
                 "filter": file_filter,
-                "path_exists": path_exists,
+                "path_exists": None,  # None = unverified, True = verified on worker, False = error
             }
             if list_field is not None:
                 field["list_field"] = list_field
@@ -1253,16 +1253,15 @@ class JobSpecConfirmation:
             new_value: New path value
             from_browser: If True, path was selected via file browser and exists on worker
         """
-        import os
         field = self.fields[field_index]
         field["value"] = new_value
 
-        # If selected via browser, it exists on worker (mark as valid)
-        # Otherwise check local filesystem
+        # If selected via browser, it exists on worker (mark as verified)
+        # Otherwise leave as unverified - worker will validate
         if from_browser:
             field["path_exists"] = True
         else:
-            field["path_exists"] = os.path.exists(new_value) if new_value else False
+            field["path_exists"] = None  # Unverified
 
         # Update job spec
         if "maps_to_override" in field:
@@ -1404,31 +1403,39 @@ class JobSpecConfirmation:
                     if len(display_value) > max_len:
                         display_value = "..." + display_value[-(max_len - 3):]
 
-                    # Highlight in red if error OR path doesn't exist locally
-                    # Highlight in green if path exists locally
-                    is_error = error or not path_exists
+                    # Color based on verification status:
+                    # - Red: error from worker validation
+                    # - Yellow: unverified (path_exists is None)
+                    # - Green: verified on worker (path_exists is True)
+                    is_error = error or path_exists is False
+                    is_verified = path_exists is True
+                    is_unverified = path_exists is None and not error
 
                     if selected:
                         if is_error:
                             lines.append(("bold fg:ansired", f"  > {label}: "))
-                        else:
+                        elif is_verified:
                             lines.append(("bold fg:ansigreen", f"  > {label}: "))
+                        else:
+                            lines.append(("bold fg:ansiyellow", f"  > {label}: "))
                         lines.append(("bold", f"{display_value}\n"))
                     else:
                         if is_error:
                             lines.append(("fg:ansired", f"    {label}: "))
-                        else:
+                        elif is_verified:
                             lines.append(("fg:ansigreen", f"    {label}: "))
+                        else:
+                            lines.append(("fg:ansiyellow", f"    {label}: "))
                         lines.append(("", f"{display_value}\n"))
 
-                    # Show error or "not found" message
+                    # Show status message when selected
                     if selected:
                         if error:
                             lines.append(("fg:ansired", f"      Error: {error}\n"))
-                        elif not path_exists:
-                            lines.append(("fg:ansired", f"      Path not found locally\n"))
-                        else:
-                            lines.append(("fg:ansigreen", f"      Path found\n"))
+                        elif is_unverified:
+                            lines.append(("fg:ansiyellow", f"      Will be validated by worker\n"))
+                        elif is_verified:
+                            lines.append(("fg:ansigreen", f"      Verified on worker\n"))
 
             # Help text
             lines.append(("", "\n"))
