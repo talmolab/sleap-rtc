@@ -427,12 +427,27 @@ class DirectoryBrowser:
             event.app.exit()
 
         @kb.add("d")
-        @kb.add("s-enter")  # Shift+Enter
-        def select_current_directory(event):
-            """Select the current directory (for model paths that are directories)."""
+        def select_as_path(event):
+            """Select the highlighted entry as a path (even if it's a folder).
+
+            This allows selecting folders without navigating into them,
+            useful for model paths that are directories.
+            """
             if self.showing_mounts:
+                # Select mount point as path
+                if self.mounts:
+                    selected_mount = self.mounts[self.selected_index]
+                    self.selected_path = selected_mount["path"]
+                    stay_in_app[0] = False
+                    event.app.exit()
                 return
-            self.selected_path = self.current_path
+
+            if not self.entries:
+                return
+
+            entry = self.entries[self.selected_index]
+            # Select whether it's a file or folder
+            self.selected_path = entry.path
             stay_in_app[0] = False
             event.app.exit()
 
