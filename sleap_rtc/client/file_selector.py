@@ -1201,13 +1201,24 @@ class JobSpecConfirmation:
                 return err.get("message", "Error")
         return None
 
-    def _update_field_value(self, field_index: int, new_value: str):
-        """Update a field value in both the field list and job spec."""
+    def _update_field_value(self, field_index: int, new_value: str, from_browser: bool = False):
+        """Update a field value in both the field list and job spec.
+
+        Args:
+            field_index: Index of the field to update
+            new_value: New path value
+            from_browser: If True, path was selected via file browser and exists on worker
+        """
         import os
         field = self.fields[field_index]
         field["value"] = new_value
-        # Update path existence check
-        field["path_exists"] = os.path.exists(new_value) if new_value else False
+
+        # If selected via browser, it exists on worker (mark as valid)
+        # Otherwise check local filesystem
+        if from_browser:
+            field["path_exists"] = True
+        else:
+            field["path_exists"] = os.path.exists(new_value) if new_value else False
 
         # Update job spec
         if "list_field" in field:
@@ -1421,7 +1432,7 @@ class JobSpecConfirmation:
                 )
 
                 if new_path:
-                    self._update_field_value(field_index, new_path)
+                    self._update_field_value(field_index, new_path, from_browser=True)
                     # Clear error for this field
                     self.errors = [e for e in self.errors if e.get("field") != field["name"]]
 
@@ -1462,7 +1473,7 @@ class JobSpecConfirmation:
                             field.get("filter"),
                         )
                         if new_path:
-                            self._update_field_value(idx, new_path)
+                            self._update_field_value(idx, new_path, from_browser=True)
                             print(f"Updated {field['label']} to: {new_path}")
                     else:
                         print("Invalid number")
