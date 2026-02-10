@@ -1346,19 +1346,20 @@ class JobSpecConfirmation:
                         display_value = "..." + display_value[-(max_len - 3):]
 
                     # Highlight in red if error OR path doesn't exist locally
+                    # Highlight in green if path exists locally
                     is_error = error or not path_exists
 
                     if selected:
                         if is_error:
                             lines.append(("bold fg:ansired", f"  > {label}: "))
                         else:
-                            lines.append(("bold fg:ansiwhite", f"  > {label}: "))
+                            lines.append(("bold fg:ansigreen", f"  > {label}: "))
                         lines.append(("bold", f"{display_value}\n"))
                     else:
                         if is_error:
                             lines.append(("fg:ansired", f"    {label}: "))
                         else:
-                            lines.append(("fg:ansibrightblack", f"    {label}: "))
+                            lines.append(("fg:ansigreen", f"    {label}: "))
                         lines.append(("", f"{display_value}\n"))
 
                     # Show error or "not found" message
@@ -1367,6 +1368,8 @@ class JobSpecConfirmation:
                             lines.append(("fg:ansired", f"      Error: {error}\n"))
                         elif not path_exists:
                             lines.append(("fg:ansired", f"      Path not found locally\n"))
+                        else:
+                            lines.append(("fg:ansigreen", f"      Path found\n"))
 
             # Help text
             lines.append(("", "\n"))
