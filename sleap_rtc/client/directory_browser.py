@@ -446,8 +446,8 @@ class DirectoryBrowser:
                 return
 
             entry = self.entries[self.selected_index]
-            # Select whether it's a file or folder
-            self.selected_path = entry.path
+            # Select whether it's a file or folder - construct full path
+            self.selected_path = os.path.join(self.current_path, entry.name)
             stay_in_app[0] = False
             event.app.exit()
 
