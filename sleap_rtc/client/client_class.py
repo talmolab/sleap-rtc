@@ -2096,23 +2096,45 @@ class RTCClient:
             return False
 
         # Update job spec with corrected path
-        if hasattr(self.job_spec, field):
+        # Handle indexed fields like "config_path[0]" -> update config_paths[0]
+        import re
+        index_match = re.match(r"(\w+)\[(\d+)\]", field)
+
+        if index_match:
+            # Indexed field like config_path[0]
+            base_field = index_match.group(1)
+            index = int(index_match.group(2))
+            # Map singular to plural field name (config_path -> config_paths)
+            list_field = base_field + "s" if not base_field.endswith("s") else base_field
+
+            if hasattr(self.job_spec, list_field):
+                field_list = getattr(self.job_spec, list_field)
+                if isinstance(field_list, list) and index < len(field_list):
+                    field_list[index] = selected_path
+                    print(f"\nUpdated {list_field}[{index}] to: {selected_path}")
+                else:
+                    print(f"Warning: Index {index} out of range for {list_field}")
+                    return False
+            else:
+                print(f"Warning: Could not find list field '{list_field}' in job spec")
+                return False
+        elif hasattr(self.job_spec, field):
             setattr(self.job_spec, field, selected_path)
             print(f"\nUpdated {field} to: {selected_path}")
-
-            # Resubmit job
-            print("Resubmitting job with corrected path...")
-            import uuid
-            job_id = str(uuid.uuid4())[:8]
-            self.current_job_id = job_id
-
-            spec_json = self.job_spec.to_json()
-            submit_msg = format_message(MSG_JOB_SUBMIT, f"{job_id}{MSG_SEPARATOR}{spec_json}")
-            self.data_channel.send(submit_msg)
-            return True
         else:
             print(f"Warning: Could not update field '{field}' in job spec")
             return False
+
+        # Resubmit job
+        print("Resubmitting job with corrected path...")
+        import uuid
+        job_id = str(uuid.uuid4())[:8]
+        self.current_job_id = job_id
+
+        spec_json = self.job_spec.to_json()
+        submit_msg = format_message(MSG_JOB_SUBMIT, f"{job_id}{MSG_SEPARATOR}{spec_json}")
+        self.data_channel.send(submit_msg)
+        return True
 
     async def run_client(
         self,
