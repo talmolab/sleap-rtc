@@ -401,6 +401,46 @@ MSG_AUTH_RESPONSE = "AUTH_RESPONSE"
 MSG_AUTH_SUCCESS = "AUTH_SUCCESS"
 MSG_AUTH_FAILURE = "AUTH_FAILURE"
 
+# =============================================================================
+# Structured Job Submission Messages
+# =============================================================================
+#
+# These messages enable structured job submission with validation and progress
+# reporting. Jobs are defined by JSON specifications (TrainJobSpec, TrackJobSpec)
+# that are validated by the Worker before execution.
+#
+# Message Flow:
+#
+# 1. Client builds job spec and sends to Worker:
+#    Client → Worker: JOB_SUBMIT::{json_spec}
+#    Spec contains: {"type": "train"|"track", ...fields...}
+#
+# 2. Worker validates spec (paths exist, within mounts, numeric ranges):
+#    If valid:   Worker → Client: JOB_ACCEPTED::{job_id}
+#    If invalid: Worker → Client: JOB_REJECTED::{json_errors}
+#    Errors: [{"field": "labels_path", "message": "...", "path": "..."}]
+#
+# 3. During execution, Worker sends progress updates:
+#    Worker → Client: JOB_PROGRESS::{json_progress}
+#    Progress: {"epoch": 5, "loss": 0.123, "val_loss": 0.145, ...}
+#
+# 4. On completion:
+#    Success: Worker → Client: JOB_COMPLETE::{json_result}
+#    Failure: Worker → Client: JOB_FAILED::{json_error}
+#
+# Path Correction Flow:
+#   If JOB_REJECTED contains path errors, Client can prompt user to browse
+#   for correct paths using FS_LIST_DIR, then resubmit with corrected spec.
+#
+
+# Job submission messages
+MSG_JOB_SUBMIT = "JOB_SUBMIT"
+MSG_JOB_ACCEPTED = "JOB_ACCEPTED"
+MSG_JOB_REJECTED = "JOB_REJECTED"
+MSG_JOB_PROGRESS = "JOB_PROGRESS"
+MSG_JOB_COMPLETE = "JOB_COMPLETE"
+MSG_JOB_FAILED = "JOB_FAILED"
+
 # Message separators
 MSG_SEPARATOR = "::"
 

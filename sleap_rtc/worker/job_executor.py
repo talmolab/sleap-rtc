@@ -534,3 +534,182 @@ class JobExecutor:
         """
         # Delegate to worker's peer messaging
         await self.worker._send_peer_message(to_peer_id, payload)
+
+    async def execute_from_spec(
+        self,
+        channel,
+        cmd: list,
+        job_id: str,
+        job_type: str = "train",
+        working_dir: str = None,
+    ):
+        """Execute a job from a pre-built command list (structured job submission).
+
+        This method executes a sleap-nn command that was built by CommandBuilder
+        from a validated job specification. It reuses the log streaming logic
+        and sends JOB_PROGRESS, JOB_COMPLETE, or JOB_FAILED messages.
+
+        Args:
+            channel: RTC data channel for sending logs and status
+            cmd: Command list to execute (e.g., ["sleap-nn", "train", ...])
+            job_id: Unique job identifier
+            job_type: Type of job ("train" or "track")
+            working_dir: Working directory for execution (defaults to current dir)
+        """
+        from sleap_rtc.protocol import (
+            MSG_JOB_PROGRESS,
+            MSG_JOB_COMPLETE,
+            MSG_JOB_FAILED,
+            MSG_SEPARATOR,
+        )
+
+        working_dir = working_dir or os.getcwd()
+        start_time = time.time()
+
+        logging.info(f"[JOB {job_id}] Starting {job_type} job")
+        logging.info(f"[JOB {job_id}] Command: {' '.join(cmd)}")
+        logging.info(f"[JOB {job_id}] Working directory: {working_dir}")
+
+        try:
+            # Start the process
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                cwd=working_dir,
+                env={**os.environ, "PYTHONUNBUFFERED": "1"},
+            )
+
+            logging.info(f"[JOB {job_id}] Process started with PID: {process.pid}")
+
+            # Stream logs with progress extraction
+            async def stream_logs_with_progress():
+                """Stream logs and extract progress information."""
+                buf = b""
+                epoch_pattern = re.compile(r"Epoch\s+(\d+)")
+                loss_pattern = re.compile(r"loss[:\s]+([0-9.]+)")
+                val_loss_pattern = re.compile(r"val_loss[:\s]+([0-9.]+)")
+
+                current_epoch = 0
+                current_loss = None
+                current_val_loss = None
+
+                try:
+                    while True:
+                        chunk = await process.stdout.read(512)
+                        if not chunk:
+                            # Process ended; flush remaining text
+                            if buf:
+                                line = buf.decode(errors="replace")
+                                if channel.readyState == "open":
+                                    channel.send(line + "\n")
+                            break
+
+                        buf += chunk
+
+                        while True:
+                            match = SEP.search(buf)
+                            if not match:
+                                # Flush long lines
+                                if len(buf) > 64 * 1024:
+                                    text = buf.decode(errors="replace")
+                                    if channel.readyState == "open":
+                                        channel.send("\r" + text)
+                                    buf = b""
+                                break
+
+                            sep = buf[match.start():match.end()]
+                            payload = buf[:match.start()]
+                            buf = buf[match.end():]
+
+                            text = payload.decode(errors="replace")
+                            if not text:
+                                continue
+
+                            # Send log line to client
+                            if sep == b"\n":
+                                if channel.readyState == "open":
+                                    channel.send(text + "\n")
+                            else:  # \r for progress bars
+                                if channel.readyState == "open":
+                                    channel.send("\r" + text)
+
+                            # Extract progress info for training jobs
+                            if job_type == "train":
+                                epoch_match = epoch_pattern.search(text)
+                                if epoch_match:
+                                    current_epoch = int(epoch_match.group(1))
+
+                                loss_match = loss_pattern.search(text)
+                                if loss_match:
+                                    current_loss = float(loss_match.group(1))
+
+                                val_loss_match = val_loss_pattern.search(text)
+                                if val_loss_match:
+                                    current_val_loss = float(val_loss_match.group(1))
+
+                                # Send progress update if we have epoch info
+                                if current_epoch > 0:
+                                    progress_data = {
+                                        "epoch": current_epoch,
+                                    }
+                                    if current_loss is not None:
+                                        progress_data["loss"] = current_loss
+                                    if current_val_loss is not None:
+                                        progress_data["val_loss"] = current_val_loss
+
+                                    if channel.readyState == "open":
+                                        import json
+                                        progress_msg = f"{MSG_JOB_PROGRESS}{MSG_SEPARATOR}{json.dumps(progress_data)}"
+                                        channel.send(progress_msg)
+
+                except Exception as e:
+                    logging.exception(f"[JOB {job_id}] Log streaming error: {e}")
+                    if channel.readyState == "open":
+                        channel.send(f"[log-stream error] {e}\n")
+
+            await stream_logs_with_progress()
+            await process.wait()
+
+            duration_seconds = int(time.time() - start_time)
+            logging.info(
+                f"[JOB {job_id}] Process completed with return code: {process.returncode}"
+            )
+
+            if process.returncode == 0:
+                # Job completed successfully
+                import json
+                result_data = {
+                    "job_id": job_id,
+                    "job_type": job_type,
+                    "duration_seconds": duration_seconds,
+                    "success": True,
+                }
+                if channel.readyState == "open":
+                    channel.send(f"{MSG_JOB_COMPLETE}{MSG_SEPARATOR}{json.dumps(result_data)}")
+                logging.info(f"[JOB {job_id}] Job completed successfully")
+            else:
+                # Job failed
+                import json
+                error_data = {
+                    "job_id": job_id,
+                    "job_type": job_type,
+                    "exit_code": process.returncode,
+                    "duration_seconds": duration_seconds,
+                    "message": f"Process exited with code {process.returncode}",
+                }
+                if channel.readyState == "open":
+                    channel.send(f"{MSG_JOB_FAILED}{MSG_SEPARATOR}{json.dumps(error_data)}")
+                logging.error(f"[JOB {job_id}] Job failed with exit code {process.returncode}")
+
+        except Exception as e:
+            # Unexpected error
+            import json
+            logging.error(f"[JOB {job_id}] Execution error: {e}")
+            error_data = {
+                "job_id": job_id,
+                "job_type": job_type,
+                "message": str(e),
+            }
+            if channel.readyState == "open":
+                channel.send(f"{MSG_JOB_FAILED}{MSG_SEPARATOR}{json.dumps(error_data)}")

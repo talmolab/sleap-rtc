@@ -65,8 +65,9 @@ click.rich_click.COMMAND_GROUPS = {
 }
 
 from sleap_rtc.rtc_worker import run_RTCworker
-from sleap_rtc.rtc_client import run_RTCclient
+from sleap_rtc.rtc_client import run_RTCclient, run_job_submit
 from sleap_rtc.rtc_client_track import run_RTCclient_track
+from sleap_rtc.jobs.spec import TrainJobSpec, TrackJobSpec
 
 
 # =============================================================================
@@ -1298,8 +1299,58 @@ def worker(api_key, room, token, working_dir, name, room_secret):
     "--pkg_path",
     "-p",
     type=str,
-    required=True,
-    help="Path to SLEAP training package. Filename is resolved on worker filesystem via interactive selector.",
+    required=False,
+    help="[DEPRECATED] Path to SLEAP training package. Use --config instead.",
+)
+@click.option(
+    "--config",
+    "-c",
+    type=str,
+    required=False,
+    multiple=True,
+    help="Path to sleap-nn config YAML file on worker filesystem. Can be specified multiple times for multi-model training (e.g., top-down: centroid + centered_instance).",
+)
+@click.option(
+    "--labels",
+    type=str,
+    required=False,
+    help="Override training labels path (data_config.train_labels_path).",
+)
+@click.option(
+    "--val-labels",
+    type=str,
+    required=False,
+    help="Override validation labels path (data_config.val_labels_path).",
+)
+@click.option(
+    "--max-epochs",
+    type=int,
+    required=False,
+    help="Maximum training epochs (trainer_config.max_epochs).",
+)
+@click.option(
+    "--batch-size",
+    type=int,
+    required=False,
+    help="Batch size for training and validation.",
+)
+@click.option(
+    "--learning-rate",
+    type=float,
+    required=False,
+    help="Learning rate for optimizer.",
+)
+@click.option(
+    "--run-name",
+    type=str,
+    required=False,
+    help="Name for the training run (used in checkpoint directory).",
+)
+@click.option(
+    "--resume",
+    type=str,
+    required=False,
+    help="Path to checkpoint for resuming training.",
 )
 @click.option(
     "--controller-port",
@@ -1367,11 +1418,37 @@ def train(**kwargs):
        - Direct worker: --worker-id PEER_ID
        - GPU filter: --min-gpu-memory MB
 
-    Path resolution options:
+    Job specification options (mutually exclusive):
 
-    - --worker-path PATH: Use this path directly on the worker (skips resolution)
-    - --non-interactive: Auto-select best match without prompting (for CI/scripts)
-    - --mount LABEL: Search only this mount (skips mount selection)
+    1. Config-based (recommended): --config PATH
+       Use a sleap-nn config YAML file with optional overrides.
+
+    2. Package-based (deprecated): --pkg-path PATH
+       Legacy workflow using training package files.
+
+    All paths refer to locations on the worker filesystem. Use shared storage
+    (e.g., /vast) or ensure files exist on the worker.
+
+    Examples:
+
+    \b
+    # Basic training with config file
+    sleap-rtc train --room my-room --config /vast/project/centroid.yaml
+
+    \b
+    # Training with labels override
+    sleap-rtc train --room my-room --config /vast/project/centroid.yaml \\
+        --labels /vast/data/labels.slp
+
+    \b
+    # Training with all overrides
+    sleap-rtc train --room my-room --config /vast/project/centroid.yaml \\
+        --labels /vast/data/labels.slp --max-epochs 100 --batch-size 8
+
+    \b
+    # Auto-select worker with GPU filter
+    sleap-rtc train --room my-room --auto-select --min-gpu-memory 8000 \\
+        --config /vast/project/centroid.yaml
     """
     # Extract connection options
     session_string = kwargs.pop("session_string", None)
@@ -1388,6 +1465,41 @@ def train(**kwargs):
 
     # Extract P2P authentication options
     room_secret = kwargs.pop("room_secret", None)
+
+    # Extract job specification options (new structured flow)
+    # --config is multiple=True, so it's a tuple
+    config_paths = kwargs.pop("config", ())
+    labels_path = kwargs.pop("labels", None)
+    val_labels_path = kwargs.pop("val_labels", None)
+    max_epochs = kwargs.pop("max_epochs", None)
+    batch_size = kwargs.pop("batch_size", None)
+    learning_rate = kwargs.pop("learning_rate", None)
+    run_name = kwargs.pop("run_name", None)
+    resume_ckpt_path = kwargs.pop("resume", None)
+
+    # Extract legacy pkg-path option
+    pkg_path = kwargs.pop("pkg_path", None)
+
+    # Validation: --config and --pkg-path are mutually exclusive
+    if config_paths and pkg_path:
+        logger.error("--config and --pkg-path are mutually exclusive.")
+        logger.error("Use --config for the new workflow (recommended).")
+        sys.exit(1)
+
+    # Validation: Must provide either --config or --pkg-path
+    if not config_paths and not pkg_path:
+        logger.error("Must provide a job specification:")
+        logger.error("  --config PATH (recommended: sleap-nn config YAML)")
+        logger.error("  --pkg-path PATH (deprecated: training package)")
+        sys.exit(1)
+
+    # Deprecation warning for --pkg-path
+    if pkg_path:
+        logger.warning("=" * 60)
+        logger.warning("DEPRECATION WARNING: --pkg-path is deprecated.")
+        logger.warning("Use --config with --labels for the new workflow:")
+        logger.warning("  sleap-rtc train --room ROOM --config /path/to/config.yaml --labels /path/to/labels.slp")
+        logger.warning("=" * 60)
 
     # Validation: Must provide either session string OR room credentials
     has_session = session_string is not None
@@ -1455,16 +1567,52 @@ def train(**kwargs):
     if mount_label:
         logger.info(f"Using mount filter: {mount_label}")
 
-    return run_RTCclient(
-        session_string=session_string,
-        pkg_path=kwargs.pop("pkg_path"),
-        zmq_ports=kwargs.pop("zmq_ports"),
-        worker_path=worker_path,
-        non_interactive=non_interactive,
-        mount_label=mount_label,
-        room_secret=room_secret,
-        **kwargs,
-    )
+    # Branch based on job specification type
+    if config_paths:
+        # New structured job submission flow
+        if len(config_paths) == 1:
+            logger.info(f"Using structured job submission with 1 config")
+        else:
+            logger.info(f"Using structured job submission with {len(config_paths)} configs (multi-model training)")
+        job_spec = TrainJobSpec(
+            config_paths=list(config_paths),
+            labels_path=labels_path,
+            val_labels_path=val_labels_path,
+            max_epochs=max_epochs,
+            batch_size=batch_size,
+            learning_rate=learning_rate,
+            run_name=run_name,
+            resume_ckpt_path=resume_ckpt_path,
+        )
+        return run_job_submit(
+            job_spec=job_spec,
+            session_string=session_string,
+            room_id=room_id,
+            token=token,
+            worker_id=worker_id,
+            auto_select=auto_select,
+            min_gpu_memory=min_gpu_memory,
+            room_secret=room_secret,
+            jwt_token=jwt_token,
+        )
+    else:
+        # Legacy pkg-path flow
+        zmq_ports = kwargs.pop("zmq_ports")
+        return run_RTCclient(
+            session_string=session_string,
+            pkg_path=pkg_path,
+            zmq_ports=zmq_ports,
+            worker_path=worker_path,
+            non_interactive=non_interactive,
+            mount_label=mount_label,
+            room_secret=room_secret,
+            room_id=room_id,
+            token=token,
+            worker_id=worker_id,
+            auto_select=auto_select,
+            min_gpu_memory=min_gpu_memory,
+            jwt_token=jwt_token,
+        )
 
 
 @cli.command(name="track")
@@ -1511,7 +1659,7 @@ def train(**kwargs):
     "-d",
     type=str,
     required=True,
-    help="Local path to .slp file with data for inference. File is transferred to worker.",
+    help="Path to .slp file on worker filesystem for inference.",
 )
 @click.option(
     "--model-paths",
@@ -1519,7 +1667,7 @@ def train(**kwargs):
     "-m",
     multiple=True,
     required=True,
-    help="Local paths to trained model directories. Directories are transferred to worker.",
+    help="Paths to trained model directories on worker filesystem.",
 )
 @click.option(
     "--output",
@@ -1532,8 +1680,26 @@ def train(**kwargs):
     "--only-suggested-frames",
     "--only_suggested_frames",
     is_flag=True,
-    default=True,
+    default=False,
     help="Track only suggested frames.",
+)
+@click.option(
+    "--batch-size",
+    type=int,
+    required=False,
+    help="Batch size for inference.",
+)
+@click.option(
+    "--peak-threshold",
+    type=float,
+    required=False,
+    help="Peak detection threshold (0.0-1.0).",
+)
+@click.option(
+    "--frames",
+    type=str,
+    required=False,
+    help="Frame range string (e.g., '0-100' or '0-100,200-300').",
 )
 @click.option(
     "--min-gpu-memory",
@@ -1565,6 +1731,39 @@ def track(**kwargs):
        - GPU filter: --min-gpu-memory MB
 
     Note: Room-based discovery requires authentication. Run 'sleap-rtc login' first.
+
+    All paths (--data-path, --model-paths, --output) refer to locations on the
+    worker filesystem. Use shared storage or ensure files exist on the worker.
+
+    Examples:
+
+    \b
+    # Basic inference with single model
+    sleap-rtc track --room my-room \\
+        --data-path /vast/data/labels.slp \\
+        --model-paths /vast/models/centroid
+
+    \b
+    # Multi-model inference (top-down pipeline)
+    sleap-rtc track --room my-room \\
+        --data-path /vast/data/labels.slp \\
+        --model-paths /vast/models/centroid \\
+        --model-paths /vast/models/centered_instance \\
+        --output /vast/output/predictions.slp
+
+    \b
+    # Inference with options
+    sleap-rtc track --room my-room \\
+        --data-path /vast/data/labels.slp \\
+        --model-paths /vast/models/topdown \\
+        --batch-size 16 --peak-threshold 0.3
+
+    \b
+    # Only process specific frames
+    sleap-rtc track --room my-room \\
+        --data-path /vast/data/labels.slp \\
+        --model-paths /vast/models/centroid \\
+        --frames "0-100,500-600" --only-suggested-frames
     """
     # Extract connection options
     session_string = kwargs.pop("session_string", None)
@@ -1576,6 +1775,15 @@ def track(**kwargs):
 
     # Extract P2P authentication options
     room_secret = kwargs.pop("room_secret", None)
+
+    # Extract job specification options
+    data_path = kwargs.pop("data_path")
+    model_paths = list(kwargs.pop("model_paths"))
+    output_path = kwargs.pop("output")
+    batch_size = kwargs.pop("batch_size", None)
+    peak_threshold = kwargs.pop("peak_threshold", None)
+    only_suggested_frames = kwargs.pop("only_suggested_frames", False)
+    frames = kwargs.pop("frames", None)
 
     # Validation: Must provide either session string OR room credentials
     has_session = session_string is not None
@@ -1608,36 +1816,30 @@ def track(**kwargs):
         logger.error("Cannot use both --worker-id and --auto-select")
         sys.exit(1)
 
-    logger.info(f"Running inference with models: {kwargs['model_paths']}")
+    logger.info(f"Running inference with data: {data_path}")
+    logger.info(f"Using models: {model_paths}")
 
-    # Handle room-based connection
-    if room_id:
-        logger.info(f"Room-based connection: room_id={room_id}")
-        kwargs["room_id"] = room_id
-        kwargs["token"] = token or ""  # Token optional with JWT auth
-        kwargs["jwt_token"] = jwt_token
+    # Build TrackJobSpec for structured job submission
+    job_spec = TrackJobSpec(
+        data_path=data_path,
+        model_paths=model_paths,
+        output_path=output_path,
+        batch_size=batch_size,
+        peak_threshold=peak_threshold,
+        only_suggested_frames=only_suggested_frames,
+        frames=frames,
+    )
 
-        if worker_id:
-            logger.info(f"Direct worker connection: worker_id={worker_id}")
-            kwargs["worker_id"] = worker_id
-        elif auto_select:
-            logger.info("Auto-select mode enabled")
-            kwargs["auto_select"] = True
-        else:
-            logger.info("Interactive worker selection mode")
-
-        if min_gpu_memory:
-            logger.info(f"Minimum GPU memory filter: {min_gpu_memory}MB")
-            kwargs["min_gpu_memory"] = min_gpu_memory
-
-    return run_RTCclient_track(
+    return run_job_submit(
+        job_spec=job_spec,
         session_string=session_string,
-        data_path=kwargs.pop("data_path"),
-        model_paths=list(kwargs.pop("model_paths")),
-        output=kwargs.pop("output"),
-        only_suggested_frames=kwargs.pop("only_suggested_frames"),
+        room_id=room_id,
+        token=token,
+        worker_id=worker_id,
+        auto_select=auto_select,
+        min_gpu_memory=min_gpu_memory,
         room_secret=room_secret,
-        **kwargs,
+        jwt_token=jwt_token,
     )
 
 
