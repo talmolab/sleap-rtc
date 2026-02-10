@@ -2100,7 +2100,7 @@ class RTCClient:
         from sleap_rtc.client.directory_browser import DirectoryBrowser
 
         # Path error codes that can be corrected
-        PATH_ERROR_CODES = {"PATH_NOT_FOUND", "ACCESS_DENIED", "NOT_ALLOWED"}
+        PATH_ERROR_CODES = {"PATH_NOT_FOUND", "ACCESS_DENIED", "NOT_ALLOWED", "CONFIG_INVALID_TYPE"}
 
         # Find first path error
         path_error = None
@@ -2130,7 +2130,7 @@ class RTCClient:
         file_filter = None
         if "labels" in field.lower() or "data" in field.lower() or "slp" in field.lower():
             file_filter = ".slp"
-        elif "config" in field.lower():
+        elif "config" in field.lower() and "train_labels" not in field.lower() and "val_labels" not in field.lower():
             file_filter = ".yaml,.json"  # Support both YAML and JSON configs
         elif "model" in field.lower():
             file_filter = None  # Models are directories
@@ -2162,34 +2162,54 @@ class RTCClient:
             return False
 
         # Update job spec with corrected path
-        # Handle indexed fields like "config_path[0]" -> update config_paths[0]
         import re
-        index_match = re.match(r"(\w+)\[(\d+)\]", field)
 
-        if index_match:
-            # Indexed field like config_path[0]
-            base_field = index_match.group(1)
-            index = int(index_match.group(2))
-            # Map singular to plural field name (config_path -> config_paths)
-            list_field = base_field + "s" if not base_field.endswith("s") else base_field
+        # Check for config internal path like config.train_labels_path or config[0].train_labels_path
+        config_internal_match = re.match(r"config(?:\[\d+\])?\.(\w+)", field)
+        if config_internal_match:
+            internal_field = config_internal_match.group(1)
 
-            if hasattr(self.job_spec, list_field):
-                field_list = getattr(self.job_spec, list_field)
-                if isinstance(field_list, list) and index < len(field_list):
-                    field_list[index] = selected_path
-                    print(f"\nUpdated {list_field}[{index}] to: {selected_path}")
-                else:
-                    print(f"Warning: Index {index} out of range for {list_field}")
-                    return False
+            # Map config internal field to job spec override field
+            override_mapping = {
+                "train_labels_path": "labels_path",
+                "val_labels_path": "val_labels_path",
+            }
+            override_field = override_mapping.get(internal_field)
+
+            if override_field and hasattr(self.job_spec, override_field):
+                setattr(self.job_spec, override_field, selected_path)
+                print(f"\nSet {override_field} override to: {selected_path}")
             else:
-                print(f"Warning: Could not find list field '{list_field}' in job spec")
+                print(f"Warning: Could not map config internal field '{internal_field}' to job spec")
                 return False
-        elif hasattr(self.job_spec, field):
-            setattr(self.job_spec, field, selected_path)
-            print(f"\nUpdated {field} to: {selected_path}")
         else:
-            print(f"Warning: Could not update field '{field}' in job spec")
-            return False
+            # Handle indexed fields like "config_path[0]" -> update config_paths[0]
+            index_match = re.match(r"(\w+)\[(\d+)\]", field)
+
+            if index_match:
+                # Indexed field like config_path[0]
+                base_field = index_match.group(1)
+                index = int(index_match.group(2))
+                # Map singular to plural field name (config_path -> config_paths)
+                list_field = base_field + "s" if not base_field.endswith("s") else base_field
+
+                if hasattr(self.job_spec, list_field):
+                    field_list = getattr(self.job_spec, list_field)
+                    if isinstance(field_list, list) and index < len(field_list):
+                        field_list[index] = selected_path
+                        print(f"\nUpdated {list_field}[{index}] to: {selected_path}")
+                    else:
+                        print(f"Warning: Index {index} out of range for {list_field}")
+                        return False
+                else:
+                    print(f"Warning: Could not find list field '{list_field}' in job spec")
+                    return False
+            elif hasattr(self.job_spec, field):
+                setattr(self.job_spec, field, selected_path)
+                print(f"\nUpdated {field} to: {selected_path}")
+            else:
+                print(f"Warning: Could not update field '{field}' in job spec")
+                return False
 
         # Resubmit job
         print("Resubmitting job with corrected path...")

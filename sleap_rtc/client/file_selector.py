@@ -1093,10 +1093,17 @@ class JobSpecConfirmation:
     def _build_field_list(self):
         """Build list of fields that can be edited."""
         import os
+        import re
         self.fields = []
 
-        def add_field(name, label, value, file_filter, list_field=None, list_index=None):
-            """Helper to add a field with path existence check."""
+        def add_field(name, label, value, file_filter, list_field=None, list_index=None,
+                      maps_to_override=None):
+            """Helper to add a field with path existence check.
+
+            Args:
+                maps_to_override: If set, corrections to this field will update
+                    the specified job spec field instead (for config internal paths).
+            """
             # Check if path exists locally (as a hint - worker will do final validation)
             path_exists = os.path.exists(value) if value else False
             field = {
@@ -1109,6 +1116,8 @@ class JobSpecConfirmation:
             if list_field is not None:
                 field["list_field"] = list_field
                 field["list_index"] = list_index
+            if maps_to_override is not None:
+                field["maps_to_override"] = maps_to_override
             self.fields.append(field)
 
         # Determine job type and add appropriate fields
@@ -1128,7 +1137,7 @@ class JobSpecConfirmation:
                         list_index=i,
                     )
 
-            # Add labels path
+            # Add labels path (explicit override)
             if hasattr(self.job_spec, "labels_path") and self.job_spec.labels_path:
                 add_field(
                     name="labels_path",
@@ -1137,7 +1146,7 @@ class JobSpecConfirmation:
                     file_filter=".slp",
                 )
 
-            # Add val_labels path
+            # Add val_labels path (explicit override)
             if hasattr(self.job_spec, "val_labels_path") and self.job_spec.val_labels_path:
                 add_field(
                     name="val_labels_path",
@@ -1145,6 +1154,40 @@ class JobSpecConfirmation:
                     value=self.job_spec.val_labels_path,
                     file_filter=".slp",
                 )
+
+            # Add config internal path errors as editable fields
+            # These map to job spec overrides when corrected
+            for err in self.errors:
+                field_name = err.get("field", "")
+                err_path = err.get("path", "")
+
+                # Match config.train_labels_path or config[N].train_labels_path
+                match = re.match(r"config(?:\[\d+\])?\.(\w+)", field_name)
+                if match:
+                    internal_field = match.group(1)
+
+                    # Map config internal field to job spec override field
+                    override_mapping = {
+                        "train_labels_path": "labels_path",
+                        "val_labels_path": "val_labels_path",
+                    }
+                    override_field = override_mapping.get(internal_field)
+
+                    if override_field:
+                        # Check if this override is already set (skip if so)
+                        current_override = getattr(self.job_spec, override_field, None)
+                        if current_override:
+                            continue  # Override already set, skip
+
+                        # Add config internal path as editable field
+                        label = f"Config {internal_field.replace('_', ' ').title()}"
+                        add_field(
+                            name=field_name,
+                            label=label,
+                            value=err_path,
+                            file_filter=".slp",
+                            maps_to_override=override_field,
+                        )
 
             # Add resume checkpoint
             if hasattr(self.job_spec, "resume_ckpt_path") and self.job_spec.resume_ckpt_path:
@@ -1221,7 +1264,11 @@ class JobSpecConfirmation:
             field["path_exists"] = os.path.exists(new_value) if new_value else False
 
         # Update job spec
-        if "list_field" in field:
+        if "maps_to_override" in field:
+            # Config internal path maps to a job spec override field
+            override_field = field["maps_to_override"]
+            setattr(self.job_spec, override_field, new_value)
+        elif "list_field" in field:
             # Indexed field like config_paths[0]
             list_field = field["list_field"]
             list_index = field["list_index"]

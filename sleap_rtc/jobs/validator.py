@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Union
 
+import yaml
+
 from sleap_rtc.jobs.spec import TrainJobSpec, TrackJobSpec
 
 
@@ -108,6 +110,7 @@ class JobValidator:
         errors = []
 
         # Validate config paths (at least one required)
+        valid_config_indices = []
         if not spec.config_paths:
             errors.append(
                 ValidationError(
@@ -122,6 +125,15 @@ class JobValidator:
                 error = self._validate_path(config_path, field_name, must_exist=True)
                 if error:
                     errors.append(error)
+                else:
+                    valid_config_indices.append(i)
+
+        # Validate internal paths in config files (only for configs that exist)
+        for i in valid_config_indices:
+            config_errors = self._validate_config_internals(
+                spec.config_paths[i], spec, config_index=i
+            )
+            errors.extend(config_errors)
 
         # Validate labels path if provided
         if spec.labels_path:
@@ -336,3 +348,101 @@ class JobValidator:
             )
 
         return None
+
+    def _validate_config_internals(
+        self, config_path: str, spec: TrainJobSpec, config_index: int = 0
+    ) -> List[ValidationError]:
+        """Validate paths inside a config YAML file.
+
+        Parses the config file and validates data_config.train_labels_path
+        and data_config.val_labels_path if they are not overridden by
+        the job spec's labels_path and val_labels_path.
+
+        Args:
+            config_path: Path to the config YAML file
+            spec: TrainJobSpec containing potential overrides
+            config_index: Index of the config (for error field naming)
+
+        Returns:
+            List of ValidationError objects for invalid internal paths
+        """
+        errors = []
+        config_prefix = f"config[{config_index}]." if len(spec.config_paths) > 1 else "config."
+
+        # Try to parse the config file
+        try:
+            with open(config_path, "r") as f:
+                config = yaml.safe_load(f)
+        except yaml.YAMLError as e:
+            errors.append(
+                ValidationError(
+                    field=f"{config_prefix}parse",
+                    message=f"Failed to parse config file: {e}",
+                    code="CONFIG_PARSE_ERROR",
+                    path=config_path,
+                )
+            )
+            return errors
+        except OSError as e:
+            # File doesn't exist or can't be read - already caught by path validation
+            return errors
+
+        if not isinstance(config, dict):
+            errors.append(
+                ValidationError(
+                    field=f"{config_prefix}parse",
+                    message="Config file is not a valid YAML mapping",
+                    code="CONFIG_PARSE_ERROR",
+                    path=config_path,
+                )
+            )
+            return errors
+
+        # Get data_config section
+        data_config = config.get("data_config", {})
+        if not isinstance(data_config, dict):
+            data_config = {}
+
+        # Validate train_labels_path if not overridden by spec.labels_path
+        if not spec.labels_path:
+            train_labels = data_config.get("train_labels_path")
+            if train_labels is not None:
+                # Check if it's a string (not a list - common YAML mistake)
+                if not isinstance(train_labels, str):
+                    errors.append(
+                        ValidationError(
+                            field=f"{config_prefix}train_labels_path",
+                            message=f"train_labels_path must be a string, got {type(train_labels).__name__}",
+                            code="CONFIG_INVALID_TYPE",
+                            path=str(train_labels),
+                        )
+                    )
+                else:
+                    error = self._validate_path(
+                        train_labels, f"{config_prefix}train_labels_path", must_exist=True
+                    )
+                    if error:
+                        errors.append(error)
+
+        # Validate val_labels_path if not overridden by spec.val_labels_path
+        if not spec.val_labels_path:
+            val_labels = data_config.get("val_labels_path")
+            if val_labels is not None:
+                # Check if it's a string (not a list - common YAML mistake)
+                if not isinstance(val_labels, str):
+                    errors.append(
+                        ValidationError(
+                            field=f"{config_prefix}val_labels_path",
+                            message=f"val_labels_path must be a string, got {type(val_labels).__name__}",
+                            code="CONFIG_INVALID_TYPE",
+                            path=str(val_labels),
+                        )
+                    )
+                else:
+                    error = self._validate_path(
+                        val_labels, f"{config_prefix}val_labels_path", must_exist=True
+                    )
+                    if error:
+                        errors.append(error)
+
+        return errors
