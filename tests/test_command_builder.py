@@ -130,8 +130,9 @@ class TestBuildTrainCommand:
 
         cmd = builder.build_train_command(spec)
 
-        assert f"trainer_config.zmq.controller_port={DEFAULT_ZMQ_PORTS['controller']}" in cmd
-        assert f"trainer_config.zmq.publish_port={DEFAULT_ZMQ_PORTS['publish']}" in cmd
+        # + prefix is required for Hydra to append keys not in schema
+        assert f"+trainer_config.zmq.controller_port={DEFAULT_ZMQ_PORTS['controller']}" in cmd
+        assert f"+trainer_config.zmq.publish_port={DEFAULT_ZMQ_PORTS['publish']}" in cmd
 
     def test_zmq_ports_custom(self):
         """Test custom ZMQ ports are used."""
@@ -142,8 +143,9 @@ class TestBuildTrainCommand:
             spec, zmq_ports={"controller": 8000, "publish": 8001}
         )
 
-        assert "trainer_config.zmq.controller_port=8000" in cmd
-        assert "trainer_config.zmq.publish_port=8001" in cmd
+        # + prefix is required for Hydra to append keys not in schema
+        assert "+trainer_config.zmq.controller_port=8000" in cmd
+        assert "+trainer_config.zmq.publish_port=8001" in cmd
 
     def test_all_overrides(self):
         """Test command with all overrides."""
@@ -361,8 +363,9 @@ class TestBuildCommandGeneric:
 
         cmd = builder.build_command(spec, zmq_ports={"controller": 5000, "publish": 5001})
 
-        assert "trainer_config.zmq.controller_port=5000" in cmd
-        assert "trainer_config.zmq.publish_port=5001" in cmd
+        # + prefix is required for Hydra to append keys not in schema
+        assert "+trainer_config.zmq.controller_port=5000" in cmd
+        assert "+trainer_config.zmq.publish_port=5001" in cmd
 
     def test_build_command_unknown_type(self):
         """Test generic build_command raises for unknown type."""

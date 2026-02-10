@@ -83,9 +83,10 @@ class CommandBuilder:
             cmd.append(f"trainer_config.resume_ckpt_path={spec.resume_ckpt_path}")
 
         # ZMQ ports for progress reporting
+        # Use + prefix to append new keys (zmq is not in sleap-nn's default config schema)
         ports = zmq_ports or DEFAULT_ZMQ_PORTS
-        cmd.append(f"trainer_config.zmq.controller_port={ports.get('controller', 9000)}")
-        cmd.append(f"trainer_config.zmq.publish_port={ports.get('publish', 9001)}")
+        cmd.append(f"+trainer_config.zmq.controller_port={ports.get('controller', 9000)}")
+        cmd.append(f"+trainer_config.zmq.publish_port={ports.get('publish', 9001)}")
 
         return cmd
 
