@@ -56,8 +56,9 @@ class CommandBuilder:
         cmd.extend(["--config-dir", str(config_path.parent)])
 
         # Data path overrides (Hydra syntax)
+        # sleap-nn expects train_labels_path as a list
         if spec.labels_path:
-            cmd.append(f"data_config.train_labels_path={spec.labels_path}")
+            cmd.append(f"data_config.train_labels_path=[{spec.labels_path}]")
 
         if spec.val_labels_path:
             cmd.append(f"data_config.val_labels_path={spec.val_labels_path}")

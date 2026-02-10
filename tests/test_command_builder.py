@@ -37,7 +37,7 @@ class TestBuildTrainCommand:
         assert cmd[dir_idx + 1] == "/vast/project/configs"
 
     def test_labels_path_override(self):
-        """Test labels_path creates Hydra override."""
+        """Test labels_path creates Hydra override as list."""
         builder = CommandBuilder()
         spec = TrainJobSpec(
             config_path="/vast/config.yaml",
@@ -46,7 +46,8 @@ class TestBuildTrainCommand:
 
         cmd = builder.build_train_command(spec)
 
-        assert "data_config.train_labels_path=/vast/data/labels.slp" in cmd
+        # sleap-nn expects train_labels_path as a list
+        assert "data_config.train_labels_path=[/vast/data/labels.slp]" in cmd
 
     def test_val_labels_path_override(self):
         """Test val_labels_path creates Hydra override."""
@@ -168,7 +169,7 @@ class TestBuildTrainCommand:
         assert "train" in cmd
         assert "--config-name" in cmd
         assert "--config-dir" in cmd
-        assert "data_config.train_labels_path=/vast/data/labels.slp" in cmd
+        assert "data_config.train_labels_path=[/vast/data/labels.slp]" in cmd
         assert "data_config.val_labels_path=/vast/data/val.slp" in cmd
         assert "trainer_config.max_epochs=100" in cmd
         assert "trainer_config.train_data_loader.batch_size=8" in cmd
