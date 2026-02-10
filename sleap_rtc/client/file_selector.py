@@ -1092,7 +1092,24 @@ class JobSpecConfirmation:
 
     def _build_field_list(self):
         """Build list of fields that can be edited."""
+        import os
         self.fields = []
+
+        def add_field(name, label, value, file_filter, list_field=None, list_index=None):
+            """Helper to add a field with path existence check."""
+            # Check if path exists locally (as a hint - worker will do final validation)
+            path_exists = os.path.exists(value) if value else False
+            field = {
+                "name": name,
+                "label": label,
+                "value": value,
+                "filter": file_filter,
+                "path_exists": path_exists,
+            }
+            if list_field is not None:
+                field["list_field"] = list_field
+                field["list_index"] = list_index
+            self.fields.append(field)
 
         # Determine job type and add appropriate fields
         spec_type = self.job_spec.__class__.__name__
@@ -1102,72 +1119,72 @@ class JobSpecConfirmation:
             if hasattr(self.job_spec, "config_paths") and self.job_spec.config_paths:
                 for i, path in enumerate(self.job_spec.config_paths):
                     field_name = f"config_path[{i}]" if len(self.job_spec.config_paths) > 1 else "config_path"
-                    self.fields.append({
-                        "name": field_name,
-                        "label": f"Config {i+1}" if len(self.job_spec.config_paths) > 1 else "Config",
-                        "value": path,
-                        "filter": ".yaml,.json",
-                        "list_field": "config_paths",
-                        "list_index": i,
-                    })
+                    add_field(
+                        name=field_name,
+                        label=f"Config {i+1}" if len(self.job_spec.config_paths) > 1 else "Config",
+                        value=path,
+                        file_filter=".yaml,.json",
+                        list_field="config_paths",
+                        list_index=i,
+                    )
 
             # Add labels path
             if hasattr(self.job_spec, "labels_path") and self.job_spec.labels_path:
-                self.fields.append({
-                    "name": "labels_path",
-                    "label": "Labels",
-                    "value": self.job_spec.labels_path,
-                    "filter": ".slp",
-                })
+                add_field(
+                    name="labels_path",
+                    label="Labels",
+                    value=self.job_spec.labels_path,
+                    file_filter=".slp",
+                )
 
             # Add val_labels path
             if hasattr(self.job_spec, "val_labels_path") and self.job_spec.val_labels_path:
-                self.fields.append({
-                    "name": "val_labels_path",
-                    "label": "Val Labels",
-                    "value": self.job_spec.val_labels_path,
-                    "filter": ".slp",
-                })
+                add_field(
+                    name="val_labels_path",
+                    label="Val Labels",
+                    value=self.job_spec.val_labels_path,
+                    file_filter=".slp",
+                )
 
             # Add resume checkpoint
             if hasattr(self.job_spec, "resume_ckpt_path") and self.job_spec.resume_ckpt_path:
-                self.fields.append({
-                    "name": "resume_ckpt_path",
-                    "label": "Resume Checkpoint",
-                    "value": self.job_spec.resume_ckpt_path,
-                    "filter": None,
-                })
+                add_field(
+                    name="resume_ckpt_path",
+                    label="Resume Checkpoint",
+                    value=self.job_spec.resume_ckpt_path,
+                    file_filter=None,
+                )
 
         elif spec_type == "TrackJobSpec":
             # Add data path
             if hasattr(self.job_spec, "data_path") and self.job_spec.data_path:
-                self.fields.append({
-                    "name": "data_path",
-                    "label": "Data",
-                    "value": self.job_spec.data_path,
-                    "filter": ".slp",
-                })
+                add_field(
+                    name="data_path",
+                    label="Data",
+                    value=self.job_spec.data_path,
+                    file_filter=".slp",
+                )
 
             # Add model paths
             if hasattr(self.job_spec, "model_paths") and self.job_spec.model_paths:
                 for i, path in enumerate(self.job_spec.model_paths):
-                    self.fields.append({
-                        "name": f"model_paths[{i}]",
-                        "label": f"Model {i+1}" if len(self.job_spec.model_paths) > 1 else "Model",
-                        "value": path,
-                        "filter": None,  # Models are directories
-                        "list_field": "model_paths",
-                        "list_index": i,
-                    })
+                    add_field(
+                        name=f"model_paths[{i}]",
+                        label=f"Model {i+1}" if len(self.job_spec.model_paths) > 1 else "Model",
+                        value=path,
+                        file_filter=None,  # Models are directories
+                        list_field="model_paths",
+                        list_index=i,
+                    )
 
             # Add output path
             if hasattr(self.job_spec, "output_path") and self.job_spec.output_path:
-                self.fields.append({
-                    "name": "output_path",
-                    "label": "Output",
-                    "value": self.job_spec.output_path,
-                    "filter": ".slp",
-                })
+                add_field(
+                    name="output_path",
+                    label="Output",
+                    value=self.job_spec.output_path,
+                    file_filter=".slp",
+                )
 
         # Add Submit option at the end
         self.fields.append({
@@ -1186,8 +1203,11 @@ class JobSpecConfirmation:
 
     def _update_field_value(self, field_index: int, new_value: str):
         """Update a field value in both the field list and job spec."""
+        import os
         field = self.fields[field_index]
         field["value"] = new_value
+        # Update path existence check
+        field["path_exists"] = os.path.exists(new_value) if new_value else False
 
         # Update job spec
         if "list_field" in field:
@@ -1215,6 +1235,7 @@ class JobSpecConfirmation:
 
     async def _run_interactive(self) -> bool:
         """Run interactive prompt_toolkit-based confirmation."""
+        import logging
         from prompt_toolkit import Application
         from prompt_toolkit.key_binding import KeyBindings
         from prompt_toolkit.layout import Layout
@@ -1222,6 +1243,24 @@ class JobSpecConfirmation:
         from prompt_toolkit.layout.controls import FormattedTextControl
         from prompt_toolkit.formatted_text import FormattedText
 
+        # Suppress logging during interactive session
+        root_logger = logging.getLogger()
+        original_level = root_logger.level
+        root_logger.setLevel(logging.CRITICAL + 1)
+
+        try:
+            return await self._run_interactive_impl(
+                Application, KeyBindings, Layout, Window,
+                FormattedTextControl, FormattedText
+            )
+        finally:
+            root_logger.setLevel(original_level)
+
+    async def _run_interactive_impl(
+        self, Application, KeyBindings, Layout, Window,
+        FormattedTextControl, FormattedText
+    ) -> bool:
+        """Implementation of interactive confirmation with logging suppressed."""
         kb = KeyBindings()
         pending_edit = [None]  # Field index to edit after app exits
         stay_in_app = [True]
@@ -1287,6 +1326,7 @@ class JobSpecConfirmation:
                 selected = i == self.selected_index
                 is_action = field.get("is_action", False)
                 error = self._get_error_for_field(field["name"])
+                path_exists = field.get("path_exists", True)  # Assume exists for actions
 
                 if is_action:
                     # Submit action
@@ -1305,21 +1345,28 @@ class JobSpecConfirmation:
                     if len(display_value) > max_len:
                         display_value = "..." + display_value[-(max_len - 3):]
 
+                    # Highlight in red if error OR path doesn't exist locally
+                    is_error = error or not path_exists
+
                     if selected:
-                        if error:
+                        if is_error:
                             lines.append(("bold fg:ansired", f"  > {label}: "))
                         else:
                             lines.append(("bold fg:ansiwhite", f"  > {label}: "))
                         lines.append(("bold", f"{display_value}\n"))
                     else:
-                        if error:
+                        if is_error:
                             lines.append(("fg:ansired", f"    {label}: "))
                         else:
                             lines.append(("fg:ansibrightblack", f"    {label}: "))
                         lines.append(("", f"{display_value}\n"))
 
-                    if error and selected:
-                        lines.append(("fg:ansired", f"      Error: {error}\n"))
+                    # Show error or "not found" message
+                    if selected:
+                        if error:
+                            lines.append(("fg:ansired", f"      Error: {error}\n"))
+                        elif not path_exists:
+                            lines.append(("fg:ansired", f"      Path not found locally\n"))
 
             # Help text
             lines.append(("", "\n"))
