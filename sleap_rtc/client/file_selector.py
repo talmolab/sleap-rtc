@@ -1047,6 +1047,379 @@ def prompt_manual_path() -> Optional[str]:
         return None
 
 
+class JobSpecConfirmation:
+    """Interactive confirmation screen for job spec paths before submission.
+
+    Shows all paths in the job spec with their current values. User can:
+    - Navigate to any path and press Enter to edit via file browser
+    - Press 's' or navigate to Submit and press Enter to submit
+    - Press Escape to cancel
+
+    Usage:
+        confirmation = JobSpecConfirmation(
+            job_spec=spec,
+            browse_callback=async_browse_func,
+            errors=validation_errors,
+        )
+        confirmed = await confirmation.run()
+    """
+
+    def __init__(
+        self,
+        job_spec,
+        browse_callback,
+        title: str = "Confirm Job Paths",
+        errors: list = None,
+    ):
+        """Initialize confirmation screen.
+
+        Args:
+            job_spec: TrainJobSpec or TrackJobSpec to confirm
+            browse_callback: Async function(field_name, current_path, file_filter) -> new_path
+            title: Title to display
+            errors: List of validation errors to highlight
+        """
+        self.job_spec = job_spec
+        self.browse_callback = browse_callback
+        self.title = title
+        self.errors = errors or []
+        self.selected_index = 0
+        self.cancelled = False
+        self.confirmed = False
+
+        # Build list of editable fields
+        self._build_field_list()
+
+    def _build_field_list(self):
+        """Build list of fields that can be edited."""
+        self.fields = []
+
+        # Determine job type and add appropriate fields
+        spec_type = self.job_spec.__class__.__name__
+
+        if spec_type == "TrainJobSpec":
+            # Add config paths
+            if hasattr(self.job_spec, "config_paths") and self.job_spec.config_paths:
+                for i, path in enumerate(self.job_spec.config_paths):
+                    field_name = f"config_path[{i}]" if len(self.job_spec.config_paths) > 1 else "config_path"
+                    self.fields.append({
+                        "name": field_name,
+                        "label": f"Config {i+1}" if len(self.job_spec.config_paths) > 1 else "Config",
+                        "value": path,
+                        "filter": ".yaml,.json",
+                        "list_field": "config_paths",
+                        "list_index": i,
+                    })
+
+            # Add labels path
+            if hasattr(self.job_spec, "labels_path") and self.job_spec.labels_path:
+                self.fields.append({
+                    "name": "labels_path",
+                    "label": "Labels",
+                    "value": self.job_spec.labels_path,
+                    "filter": ".slp",
+                })
+
+            # Add val_labels path
+            if hasattr(self.job_spec, "val_labels_path") and self.job_spec.val_labels_path:
+                self.fields.append({
+                    "name": "val_labels_path",
+                    "label": "Val Labels",
+                    "value": self.job_spec.val_labels_path,
+                    "filter": ".slp",
+                })
+
+            # Add resume checkpoint
+            if hasattr(self.job_spec, "resume_ckpt_path") and self.job_spec.resume_ckpt_path:
+                self.fields.append({
+                    "name": "resume_ckpt_path",
+                    "label": "Resume Checkpoint",
+                    "value": self.job_spec.resume_ckpt_path,
+                    "filter": None,
+                })
+
+        elif spec_type == "TrackJobSpec":
+            # Add data path
+            if hasattr(self.job_spec, "data_path") and self.job_spec.data_path:
+                self.fields.append({
+                    "name": "data_path",
+                    "label": "Data",
+                    "value": self.job_spec.data_path,
+                    "filter": ".slp",
+                })
+
+            # Add model paths
+            if hasattr(self.job_spec, "model_paths") and self.job_spec.model_paths:
+                for i, path in enumerate(self.job_spec.model_paths):
+                    self.fields.append({
+                        "name": f"model_paths[{i}]",
+                        "label": f"Model {i+1}" if len(self.job_spec.model_paths) > 1 else "Model",
+                        "value": path,
+                        "filter": None,  # Models are directories
+                        "list_field": "model_paths",
+                        "list_index": i,
+                    })
+
+            # Add output path
+            if hasattr(self.job_spec, "output_path") and self.job_spec.output_path:
+                self.fields.append({
+                    "name": "output_path",
+                    "label": "Output",
+                    "value": self.job_spec.output_path,
+                    "filter": ".slp",
+                })
+
+        # Add Submit option at the end
+        self.fields.append({
+            "name": "_submit",
+            "label": "Submit Job",
+            "value": None,
+            "is_action": True,
+        })
+
+    def _get_error_for_field(self, field_name: str) -> Optional[str]:
+        """Get error message for a field if one exists."""
+        for err in self.errors:
+            if err.get("field") == field_name:
+                return err.get("message", "Error")
+        return None
+
+    def _update_field_value(self, field_index: int, new_value: str):
+        """Update a field value in both the field list and job spec."""
+        field = self.fields[field_index]
+        field["value"] = new_value
+
+        # Update job spec
+        if "list_field" in field:
+            # Indexed field like config_paths[0]
+            list_field = field["list_field"]
+            list_index = field["list_index"]
+            if hasattr(self.job_spec, list_field):
+                getattr(self.job_spec, list_field)[list_index] = new_value
+        elif hasattr(self.job_spec, field["name"]):
+            setattr(self.job_spec, field["name"], new_value)
+
+    async def run(self) -> bool:
+        """Run the confirmation screen.
+
+        Returns:
+            True if user confirmed submission, False if cancelled.
+        """
+        if not _is_interactive_terminal():
+            return await self._run_simple()
+
+        try:
+            return await self._run_interactive()
+        except ImportError:
+            return await self._run_simple()
+
+    async def _run_interactive(self) -> bool:
+        """Run interactive prompt_toolkit-based confirmation."""
+        from prompt_toolkit import Application
+        from prompt_toolkit.key_binding import KeyBindings
+        from prompt_toolkit.layout import Layout
+        from prompt_toolkit.layout.containers import Window
+        from prompt_toolkit.layout.controls import FormattedTextControl
+        from prompt_toolkit.formatted_text import FormattedText
+
+        kb = KeyBindings()
+        pending_edit = [None]  # Field index to edit after app exits
+        stay_in_app = [True]
+
+        @kb.add("up")
+        @kb.add("k")
+        def move_up(event):
+            self.selected_index = (self.selected_index - 1) % len(self.fields)
+
+        @kb.add("down")
+        @kb.add("j")
+        def move_down(event):
+            self.selected_index = (self.selected_index + 1) % len(self.fields)
+
+        @kb.add("enter")
+        def select(event):
+            field = self.fields[self.selected_index]
+            if field.get("is_action"):
+                # Submit action
+                self.confirmed = True
+                stay_in_app[0] = False
+                event.app.exit()
+            else:
+                # Edit field - exit app to run browser
+                pending_edit[0] = self.selected_index
+                event.app.exit()
+
+        @kb.add("s")
+        def quick_submit(event):
+            self.confirmed = True
+            stay_in_app[0] = False
+            event.app.exit()
+
+        @kb.add("escape")
+        @kb.add("q")
+        def cancel(event):
+            self.cancelled = True
+            stay_in_app[0] = False
+            event.app.exit()
+
+        @kb.add("c-c")
+        def ctrl_c(event):
+            self.cancelled = True
+            stay_in_app[0] = False
+            event.app.exit()
+
+        def get_formatted_text():
+            lines = []
+
+            # Title
+            lines.append(("bold", f"\n{self.title}\n"))
+            lines.append(("fg:ansibrightblack", "Review paths before submission. Press Enter to edit a path.\n\n"))
+
+            # Show any errors
+            if self.errors:
+                lines.append(("fg:ansired bold", "Validation errors:\n"))
+                for err in self.errors:
+                    lines.append(("fg:ansired", f"  - {err.get('field')}: {err.get('message')}\n"))
+                lines.append(("", "\n"))
+
+            # Show fields
+            for i, field in enumerate(self.fields):
+                selected = i == self.selected_index
+                is_action = field.get("is_action", False)
+                error = self._get_error_for_field(field["name"])
+
+                if is_action:
+                    # Submit action
+                    if selected:
+                        lines.append(("bold fg:ansigreen", f"\n  > [{field['label']}]\n"))
+                    else:
+                        lines.append(("fg:ansigreen", f"\n    [{field['label']}]\n"))
+                else:
+                    # Path field
+                    label = field["label"]
+                    value = field["value"] or "(not set)"
+
+                    # Truncate long paths
+                    max_len = 60
+                    display_value = value
+                    if len(display_value) > max_len:
+                        display_value = "..." + display_value[-(max_len - 3):]
+
+                    if selected:
+                        if error:
+                            lines.append(("bold fg:ansired", f"  > {label}: "))
+                        else:
+                            lines.append(("bold fg:ansiwhite", f"  > {label}: "))
+                        lines.append(("bold", f"{display_value}\n"))
+                    else:
+                        if error:
+                            lines.append(("fg:ansired", f"    {label}: "))
+                        else:
+                            lines.append(("fg:ansibrightblack", f"    {label}: "))
+                        lines.append(("", f"{display_value}\n"))
+
+                    if error and selected:
+                        lines.append(("fg:ansired", f"      Error: {error}\n"))
+
+            # Help text
+            lines.append(("", "\n"))
+            lines.append(("fg:ansibrightblack", "["))
+            lines.append(("bold fg:ansiyellow", "↑/↓"))
+            lines.append(("fg:ansibrightblack", "] Navigate  ["))
+            lines.append(("bold fg:ansigreen", "Enter"))
+            lines.append(("fg:ansibrightblack", "] Edit/Submit  ["))
+            lines.append(("bold fg:ansigreen", "s"))
+            lines.append(("fg:ansibrightblack", "] Quick Submit  ["))
+            lines.append(("bold fg:ansiyellow", "Esc"))
+            lines.append(("fg:ansibrightblack", "] Cancel\n"))
+
+            return FormattedText(lines)
+
+        # Main loop
+        while stay_in_app[0] and not self.cancelled and not self.confirmed:
+            layout = Layout(Window(content=FormattedTextControl(get_formatted_text)))
+
+            app = Application(
+                layout=layout,
+                key_bindings=kb,
+                full_screen=True,
+                mouse_support=False,
+                erase_when_done=False,
+            )
+
+            def run_app():
+                app.run()
+
+            try:
+                loop = asyncio.get_running_loop()
+                with ThreadPoolExecutor(max_workers=1) as executor:
+                    await loop.run_in_executor(executor, run_app)
+            except RuntimeError:
+                app.run()
+
+            # Handle pending edit
+            if pending_edit[0] is not None:
+                field_index = pending_edit[0]
+                pending_edit[0] = None
+                field = self.fields[field_index]
+
+                # Call browse callback
+                new_path = await self.browse_callback(
+                    field["name"],
+                    field["value"],
+                    field.get("filter"),
+                )
+
+                if new_path:
+                    self._update_field_value(field_index, new_path)
+                    # Clear error for this field
+                    self.errors = [e for e in self.errors if e.get("field") != field["name"]]
+
+        return self.confirmed
+
+    async def _run_simple(self) -> bool:
+        """Run simple text-based confirmation for non-interactive terminals."""
+        print(f"\n{self.title}")
+        print("=" * 40)
+
+        for i, field in enumerate(self.fields):
+            if field.get("is_action"):
+                continue
+            error = self._get_error_for_field(field["name"])
+            status = " [ERROR]" if error else ""
+            print(f"  [{i+1}] {field['label']}: {field['value']}{status}")
+
+        print("\nEnter number to edit a path, 's' to submit, or 'q' to cancel:")
+
+        while True:
+            try:
+                choice = input("> ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                return False
+
+            if choice == "q":
+                return False
+            elif choice == "s":
+                return True
+            else:
+                try:
+                    idx = int(choice) - 1
+                    if 0 <= idx < len(self.fields) - 1:  # -1 to exclude submit action
+                        field = self.fields[idx]
+                        new_path = await self.browse_callback(
+                            field["name"],
+                            field["value"],
+                            field.get("filter"),
+                        )
+                        if new_path:
+                            self._update_field_value(idx, new_path)
+                            print(f"Updated {field['label']} to: {new_path}")
+                    else:
+                        print("Invalid number")
+                except ValueError:
+                    print("Invalid input")
+
+
 def select_file_from_candidates(
     candidates: List[dict],
     title: str = "Select file:",

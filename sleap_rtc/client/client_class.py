@@ -1909,7 +1909,7 @@ class RTCClient:
         pc.on("iceconnectionstatechange", self.on_iceconnectionstatechange)
         return pc
 
-    async def submit_job(self, allow_path_correction: bool = True):
+    async def submit_job(self, allow_path_correction: bool = True, show_confirmation: bool = True):
         """Submit a structured job spec and wait for completion.
 
         Sends JOB_SUBMIT message with the job spec, then handles all job
@@ -1918,6 +1918,7 @@ class RTCClient:
         Args:
             allow_path_correction: If True, offer to correct paths when
                 JOB_REJECTED is received with path errors.
+            show_confirmation: If True, show confirmation screen before first submission.
 
         Requires self.job_spec to be set before calling.
         """
@@ -1928,6 +1929,13 @@ class RTCClient:
         if not self.data_channel or self.data_channel.readyState != "open":
             logging.error("Data channel not ready for job submission")
             return
+
+        # Show confirmation screen before first submission (if interactive)
+        if show_confirmation and not self.non_interactive:
+            confirmed = await self._show_job_confirmation()
+            if not confirmed:
+                print("Job submission cancelled.")
+                return
 
         # Generate job ID and store for tracking
         import uuid
@@ -1968,16 +1976,26 @@ class RTCClient:
                     error_data = json.loads(error_json)
                     errors = error_data.get("errors", [])
                     logging.error(f"Job {rejected_job_id} rejected: {errors}")
-                    print(f"\nJob rejected by worker:")
-                    for err in errors:
-                        print(f"  - {err.get('field', 'unknown')}: {err.get('message', 'unknown error')}")
 
-                    # Check for path-related errors and offer correction
+                    # Check for path-related errors and offer correction via confirmation screen
                     if allow_path_correction and not self.non_interactive:
-                        corrected = await self._handle_path_correction(errors)
-                        if corrected:
-                            # Resubmit with corrected spec
+                        # Show confirmation screen with errors highlighted
+                        confirmed = await self._show_job_confirmation(errors=errors)
+                        if confirmed:
+                            # Generate new job ID and resubmit
+                            job_id = str(uuid.uuid4())[:8]
+                            self.current_job_id = job_id
+                            spec_json = self.job_spec.to_json()
+                            submit_msg = format_message(MSG_JOB_SUBMIT, f"{job_id}{MSG_SEPARATOR}{spec_json}")
+                            logging.info(f"Resubmitting job {job_id}")
+                            self.data_channel.send(submit_msg)
                             continue
+                        else:
+                            print("Job submission cancelled.")
+                    else:
+                        print(f"\nJob rejected by worker:")
+                        for err in errors:
+                            print(f"  - {err.get('field', 'unknown')}: {err.get('message', 'unknown error')}")
                 except json.JSONDecodeError:
                     logging.error(f"Job {rejected_job_id} rejected: {error_json}")
                     print(f"\nJob rejected: {error_json}")
@@ -2017,6 +2035,54 @@ class RTCClient:
 
             else:
                 logging.warning(f"Unknown job response: {response[:50]}...")
+
+    async def _show_job_confirmation(self, errors: list = None) -> bool:
+        """Show job confirmation screen before submission.
+
+        Displays all paths in the job spec and allows editing any of them
+        before submitting. If errors are provided, they are highlighted.
+
+        Args:
+            errors: Optional list of validation errors to display.
+
+        Returns:
+            True if user confirmed submission, False if cancelled.
+        """
+        from sleap_rtc.client.file_selector import JobSpecConfirmation
+        from sleap_rtc.client.directory_browser import DirectoryBrowser
+
+        async def browse_callback(field_name: str, current_path: str, file_filter: str) -> str:
+            """Callback to browse for a new path."""
+            import os
+
+            # Determine start path
+            start_path = os.path.dirname(current_path) if current_path else "/"
+            if not start_path or start_path == current_path:
+                start_path = "/"
+
+            # Build title
+            title = f"Select path for '{field_name}':"
+            if current_path:
+                title += f"\n  (current: {current_path})"
+
+            browser = DirectoryBrowser(
+                send_message=self.data_channel.send,
+                receive_response=self.fs_response_queue.get,
+                start_path=start_path,
+                file_filter=file_filter,
+                title=title,
+            )
+
+            return await browser.run()
+
+        confirmation = JobSpecConfirmation(
+            job_spec=self.job_spec,
+            browse_callback=browse_callback,
+            title="Confirm Job Paths" if not errors else "Job Rejected - Correct Paths",
+            errors=errors or [],
+        )
+
+        return await confirmation.run()
 
     async def _handle_path_correction(self, errors: list) -> bool:
         """Handle path correction for JOB_REJECTED errors.
