@@ -1,6 +1,7 @@
 """Unified CLI for sleap-RTC using rich-click."""
 
 import json
+import logging
 import os
 import sys
 import tomllib
