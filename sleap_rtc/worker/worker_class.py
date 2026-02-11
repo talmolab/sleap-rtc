@@ -234,7 +234,6 @@ class RTCWorkerClient:
         if self.progress_reporter:
             self.progress_reporter.cleanup()
 
-        logging.info("Cleaning up DynamoDB entries...")
         if self.peer_id_for_cleanup and self.state_manager:
             self.state_manager.request_peer_room_deletion(self.peer_id_for_cleanup)
             self.peer_id_for_cleanup = None
@@ -1481,7 +1480,7 @@ class RTCWorkerClient:
                                     "type": "error",
                                     "target": target_pid,
                                     "reason": "worker_busy",
-                                    "message": f"Worker is currently {self.status}. Please use --room-id and --token to discover available workers.",
+                                    "message": f"Worker is currently {self.status}. Please use --room to discover available workers.",
                                     "current_status": self.status,
                                 }
                             )
@@ -1574,28 +1573,11 @@ class RTCWorkerClient:
                     )
                     logging.info(f"  {session_string}")
                     logging.info("")
-                    logging.info(
-                        "Room credentials for OTHER workers/clients to join this room:"
-                    )
-                    logging.info(f"  Room ID: {room_id}")
-                    logging.info(f"  Token:   {token}")
+                    logging.info("Room ID for clients to connect:")
+                    logging.info(f"  {room_id}")
                     logging.info("")
-                    logging.info("Copy command for other workers to join:")
-                    logging.info(
-                        f"  sleap-rtc worker --room-id {room_id} --token {token}"
-                    )
-                    logging.info("")
-                    logging.info("OR Clients:")
-                    logging.info(
-                        f"  sleap-rtc client --room-id {room_id} --token {token}"
-                    )
-                    logging.info("")
-                    logging.info(
-                        "Use session string with --session-string for direct connection"
-                    )
-                    logging.info(
-                        "Use room credentials with --room-id and --token for worker discovery"
-                    )
+                    logging.info("Worker Peer ID:")
+                    logging.info(f"  {peer_id}")
                     logging.info("=" * 80)
 
                     # Initialize mesh networking (Phase 3)

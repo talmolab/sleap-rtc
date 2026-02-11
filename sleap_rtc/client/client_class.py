@@ -103,6 +103,7 @@ class RTCClient:
         self.target_worker = None
         self.reconnecting = False
         self.current_job_id = None  # For tracking active job submissions
+        self.verbosity = "default"  # Verbosity level: "default", "verbose", or "quiet"
 
         # Response queues for coordinating websocket messages
         # (Only handle_connection() calls recv(), other functions wait on these queues)
@@ -153,7 +154,7 @@ class RTCClient:
             "peer_id": peer_id,
         }
 
-        # Pass the Cognito usernmae (peer_id) to identify which room/peers to delete.
+        # Pass the peer_id to identify which room/peers to delete.
         response = requests.post(url, json=json)
 
         if response.status_code == 200:
@@ -256,7 +257,6 @@ class RTCClient:
         if self.websocket:
             await self.websocket.close()
 
-        logging.info("Cleaning up DynamoDB entries...")
         if self.cognito_username:
             self.request_peer_room_deletion(self.cognito_username)
             self.cognito_username = None
@@ -353,7 +353,7 @@ class RTCClient:
 
                 # Handle "trickle ICE" for non-local ICE candidates.
                 elif msg_type == "candidate":
-                    logging.info("Received ICE candidate")
+                    logging.debug("Received ICE candidate")
                     candidate = data.get("candidate")
                     await self.pc.addIceCandidate(candidate)
 
@@ -670,7 +670,7 @@ class RTCClient:
 
         elif action == "browse":
             print("\nTo browse the Worker's filesystem, run in a separate terminal:")
-            print(f"  sleap-rtc browse --room <room_id> --token <token>")
+            print("  sleap-rtc test browse --room <room_id>")
             print("\nCopy the path and use --worker-path to specify it directly.")
             return None
 
@@ -965,7 +965,11 @@ class RTCClient:
         """
         # Initiate keep-alive task.
         asyncio.create_task(self.keep_ice_alive())
-        logging.info(f"{self.data_channel.label} is open")
+        logging.debug(f"{self.data_channel.label} is open")
+
+        # Visual status: Connected
+        if self.verbosity != "quiet":
+            print("✓ Connected", flush=True)
 
         # Wait for P2P PSK authentication if configured
         if self._room_secret:
@@ -1134,9 +1138,9 @@ class RTCClient:
         Returns:
             None
         """
-        # Log the received message (truncate for readability).
+        # Log the received message in verbose mode only (truncate for readability).
         log_msg = message if len(str(message)) < 100 else f"{str(message)[:100]}..."
-        logging.info(f"Client received: {log_msg}")
+        logging.debug(f"Client received: {log_msg}")
 
         # Handle string and bytes messages differently.
         if isinstance(message, str):
@@ -1328,9 +1332,18 @@ class RTCClient:
                 _, error_info = message.split("TRAIN_JOB_ERROR::", 1)
                 logging.error(f"Training job encountered an error: {error_info}")
 
+            else:
+                # Unhandled string message - likely raw training/inference output
+                # Print directly to console for user visibility
+                if message.startswith("\r"):
+                    # Carriage return for progress bar updates
+                    print(message, end="", flush=True)
+                else:
+                    print(message, end="", flush=True)
+
         elif isinstance(message, bytes):
             if message == b"KEEP_ALIVE":
-                logging.info("Keep alive message received.")
+                logging.debug("Keep alive message received.")
                 return
 
             elif b"PROGRESS_REPORT::" in message:
@@ -1854,12 +1867,12 @@ class RTCClient:
             None
         """
         # Log the current ICE connection state.
-        logging.info(f"ICE connection state is now {self.pc.iceConnectionState}")
+        logging.debug(f"ICE connection state is now {self.pc.iceConnectionState}")
 
         # Check the ICE connection state and handle reconnection logic.
         if self.pc.iceConnectionState in ["connected", "completed"]:
             self.reconnect_attempts = 0
-            logging.info("ICE connection established.")
+            logging.debug("ICE connection established.")
             logging.info(f"reconnect attempts reset to {self.reconnect_attempts}")
 
         elif (
@@ -1965,8 +1978,18 @@ class RTCClient:
             if response.startswith(MSG_JOB_ACCEPTED):
                 parts = response.split(MSG_SEPARATOR, 2)
                 accepted_job_id = parts[1] if len(parts) > 1 else "unknown"
-                logging.info(f"Job {accepted_job_id} accepted by worker")
-                print(f"\nJob accepted by worker. Starting execution...")
+                logging.debug(f"Job {accepted_job_id} accepted by worker")
+
+                # Determine job type for display
+                job_type_name = self.job_spec.__class__.__name__ if self.job_spec else "Job"
+                is_training = "Train" in job_type_name
+                action = "Training" if is_training else "Inference"
+                worker_name = getattr(self, 'target_worker', None) or "worker"
+
+                # Visual structure: Job started section (green text)
+                print(f"\n{'─' * 60}")
+                print(f"\033[32mRunning {action} Remotely on {worker_name}...\033[0m")
+                print(f"{'─' * 60}\n", flush=True)
 
             elif response.startswith(MSG_JOB_REJECTED):
                 parts = response.split(MSG_SEPARATOR, 2)
@@ -2013,16 +2036,27 @@ class RTCClient:
                 parts = response.split(MSG_SEPARATOR, 2)
                 complete_job_id = parts[1] if len(parts) > 1 else "unknown"
                 result_json = parts[2] if len(parts) > 2 else "{}"
+
+                # Determine job type for display
+                job_type_name = self.job_spec.__class__.__name__ if self.job_spec else "Job"
+                is_training = "Train" in job_type_name
+                action = "Training" if is_training else "Inference"
+
                 try:
                     result_data = json.loads(result_json)
                     output_path = result_data.get("output_path", "")
-                    logging.info(f"Job {complete_job_id} completed successfully")
-                    print(f"\n\nJob completed successfully!")
+                    logging.debug(f"Job {complete_job_id} completed successfully")
+                    # Visual structure: Completion section (green text)
+                    print(f"\n{'─' * 60}")
+                    print(f"\033[32m✓ Remote {action} Completed Successfully!\033[0m")
                     if output_path:
-                        print(f"Output: {output_path}")
+                        print(f"  Output: {output_path}")
+                    print(f"{'─' * 60}")
                 except json.JSONDecodeError:
-                    logging.info(f"Job {complete_job_id} completed")
-                    print(f"\n\nJob completed!")
+                    logging.debug(f"Job {complete_job_id} completed")
+                    print(f"\n{'─' * 60}")
+                    print(f"\033[32m✓ Remote {action} Completed Successfully!\033[0m")
+                    print(f"{'─' * 60}")
                 break
 
             elif response.startswith(MSG_JOB_FAILED):
@@ -2030,7 +2064,16 @@ class RTCClient:
                 failed_job_id = parts[1] if len(parts) > 1 else "unknown"
                 error_msg = parts[2] if len(parts) > 2 else "Unknown error"
                 logging.error(f"Job {failed_job_id} failed: {error_msg}")
-                print(f"\n\nJob failed: {error_msg}")
+
+                # Determine job type for display
+                job_type_name = self.job_spec.__class__.__name__ if self.job_spec else "Job"
+                is_training = "Train" in job_type_name
+                action = "Training" if is_training else "Inference"
+
+                # Visual structure: Failure section (red text)
+                print(f"\n{'─' * 60}")
+                print(f"\033[31m✗ Remote {action} Failed: {error_msg}\033[0m")
+                print(f"{'─' * 60}")
                 break
 
             else:
@@ -2240,6 +2283,7 @@ class RTCClient:
         mount_label: str = None,
         room_secret: str = None,
         job_spec=None,
+        verbosity: str = "default",
     ):
         """Sends initial SDP offer to worker peer and establishes both connection & datachannel to be used by both parties.
 
@@ -2275,6 +2319,9 @@ class RTCClient:
             self.non_interactive = non_interactive
             self.mount_label = mount_label
             self.room_id = room_id
+
+            # Verbosity control
+            self.verbosity = verbosity
 
             # Structured job submission
             self.job_spec = job_spec
@@ -2367,12 +2414,16 @@ class RTCClient:
 
                     # BRANCH 2: Room-based discovery
                     elif room_id:
-                        logging.info(
+                        logging.debug(
                             f"Using room-based worker discovery: room_id={room_id}"
                         )
 
                         # Store room info for discovery
                         self.current_room_id = room_id
+
+                        # Visual status: Connecting to room
+                        if self.verbosity != "quiet":
+                            print(f"Connecting to room {room_id}...", flush=True)
 
                         # Register with room
                         await self._register_with_room(
@@ -2380,6 +2431,10 @@ class RTCClient:
                             token=token,
                             jwt_token=self._jwt_token,
                         )
+
+                        # Visual status: Discovering workers
+                        if self.verbosity != "quiet":
+                            print("Discovering workers...", flush=True)
 
                         # Discover workers in room
                         workers = await self._discover_workers_in_room(
@@ -2416,6 +2471,12 @@ class RTCClient:
                         logging.info("No target worker given. Cannot connect.")
                         return
 
+                    # Visual status: Connecting to worker
+                    if self.verbosity != "quiet":
+                        # Try to get worker name from discovery results if available
+                        worker_name = self.target_worker
+                        print(f"Connecting to worker {worker_name}...", flush=True)
+
                     # Create RTCPeerConnection with ICE servers (received during registration)
                     self.pc = self._create_peer_connection()
 
@@ -2451,7 +2512,6 @@ class RTCClient:
                     raise
 
             # Send POST req to server to delete this User, Worker, and associated Room.
-            logging.info("Cleaning up Cognito and DynamoDB entries...")
             self.request_peer_room_deletion(self.peer_id)
 
             # # Exit.

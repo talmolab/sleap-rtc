@@ -273,7 +273,6 @@ sleap-nn track \\
         if self.websocket:
             await self.websocket.close()
 
-        logging.info("Cleaning up Cognito and DynamoDB entries...")
         if self.cognito_username:
             self.request_peer_room_deletion(self.cognito_username)
             self.cognito_username = None
@@ -452,11 +451,11 @@ sleap-nn track \\
 
     async def on_iceconnectionstatechange(self):
         """Event handler function for when the ICE connection state changes."""
-        logging.info(f"ICE connection state is now {self.pc.iceConnectionState}")
+        logging.debug(f"ICE connection state is now {self.pc.iceConnectionState}")
 
         if self.pc.iceConnectionState in ["connected", "completed"]:
             self.reconnect_attempts = 0
-            logging.info("ICE connection established.")
+            logging.debug("ICE connection established.")
 
         elif (
             self.pc.iceConnectionState in ["failed", "disconnected", "closed"]
@@ -485,7 +484,7 @@ sleap-nn track \\
 
                 # Handle "trickle ICE" for non-local ICE candidates
                 elif data.get("type") == "candidate":
-                    logging.info("Received ICE candidate")
+                    logging.debug("Received ICE candidate")
                     candidate = data.get("candidate")
                     await self.pc.addIceCandidate(candidate)
 
@@ -645,7 +644,6 @@ sleap-nn track \\
                 await self.handle_connection()
 
             # Cleanup
-            logging.info("Cleaning up DynamoDB entries...")
             self.request_peer_room_deletion(self.peer_id)
 
         except Exception as e:
