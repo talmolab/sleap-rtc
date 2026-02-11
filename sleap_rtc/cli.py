@@ -1483,7 +1483,7 @@ def train(**kwargs):
         logging.getLogger().setLevel(logging.DEBUG)
     else:
         verbosity = "default"
-        # Default is INFO level, but we'll filter specific messages in the client
+        logging.getLogger().setLevel(logging.INFO)
 
     # Extract job specification options (new structured flow)
     # --config is multiple=True, so it's a tuple
@@ -1822,6 +1822,7 @@ def track(**kwargs):
         logging.getLogger().setLevel(logging.DEBUG)
     else:
         verbosity = "default"
+        logging.getLogger().setLevel(logging.INFO)
 
     # Extract job specification options
     data_path = kwargs.pop("data_path")
