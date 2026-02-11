@@ -1979,9 +1979,16 @@ class RTCClient:
                 parts = response.split(MSG_SEPARATOR, 2)
                 accepted_job_id = parts[1] if len(parts) > 1 else "unknown"
                 logging.debug(f"Job {accepted_job_id} accepted by worker")
-                # Visual structure: Training started section
+
+                # Determine job type for display
+                job_type_name = self.job_spec.__class__.__name__ if self.job_spec else "Job"
+                is_training = "Train" in job_type_name
+                action = "Training" if is_training else "Inference"
+                worker_name = getattr(self, 'target_worker', None) or "worker"
+
+                # Visual structure: Job started section (green text)
                 print(f"\n{'─' * 60}")
-                print(f"Training started")
+                print(f"\033[32mRunning {action} Remotely on {worker_name}...\033[0m")
                 print(f"{'─' * 60}\n", flush=True)
 
             elif response.startswith(MSG_JOB_REJECTED):
@@ -2029,20 +2036,26 @@ class RTCClient:
                 parts = response.split(MSG_SEPARATOR, 2)
                 complete_job_id = parts[1] if len(parts) > 1 else "unknown"
                 result_json = parts[2] if len(parts) > 2 else "{}"
+
+                # Determine job type for display
+                job_type_name = self.job_spec.__class__.__name__ if self.job_spec else "Job"
+                is_training = "Train" in job_type_name
+                action = "Training" if is_training else "Inference"
+
                 try:
                     result_data = json.loads(result_json)
                     output_path = result_data.get("output_path", "")
                     logging.debug(f"Job {complete_job_id} completed successfully")
-                    # Visual structure: Completion section
+                    # Visual structure: Completion section (green text)
                     print(f"\n{'─' * 60}")
-                    print(f"✓ Training completed successfully!")
+                    print(f"\033[32m✓ Remote {action} Completed Successfully!\033[0m")
                     if output_path:
                         print(f"  Output: {output_path}")
                     print(f"{'─' * 60}")
                 except json.JSONDecodeError:
                     logging.debug(f"Job {complete_job_id} completed")
                     print(f"\n{'─' * 60}")
-                    print(f"✓ Training completed!")
+                    print(f"\033[32m✓ Remote {action} Completed Successfully!\033[0m")
                     print(f"{'─' * 60}")
                 break
 
@@ -2051,9 +2064,15 @@ class RTCClient:
                 failed_job_id = parts[1] if len(parts) > 1 else "unknown"
                 error_msg = parts[2] if len(parts) > 2 else "Unknown error"
                 logging.error(f"Job {failed_job_id} failed: {error_msg}")
-                # Visual structure: Failure section
+
+                # Determine job type for display
+                job_type_name = self.job_spec.__class__.__name__ if self.job_spec else "Job"
+                is_training = "Train" in job_type_name
+                action = "Training" if is_training else "Inference"
+
+                # Visual structure: Failure section (red text)
                 print(f"\n{'─' * 60}")
-                print(f"✗ Training failed: {error_msg}")
+                print(f"\033[31m✗ Remote {action} Failed: {error_msg}\033[0m")
                 print(f"{'─' * 60}")
                 break
 
