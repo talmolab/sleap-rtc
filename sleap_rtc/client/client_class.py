@@ -1332,6 +1332,15 @@ class RTCClient:
                 _, error_info = message.split("TRAIN_JOB_ERROR::", 1)
                 logging.error(f"Training job encountered an error: {error_info}")
 
+            else:
+                # Unhandled string message - likely raw training/inference output
+                # Print directly to console for user visibility
+                if message.startswith("\r"):
+                    # Carriage return for progress bar updates
+                    print(message, end="", flush=True)
+                else:
+                    print(message, end="", flush=True)
+
         elif isinstance(message, bytes):
             if message == b"KEEP_ALIVE":
                 logging.debug("Keep alive message received.")
