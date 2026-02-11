@@ -3,6 +3,7 @@
 import json
 import os
 import sys
+import tomllib
 from datetime import datetime
 from pathlib import Path
 
@@ -49,7 +50,7 @@ click.rich_click.COMMAND_GROUPS = {
         },
         {
             "name": "Utilities",
-            "commands": ["tui", "status", "doctor"],
+            "commands": ["tui", "status", "doctor", "credentials", "config"],
         },
         {
             "name": "Experimental",
@@ -796,9 +797,8 @@ def room_create(name, expires):
         click.echo("")
         click.echo("Room created successfully!")
         click.echo("")
-        click.echo(f"  Room ID:    {data['room_id']}")
-        click.echo(f"  Room Token: {data['room_token']}")
-        click.echo(f"  Expires:    {expires_str}")
+        click.echo(f"  Room ID:  {data['room_id']}")
+        click.echo(f"  Expires:  {expires_str}")
         click.echo("")
         click.echo("Next steps:")
         click.echo(f"  1. Create a worker token: sleap-rtc token create --room {data['room_id']} --name my-worker")
@@ -871,10 +871,6 @@ def room_info(room_id):
         click.echo(f"  Room ID:    {room_id}")
         click.echo(f"  Your Role:  {data.get('role', 'unknown')}")
         click.echo(f"  Expires:    {expires_str}")
-
-        # Show token only for owners
-        if data.get("token"):
-            click.echo(f"  Room Token: {data['token']}")
 
         # Show members if available
         members = data.get("members", [])
@@ -1039,7 +1035,7 @@ def room_create_secret(room, save):
 
         # Use the secret with client (env var method)
         export SLEAP_ROOM_SECRET=SECRET
-        sleap-rtc client-train --room my-room --token TOKEN -p package.zip
+        sleap-rtc train --room my-room --config /path/to/config.yaml
     """
     from sleap_rtc.auth.psk import generate_secret
     from sleap_rtc.auth.credentials import save_room_secret, get_room_secret
@@ -1073,7 +1069,7 @@ def room_create_secret(room, save):
     click.echo("    # Or set SLEAP_ROOM_SECRET environment variable")
     click.echo("")
     click.echo("  Client:")
-    click.echo(f"    sleap-rtc client-train --room {room} --token TOKEN -p pkg.zip --room-secret {secret}")
+    click.echo(f"    sleap-rtc train --room {room} --config /path/to/config.yaml --room-secret {secret}")
     click.echo("    # Or set SLEAP_ROOM_SECRET environment variable")
     click.echo("")
 
@@ -1166,13 +1162,6 @@ def show_worker_help():
     help="[Legacy] Room ID to join (if not provided, a new room will be created).",
 )
 @click.option(
-    "--token",
-    "-t",
-    type=str,
-    required=False,
-    help="[Legacy] Room token for authentication (required if --room is provided).",
-)
-@click.option(
     "--working-dir",
     "-w",
     type=str,
@@ -1187,26 +1176,30 @@ def show_worker_help():
     help="Human-readable name for this worker (e.g. 'lab-gpu-1'). Shown in TUI and client discovery.",
 )
 @click.option(
+    "--verbose",
+    "-v",
+    is_flag=True,
+    default=False,
+    help="Show detailed logs including ICE state, keep-alive, and file transfers.",
+)
+@click.option(
     "--room-secret",
     type=str,
     envvar="SLEAP_ROOM_SECRET",
     required=False,
     help="Room secret for P2P authentication. Can also use SLEAP_ROOM_SECRET env var.",
 )
-def worker(api_key, room, token, working_dir, name, room_secret):
+def worker(api_key, room, working_dir, name, verbose, room_secret):
     """Start the sleap-RTC worker node.
 
-    Authentication modes (choose one):
+    Authentication:
 
-    1. API Key (recommended):
+    API Key (recommended):
        sleap-rtc worker --api-key slp_xxx...
 
        Get an API key from: sleap-rtc token create --room ROOM --name NAME
 
-    2. Legacy room credentials:
-       sleap-rtc worker --room ROOM --token TOKEN
-
-       Or omit both to create a new anonymous room (deprecated).
+    Or use --room with JWT authentication (requires login).
     """
     # Check for credential file if no explicit auth provided
     if not api_key and not room:
@@ -1222,18 +1215,16 @@ def worker(api_key, room, token, working_dir, name, room_secret):
 
     # Validate authentication options
     has_api_key = api_key is not None
-    has_legacy = room is not None or token is not None
+    has_room = room is not None
 
-    if has_api_key and has_legacy:
-        logger.error("Cannot use both --api-key and --room/--token")
+    if has_api_key and has_room:
+        logger.error("Cannot use both --api-key and --room")
         logger.error("Choose one authentication method")
         sys.exit(1)
 
-    if has_legacy:
-        # Legacy mode validation
-        if (room and not token) or (token and not room):
-            logger.error("Both --room and --token must be provided together")
-            sys.exit(1)
+    # Configure logging based on verbosity
+    if verbose:
+        logging.getLogger().setLevel(logging.DEBUG)
 
     # Validate working directory if provided
     if working_dir:
@@ -1249,7 +1240,7 @@ def worker(api_key, room, token, working_dir, name, room_secret):
     run_RTCworker(
         api_key=api_key,
         room_id=room,
-        token=token,
+        token=None,
         working_dir=working_dir,
         name=name,
         room_secret=room_secret,
@@ -1272,13 +1263,6 @@ def worker(api_key, room, token, working_dir, name, room_secret):
     type=str,
     required=False,
     help="Room ID for room-based worker discovery. Requires login (sleap-rtc login).",
-)
-@click.option(
-    "--token",
-    "-t",
-    type=str,
-    required=False,
-    help="Room token (optional with JWT auth, for backward compatibility).",
 )
 @click.option(
     "--worker-id",
@@ -1396,6 +1380,20 @@ def worker(api_key, room, token, working_dir, name, room_secret):
     help="Mount label to search (skips mount selection prompt). Use 'all' to search all mounts.",
 )
 @click.option(
+    "--verbose",
+    "-v",
+    is_flag=True,
+    default=False,
+    help="Show detailed logs including keep-alive, ICE state, and file transfers.",
+)
+@click.option(
+    "--quiet",
+    "-q",
+    is_flag=True,
+    default=False,
+    help="Show only errors and final status (hide progress bars and status messages).",
+)
+@click.option(
     "--room-secret",
     type=str,
     envvar="SLEAP_ROOM_SECRET",
@@ -1465,6 +1463,26 @@ def train(**kwargs):
 
     # Extract P2P authentication options
     room_secret = kwargs.pop("room_secret", None)
+
+    # Extract verbosity options
+    verbose = kwargs.pop("verbose", False)
+    quiet = kwargs.pop("quiet", False)
+
+    # Validate: --verbose and --quiet are mutually exclusive
+    if verbose and quiet:
+        logger.error("--verbose and --quiet are mutually exclusive.")
+        sys.exit(1)
+
+    # Configure logging based on verbosity
+    if quiet:
+        verbosity = "quiet"
+        logging.getLogger().setLevel(logging.ERROR)
+    elif verbose:
+        verbosity = "verbose"
+        logging.getLogger().setLevel(logging.DEBUG)
+    else:
+        verbosity = "default"
+        # Default is INFO level, but we'll filter specific messages in the client
 
     # Extract job specification options (new structured flow)
     # --config is multiple=True, so it's a tuple
@@ -1594,6 +1612,7 @@ def train(**kwargs):
             min_gpu_memory=min_gpu_memory,
             room_secret=room_secret,
             jwt_token=jwt_token,
+            verbosity=verbosity,
         )
     else:
         # Legacy pkg-path flow
@@ -1612,6 +1631,7 @@ def train(**kwargs):
             auto_select=auto_select,
             min_gpu_memory=min_gpu_memory,
             jwt_token=jwt_token,
+            verbosity=verbosity,
         )
 
 
@@ -1631,13 +1651,6 @@ def train(**kwargs):
     type=str,
     required=False,
     help="Room ID for room-based worker discovery. Requires login (sleap-rtc login).",
-)
-@click.option(
-    "--token",
-    "-t",
-    type=str,
-    required=False,
-    help="Room token (optional with JWT auth, for backward compatibility).",
 )
 @click.option(
     "--worker-id",
@@ -1709,6 +1722,20 @@ def train(**kwargs):
     help="Minimum GPU memory in MB required for inference.",
 )
 @click.option(
+    "--verbose",
+    "-v",
+    is_flag=True,
+    default=False,
+    help="Show detailed logs including keep-alive, ICE state, and file transfers.",
+)
+@click.option(
+    "--quiet",
+    "-q",
+    is_flag=True,
+    default=False,
+    help="Show only errors and final status (hide progress bars and status messages).",
+)
+@click.option(
     "--room-secret",
     type=str,
     envvar="SLEAP_ROOM_SECRET",
@@ -1776,6 +1803,25 @@ def track(**kwargs):
     # Extract P2P authentication options
     room_secret = kwargs.pop("room_secret", None)
 
+    # Extract verbosity options
+    verbose = kwargs.pop("verbose", False)
+    quiet = kwargs.pop("quiet", False)
+
+    # Validate: --verbose and --quiet are mutually exclusive
+    if verbose and quiet:
+        logger.error("--verbose and --quiet are mutually exclusive.")
+        sys.exit(1)
+
+    # Configure logging based on verbosity
+    if quiet:
+        verbosity = "quiet"
+        logging.getLogger().setLevel(logging.ERROR)
+    elif verbose:
+        verbosity = "verbose"
+        logging.getLogger().setLevel(logging.DEBUG)
+    else:
+        verbosity = "default"
+
     # Extract job specification options
     data_path = kwargs.pop("data_path")
     model_paths = list(kwargs.pop("model_paths"))
@@ -1840,6 +1886,7 @@ def track(**kwargs):
         min_gpu_memory=min_gpu_memory,
         room_secret=room_secret,
         jwt_token=jwt_token,
+        verbosity=verbosity,
     )
 
 
@@ -1851,7 +1898,6 @@ def track(**kwargs):
 @cli.command(name="client-train", hidden=True)
 @click.option("--session-string", "--session_string", "-s", type=str, required=False)
 @click.option("--room", "--room-id", "-r", type=str, required=False)
-@click.option("--token", "-t", type=str, required=False)
 @click.option("--worker-id", "-w", type=str, required=False)
 @click.option("--auto-select", "-a", is_flag=True, default=False)
 @click.option("--pkg-path", "--pkg_path", "-p", type=str, required=True, help="Path resolved on worker")
@@ -1875,7 +1921,6 @@ def client_train_deprecated(ctx, **kwargs):
 @cli.command(name="client", hidden=True)
 @click.option("--session-string", "--session_string", "-s", type=str, required=False)
 @click.option("--room", "--room-id", "-r", type=str, required=False)
-@click.option("--token", "-t", type=str, required=False)
 @click.option("--worker-id", "-w", type=str, required=False)
 @click.option("--auto-select", "-a", is_flag=True, default=False)
 @click.option("--pkg-path", "--pkg_path", "-p", type=str, required=True, help="Path resolved on worker")
@@ -1899,7 +1944,6 @@ def client_deprecated(ctx, **kwargs):
 @cli.command(name="client-track", hidden=True)
 @click.option("--session-string", "--session_string", "-s", type=str, required=False)
 @click.option("--room", "--room-id", "-r", type=str, required=False)
-@click.option("--token", "-t", type=str, required=False)
 @click.option("--worker-id", "-w", type=str, required=False)
 @click.option("--auto-select", "-a", is_flag=True, default=False)
 @click.option("--data-path", "--data_path", "-d", type=str, required=True, help="Local path, transferred to worker")
@@ -1947,13 +1991,6 @@ def test():
     help="Room ID to connect to (required).",
 )
 @click.option(
-    "--token",
-    "-t",
-    type=str,
-    required=False,
-    help="Room token (optional with JWT auth, for backward compatibility).",
-)
-@click.option(
     "--port",
     "-p",
     type=int,
@@ -1973,7 +2010,7 @@ def test():
     required=False,
     help="Room secret for P2P authentication. Can also use SLEAP_ROOM_SECRET env var.",
 )
-def test_browse(room, token, port, no_browser, room_secret):
+def test_browse(room, port, no_browser, room_secret):
     """Browse a Worker's filesystem via web UI.
 
     [bold yellow]EXPERIMENTAL[/bold yellow]: This feature is under development.
@@ -2012,7 +2049,7 @@ def test_browse(room, token, port, no_browser, room_secret):
         asyncio.run(
             run_browse_client(
                 room_id=room,
-                token=token or "",
+                token="",
                 port=port,
                 open_browser=not no_browser,
                 room_secret=room_secret,
@@ -2033,13 +2070,6 @@ def test_browse(room, token, port, no_browser, room_secret):
     type=str,
     required=True,
     help="Room ID to connect to (required).",
-)
-@click.option(
-    "--token",
-    "-t",
-    type=str,
-    required=False,
-    help="Room token (optional with JWT auth, for backward compatibility).",
 )
 @click.option(
     "--slp",
@@ -2073,7 +2103,7 @@ def test_browse(room, token, port, no_browser, room_secret):
     default=True,
     help="Use JWT authentication (default: yes). Disable for testing.",
 )
-def test_resolve_paths(room, token, slp, port, no_browser, room_secret, use_jwt):
+def test_resolve_paths(room, slp, port, no_browser, room_secret, use_jwt):
     """Resolve missing video paths in an SLP file on a Worker.
 
     [bold yellow]EXPERIMENTAL[/bold yellow]: This feature is under development.
@@ -2118,7 +2148,7 @@ def test_resolve_paths(room, token, slp, port, no_browser, room_secret, use_jwt)
         result = asyncio.run(
             run_resolve_client(
                 room_id=room,
-                token=token or "",
+                token="",
                 slp_path=slp,
                 port=port,
                 open_browser=not no_browser,
@@ -2404,13 +2434,743 @@ def doctor():
 
 
 # =============================================================================
+# Credentials Command Group
+# =============================================================================
+
+
+@cli.group()
+def credentials():
+    """Manage local credentials and secrets.
+
+    View, inspect, and remove locally stored authentication credentials,
+    room secrets, and API tokens.
+
+    Unlike 'sleap-rtc token' commands (which manage server-side tokens),
+    these commands manage credentials stored in ~/.sleap-rtc/credentials.json.
+    """
+    pass
+
+
+@credentials.command(name="list")
+def credentials_list():
+    """List stored credentials summary.
+
+    Shows a summary of locally stored credentials:
+    - Logged-in user (if any)
+    - Room secrets (redacted)
+    - API tokens (redacted)
+
+    Use 'sleap-rtc credentials show --reveal' to see full values.
+
+    Example:
+        sleap-rtc credentials list
+    """
+    from sleap_rtc.auth.credentials import (
+        get_credentials,
+        get_user,
+        is_logged_in,
+        CREDENTIALS_PATH,
+    )
+
+    creds = get_credentials()
+
+    click.echo("")
+    click.echo(click.style("Stored Credentials", bold=True))
+    click.echo("=" * 50)
+
+    # Login status
+    click.echo("")
+    click.echo(click.style("User:", bold=True))
+    if is_logged_in():
+        user = get_user()
+        click.echo(f"  Username: {user.get('username', 'unknown')}")
+        click.echo(f"  User ID:  {user.get('user_id', user.get('id', 'unknown'))}")
+    else:
+        click.echo("  Not logged in")
+
+    # Room secrets
+    room_secrets = creds.get("room_secrets", {})
+    click.echo("")
+    click.echo(click.style("Room Secrets:", bold=True))
+    if room_secrets:
+        for room_id in room_secrets:
+            click.echo(f"  {room_id}: ****")
+    else:
+        click.echo("  (none)")
+
+    # API tokens
+    tokens = creds.get("tokens", {})
+    click.echo("")
+    click.echo(click.style("API Tokens:", bold=True))
+    if tokens:
+        for room_id, token_info in tokens.items():
+            name = token_info.get("worker_name", "unknown")
+            click.echo(f"  {room_id}: {name} (****)")
+    else:
+        click.echo("  (none)")
+
+    click.echo("")
+    click.echo(f"Credentials file: {CREDENTIALS_PATH}")
+    click.echo("")
+
+
+@credentials.command(name="show")
+@click.option(
+    "--reveal",
+    is_flag=True,
+    default=False,
+    help="Show full secret values (use with caution).",
+)
+def credentials_show(reveal):
+    """Show detailed credentials.
+
+    By default, secret values are redacted. Use --reveal to show
+    the full values (be careful when screen-sharing!).
+
+    Examples:
+        sleap-rtc credentials show
+        sleap-rtc credentials show --reveal
+    """
+    from sleap_rtc.auth.credentials import (
+        get_credentials,
+        get_jwt,
+        get_user,
+        is_logged_in,
+        CREDENTIALS_PATH,
+    )
+
+    creds = get_credentials()
+
+    click.echo("")
+    click.echo(click.style("Stored Credentials (Detailed)", bold=True))
+    click.echo("=" * 50)
+
+    # Login status and JWT
+    click.echo("")
+    click.echo(click.style("User & JWT:", bold=True))
+    if is_logged_in():
+        user = get_user()
+        click.echo(f"  Username: {user.get('username', 'unknown')}")
+        click.echo(f"  User ID:  {user.get('user_id', user.get('id', 'unknown'))}")
+
+        jwt_token = get_jwt()
+        if jwt_token:
+            if reveal:
+                click.echo(f"  JWT:      {jwt_token}")
+            else:
+                # Show first and last few chars
+                masked = jwt_token[:20] + "..." + jwt_token[-10:] if len(jwt_token) > 30 else "****"
+                click.echo(f"  JWT:      {masked}")
+
+            # Show JWT expiry
+            try:
+                import jwt
+                claims = jwt.decode(jwt_token, options={"verify_signature": False})
+                exp = claims.get("exp")
+                if exp:
+                    exp_dt = datetime.fromtimestamp(exp)
+                    now = datetime.now()
+                    if exp_dt > now:
+                        remaining = exp_dt - now
+                        hours = remaining.total_seconds() / 3600
+                        click.echo(f"  Expires:  {exp_dt.strftime('%Y-%m-%d %H:%M')} ({hours:.1f}h remaining)")
+                    else:
+                        click.echo(f"  Expires:  {click.style('EXPIRED', fg='red')}")
+            except Exception:
+                pass
+    else:
+        click.echo("  Not logged in")
+
+    # Room secrets
+    room_secrets = creds.get("room_secrets", {})
+    click.echo("")
+    click.echo(click.style("Room Secrets:", bold=True))
+    if room_secrets:
+        for room_id, secret in room_secrets.items():
+            if reveal:
+                click.echo(f"  {room_id}: {secret}")
+            else:
+                masked = secret[:4] + "..." + secret[-4:] if len(secret) > 8 else "****"
+                click.echo(f"  {room_id}: {masked}")
+    else:
+        click.echo("  (none)")
+
+    # API tokens
+    tokens = creds.get("tokens", {})
+    click.echo("")
+    click.echo(click.style("API Tokens:", bold=True))
+    if tokens:
+        for room_id, token_info in tokens.items():
+            name = token_info.get("worker_name", "unknown")
+            api_key = token_info.get("api_key", "")
+            if reveal:
+                click.echo(f"  {room_id}:")
+                click.echo(f"    Worker: {name}")
+                click.echo(f"    API Key: {api_key}")
+            else:
+                masked_key = api_key[:8] + "..." if len(api_key) > 8 else "****"
+                click.echo(f"  {room_id}: {name} ({masked_key})")
+    else:
+        click.echo("  (none)")
+
+    click.echo("")
+    click.echo(f"Credentials file: {CREDENTIALS_PATH}")
+    if not reveal:
+        click.echo("")
+        click.echo("Use --reveal to show full secret values")
+    click.echo("")
+
+
+@credentials.command(name="clear")
+@click.option(
+    "--yes",
+    "-y",
+    is_flag=True,
+    default=False,
+    help="Skip confirmation prompt.",
+)
+def credentials_clear(yes):
+    """Clear all stored credentials.
+
+    Removes the entire credentials file, including:
+    - JWT and user info (logs you out)
+    - All room secrets
+    - All API tokens
+
+    This is equivalent to 'sleap-rtc logout' but also removes
+    room secrets and API tokens.
+
+    Examples:
+        sleap-rtc credentials clear
+        sleap-rtc credentials clear --yes
+    """
+    from sleap_rtc.auth.credentials import (
+        clear_credentials,
+        get_credentials,
+        CREDENTIALS_PATH,
+    )
+
+    if not CREDENTIALS_PATH.exists():
+        click.echo("No credentials file found")
+        return
+
+    # Show what will be deleted
+    creds = get_credentials()
+    room_secrets = creds.get("room_secrets", {})
+    tokens = creds.get("tokens", {})
+
+    click.echo("")
+    click.echo("This will remove:")
+    click.echo(f"  - JWT and user info")
+    click.echo(f"  - {len(room_secrets)} room secret(s)")
+    click.echo(f"  - {len(tokens)} API token(s)")
+    click.echo("")
+
+    if not yes:
+        if not click.confirm("Are you sure you want to clear all credentials?"):
+            click.echo("Cancelled")
+            return
+
+    clear_credentials()
+    click.echo("All credentials cleared")
+
+
+@credentials.command(name="remove-secret")
+@click.option(
+    "--room",
+    "-r",
+    required=True,
+    help="Room ID to remove secret for.",
+)
+@click.option(
+    "--yes",
+    "-y",
+    is_flag=True,
+    default=False,
+    help="Skip confirmation prompt.",
+)
+def credentials_remove_secret(room, yes):
+    """Remove a stored room secret.
+
+    Removes the P2P authentication secret for a specific room.
+    This does not affect the room itself, only the local credential.
+
+    Example:
+        sleap-rtc credentials remove-secret --room my-room
+    """
+    from sleap_rtc.auth.credentials import remove_room_secret, get_room_secret
+
+    # Check if secret exists
+    if not get_room_secret(room):
+        click.echo(f"No secret found for room: {room}")
+        return
+
+    if not yes:
+        if not click.confirm(f"Remove secret for room '{room}'?"):
+            click.echo("Cancelled")
+            return
+
+    if remove_room_secret(room):
+        click.echo(f"Removed secret for room: {room}")
+    else:
+        click.echo(f"Failed to remove secret for room: {room}")
+
+
+@credentials.command(name="remove-token")
+@click.option(
+    "--room",
+    "-r",
+    required=True,
+    help="Room ID to remove token for.",
+)
+@click.option(
+    "--yes",
+    "-y",
+    is_flag=True,
+    default=False,
+    help="Skip confirmation prompt.",
+)
+def credentials_remove_token(room, yes):
+    """Remove a stored API token.
+
+    Removes the locally stored API token for a specific room.
+    This does NOT revoke the token on the server - use
+    'sleap-rtc token revoke' for that.
+
+    Example:
+        sleap-rtc credentials remove-token --room my-room
+    """
+    from sleap_rtc.auth.credentials import remove_token, get_credentials
+
+    # Check if token exists
+    creds = get_credentials()
+    tokens = creds.get("tokens", {})
+    if room not in tokens:
+        click.echo(f"No token found for room: {room}")
+        return
+
+    token_info = tokens[room]
+    name = token_info.get("worker_name", "unknown")
+
+    if not yes:
+        click.echo(f"Token: {name}")
+        click.echo("")
+        click.echo(click.style("Note:", fg="yellow") + " This only removes the local copy.")
+        click.echo("To revoke the token on the server, use: sleap-rtc token revoke")
+        click.echo("")
+        if not click.confirm(f"Remove local token for room '{room}'?"):
+            click.echo("Cancelled")
+            return
+
+    if remove_token(room):
+        click.echo(f"Removed token for room: {room}")
+    else:
+        click.echo(f"Failed to remove token for room: {room}")
+
+
+# =============================================================================
+# Config Command Group
+# =============================================================================
+
+
+@cli.group(name="config")
+def config_group():
+    """Manage SLEAP-RTC configuration.
+
+    View and modify configuration settings including signaling server URLs
+    and filesystem mount points for workers.
+
+    Configuration is loaded from (in priority order):
+    1. Environment variables (SLEAP_RTC_SIGNALING_WS, SLEAP_RTC_SIGNALING_HTTP)
+    2. ./sleap-rtc.toml (current working directory)
+    3. ~/.sleap-rtc/config.toml (home directory)
+    4. Default values
+    """
+    pass
+
+
+@config_group.command(name="show")
+@click.option(
+    "--json",
+    "as_json",
+    is_flag=True,
+    default=False,
+    help="Output as JSON for machine parsing.",
+)
+def config_show(as_json):
+    """Show current configuration.
+
+    Displays the merged configuration from all sources, including:
+    - Signaling server URLs
+    - Environment settings
+    - Worker I/O configuration (mounts, working directory)
+
+    Examples:
+        sleap-rtc config show
+        sleap-rtc config show --json
+    """
+    from sleap_rtc.config import get_config, reload_config
+
+    # Force reload to get fresh config
+    config = reload_config()
+
+    if as_json:
+        # JSON output
+        config_dict = {
+            "environment": config.environment,
+            "signaling_websocket": config.signaling_websocket,
+            "signaling_http": config.signaling_http,
+            "worker_io": {
+                "mounts": [
+                    {"path": m.path, "label": m.label}
+                    for m in config.get_worker_io_config().mounts
+                ],
+                "working_dir": config.get_worker_io_config().working_dir,
+            },
+            "sources": {
+                "config_file": str(config._find_config_file()) if config._find_config_file() else None,
+                "env_vars": {
+                    "SLEAP_RTC_ENV": os.environ.get("SLEAP_RTC_ENV"),
+                    "SLEAP_RTC_SIGNALING_WS": os.environ.get("SLEAP_RTC_SIGNALING_WS"),
+                    "SLEAP_RTC_SIGNALING_HTTP": os.environ.get("SLEAP_RTC_SIGNALING_HTTP"),
+                },
+            },
+        }
+        click.echo(json.dumps(config_dict, indent=2))
+        return
+
+    # Human-readable output
+    click.echo("")
+    click.echo(click.style("SLEAP-RTC Configuration", bold=True))
+    click.echo("=" * 50)
+
+    # Environment
+    click.echo("")
+    click.echo(click.style("Environment:", bold=True))
+    click.echo(f"  SLEAP_RTC_ENV: {config.environment}")
+
+    # Signaling server
+    click.echo("")
+    click.echo(click.style("Signaling Server:", bold=True))
+    click.echo(f"  WebSocket: {config.signaling_websocket}")
+    click.echo(f"  HTTP:      {config.signaling_http}")
+
+    # Check for env var overrides
+    ws_env = os.environ.get("SLEAP_RTC_SIGNALING_WS")
+    http_env = os.environ.get("SLEAP_RTC_SIGNALING_HTTP")
+    if ws_env or http_env:
+        click.echo("")
+        click.echo(click.style("  (overridden by environment variables)", fg="yellow"))
+
+    # Worker I/O config
+    io_config = config.get_worker_io_config()
+    click.echo("")
+    click.echo(click.style("Worker I/O:", bold=True))
+
+    if io_config.working_dir:
+        click.echo(f"  Working directory: {io_config.working_dir}")
+    else:
+        click.echo("  Working directory: (not set)")
+
+    click.echo("")
+    click.echo("  Mounts:")
+    if io_config.mounts:
+        for mount in io_config.mounts:
+            valid = mount.validate()
+            status = click.style("✓", fg="green") if valid else click.style("✗", fg="red")
+            click.echo(f"    {status} {mount.label}: {mount.path}")
+    else:
+        click.echo("    (none configured)")
+
+    # Source info
+    config_file = config._find_config_file()
+    click.echo("")
+    click.echo(click.style("Source:", bold=True))
+    if config_file:
+        click.echo(f"  Config file: {config_file}")
+    else:
+        click.echo("  Config file: (using defaults)")
+
+    click.echo("")
+
+
+@config_group.command(name="path")
+def config_path():
+    """Show configuration file locations.
+
+    Displays the paths where configuration files are searched for
+    and indicates which ones exist.
+
+    Configuration files are loaded in priority order:
+    1. ./sleap-rtc.toml (current working directory)
+    2. ~/.sleap-rtc/config.toml (home directory)
+
+    Example:
+        sleap-rtc config path
+    """
+    cwd_config = Path.cwd() / "sleap-rtc.toml"
+    home_config = Path.home() / ".sleap-rtc" / "config.toml"
+
+    click.echo("")
+    click.echo(click.style("Configuration File Locations", bold=True))
+    click.echo("=" * 50)
+    click.echo("")
+
+    # CWD config
+    click.echo(click.style("Current directory:", bold=True))
+    click.echo(f"  Path: {cwd_config}")
+    if cwd_config.exists():
+        click.echo(f"  Status: {click.style('exists', fg='green')} (will be used)")
+    else:
+        click.echo(f"  Status: {click.style('not found', fg='yellow')}")
+
+    click.echo("")
+
+    # Home config
+    click.echo(click.style("Home directory:", bold=True))
+    click.echo(f"  Path: {home_config}")
+    if home_config.exists():
+        if cwd_config.exists():
+            click.echo(f"  Status: {click.style('exists', fg='green')} (shadowed by CWD config)")
+        else:
+            click.echo(f"  Status: {click.style('exists', fg='green')} (will be used)")
+    else:
+        click.echo(f"  Status: {click.style('not found', fg='yellow')}")
+
+    click.echo("")
+    click.echo(click.style("To create a config file:", bold=True))
+    click.echo("  sleap-rtc config init")
+    click.echo("  sleap-rtc config init --global")
+    click.echo("")
+
+
+@config_group.command(name="add-mount")
+@click.argument("path", type=str)
+@click.argument("label", type=str)
+@click.option(
+    "--global",
+    "use_global",
+    is_flag=True,
+    default=False,
+    help="Add to ~/.sleap-rtc/config.toml instead of ./sleap-rtc.toml",
+)
+def config_add_mount(path, label, use_global):
+    """Add a filesystem mount point.
+
+    Adds a mount point to the configuration file for Worker filesystem
+    browsing. Workers use mounts to expose specific directories to clients.
+
+    PATH is the absolute path to the directory.
+    LABEL is a human-readable name for the mount.
+
+    Examples:
+        sleap-rtc config add-mount /vast/data "Data Storage"
+        sleap-rtc config add-mount /mnt/nfs "NFS Share" --global
+    """
+    import tomli_w
+
+    # Determine which config file to modify
+    if use_global:
+        config_file = Path.home() / ".sleap-rtc" / "config.toml"
+    else:
+        config_file = Path.cwd() / "sleap-rtc.toml"
+
+    # Load existing config or create empty
+    if config_file.exists():
+        with open(config_file, "rb") as f:
+            config_data = tomllib.load(f)
+    else:
+        config_data = {}
+
+    # Ensure worker.io.mounts structure exists
+    if "worker" not in config_data:
+        config_data["worker"] = {}
+    if "io" not in config_data["worker"]:
+        config_data["worker"]["io"] = {}
+    if "mounts" not in config_data["worker"]["io"]:
+        config_data["worker"]["io"]["mounts"] = []
+
+    # Check if label already exists
+    for mount in config_data["worker"]["io"]["mounts"]:
+        if mount.get("label") == label:
+            click.echo(f"Mount with label '{label}' already exists")
+            click.echo(f"  Current path: {mount.get('path')}")
+            if not click.confirm("Replace it?"):
+                click.echo("Cancelled")
+                return
+            mount["path"] = path
+            break
+    else:
+        # Add new mount
+        config_data["worker"]["io"]["mounts"].append({
+            "path": path,
+            "label": label,
+        })
+
+    # Ensure directory exists
+    config_file.parent.mkdir(parents=True, exist_ok=True)
+
+    # Write config file
+    with open(config_file, "wb") as f:
+        tomli_w.dump(config_data, f)
+
+    click.echo(f"Added mount: {label} -> {path}")
+    click.echo(f"Config file: {config_file}")
+
+
+@config_group.command(name="remove-mount")
+@click.argument("label", type=str)
+@click.option(
+    "--global",
+    "use_global",
+    is_flag=True,
+    default=False,
+    help="Remove from ~/.sleap-rtc/config.toml instead of ./sleap-rtc.toml",
+)
+@click.option(
+    "--yes",
+    "-y",
+    is_flag=True,
+    default=False,
+    help="Skip confirmation prompt.",
+)
+def config_remove_mount(label, use_global, yes):
+    """Remove a filesystem mount point.
+
+    Removes a mount point from the configuration file by its label.
+
+    Examples:
+        sleap-rtc config remove-mount "Data Storage"
+        sleap-rtc config remove-mount "NFS Share" --global
+    """
+    import tomli_w
+
+    # Determine which config file to modify
+    if use_global:
+        config_file = Path.home() / ".sleap-rtc" / "config.toml"
+    else:
+        config_file = Path.cwd() / "sleap-rtc.toml"
+
+    if not config_file.exists():
+        click.echo(f"Config file not found: {config_file}")
+        return
+
+    # Load config
+    with open(config_file, "rb") as f:
+        config_data = tomllib.load(f)
+
+    # Find and remove mount
+    mounts = config_data.get("worker", {}).get("io", {}).get("mounts", [])
+    original_count = len(mounts)
+
+    mount_to_remove = None
+    for mount in mounts:
+        if mount.get("label") == label:
+            mount_to_remove = mount
+            break
+
+    if not mount_to_remove:
+        click.echo(f"Mount with label '{label}' not found")
+        return
+
+    if not yes:
+        click.echo(f"Mount: {label}")
+        click.echo(f"  Path: {mount_to_remove.get('path')}")
+        if not click.confirm("Remove this mount?"):
+            click.echo("Cancelled")
+            return
+
+    mounts.remove(mount_to_remove)
+    config_data["worker"]["io"]["mounts"] = mounts
+
+    # Write config file
+    with open(config_file, "wb") as f:
+        tomli_w.dump(config_data, f)
+
+    click.echo(f"Removed mount: {label}")
+    click.echo(f"Config file: {config_file}")
+
+
+@config_group.command(name="init")
+@click.option(
+    "--global",
+    "use_global",
+    is_flag=True,
+    default=False,
+    help="Create ~/.sleap-rtc/config.toml instead of ./sleap-rtc.toml",
+)
+@click.option(
+    "--force",
+    "-f",
+    is_flag=True,
+    default=False,
+    help="Overwrite existing config file.",
+)
+def config_init(use_global, force):
+    """Create a new configuration file with defaults.
+
+    Creates a sample configuration file that you can customize.
+
+    Examples:
+        sleap-rtc config init
+        sleap-rtc config init --global
+        sleap-rtc config init --force
+    """
+    import tomli_w
+
+    # Determine which config file to create
+    if use_global:
+        config_file = Path.home() / ".sleap-rtc" / "config.toml"
+    else:
+        config_file = Path.cwd() / "sleap-rtc.toml"
+
+    if config_file.exists() and not force:
+        click.echo(f"Config file already exists: {config_file}")
+        click.echo("Use --force to overwrite")
+        return
+
+    # Create sample config
+    # Note: TOML doesn't support None, so we omit optional fields
+    sample_config = {
+        "worker": {
+            "io": {
+                "mounts": [
+                    {"path": "/data", "label": "Data"},
+                ],
+            },
+        },
+        "environments": {
+            "production": {
+                "signaling_websocket": "ws://ec2-52-9-213-137.us-west-1.compute.amazonaws.com:8080",
+                "signaling_http": "http://ec2-52-9-213-137.us-west-1.compute.amazonaws.com:8001",
+            },
+            "development": {
+                "signaling_websocket": "ws://localhost:8080",
+                "signaling_http": "http://localhost:8001",
+            },
+        },
+    }
+
+    # Ensure directory exists
+    config_file.parent.mkdir(parents=True, exist_ok=True)
+
+    # Write config file
+    with open(config_file, "wb") as f:
+        tomli_w.dump(sample_config, f)
+
+    click.echo(f"Created config file: {config_file}")
+    click.echo("")
+    click.echo("Edit this file to customize your configuration.")
+    click.echo("See 'sleap-rtc config show' to view current settings.")
+
+
+# =============================================================================
 # Deprecated Top-Level Aliases for Test Commands
 # =============================================================================
 
 
 @cli.command(name="browse", hidden=True)
 @click.option("--room", "--room-id", "-r", type=str, required=True)
-@click.option("--token", "-t", type=str, required=False)
 @click.option("--port", "-p", type=int, default=8765)
 @click.option("--no-browser", is_flag=True, default=False)
 @click.option("--room-secret", type=str, envvar="SLEAP_ROOM_SECRET", required=False)
@@ -2426,7 +3186,6 @@ def browse_deprecated(ctx, **kwargs):
 
 @cli.command(name="resolve-paths", hidden=True)
 @click.option("--room", "--room-id", "-r", type=str, required=True)
-@click.option("--token", "-t", type=str, required=False)
 @click.option("--slp", "-s", type=str, required=True)
 @click.option("--port", "-p", type=int, default=8765)
 @click.option("--no-browser", is_flag=True, default=False)

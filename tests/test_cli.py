@@ -278,9 +278,246 @@ class TestAuthenticationFlow:
         assert result.exit_code == 0
         assert "login" in result.output.lower() or "authentication" in result.output.lower()
 
-    def test_token_is_optional(self, runner):
-        """Token flag should be marked as optional."""
+
+class TestVerbosityFlags:
+    """Tests for --verbose and --quiet flags."""
+
+    def test_train_has_verbose_flag(self, runner):
+        """Train command should have --verbose/-v flag."""
         result = runner.invoke(cli, ["train", "--help"])
         assert result.exit_code == 0
-        # Token should not be marked as required
-        assert "optional" in result.output.lower() or "--token" in result.output
+        assert "--verbose" in result.output
+        assert "-v" in result.output
+
+    def test_train_has_quiet_flag(self, runner):
+        """Train command should have --quiet/-q flag."""
+        result = runner.invoke(cli, ["train", "--help"])
+        assert result.exit_code == 0
+        assert "--quiet" in result.output
+        assert "-q" in result.output
+
+    def test_track_has_verbose_flag(self, runner):
+        """Track command should have --verbose/-v flag."""
+        result = runner.invoke(cli, ["track", "--help"])
+        assert result.exit_code == 0
+        assert "--verbose" in result.output
+        assert "-v" in result.output
+
+    def test_track_has_quiet_flag(self, runner):
+        """Track command should have --quiet/-q flag."""
+        result = runner.invoke(cli, ["track", "--help"])
+        assert result.exit_code == 0
+        assert "--quiet" in result.output
+        assert "-q" in result.output
+
+    def test_worker_has_verbose_flag(self, runner):
+        """Worker command should have --verbose/-v flag."""
+        result = runner.invoke(cli, ["worker", "--help"])
+        assert result.exit_code == 0
+        assert "--verbose" in result.output
+        assert "-v" in result.output
+
+
+class TestCredentialsCommand:
+    """Tests for 'sleap-rtc credentials' command group."""
+
+    def test_credentials_help(self, runner):
+        """Should show help for credentials command group."""
+        result = runner.invoke(cli, ["credentials", "--help"])
+        assert result.exit_code == 0
+        assert "list" in result.output
+        assert "show" in result.output
+        assert "clear" in result.output
+        assert "remove-secret" in result.output
+        assert "remove-token" in result.output
+
+    def test_credentials_list(self, runner, temp_credentials):
+        """Should list stored credentials."""
+        # Create some credentials
+        temp_credentials.write_text(
+            json.dumps({
+                "jwt": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ0ZXN0dXNlciIsImV4cCI6OTk5OTk5OTk5OX0.xxx",
+                "user": {"username": "testuser", "id": "12345"},
+                "room_secrets": {"room1": "secret123"},
+                "tokens": {"room2": {"api_key": "slp_xxx", "worker_name": "my-worker"}},
+            })
+        )
+        result = runner.invoke(cli, ["credentials", "list"])
+        assert result.exit_code == 0
+        assert "testuser" in result.output
+        assert "room1" in result.output or "Room Secrets" in result.output
+
+    def test_credentials_list_empty(self, runner, temp_credentials):
+        """Should show empty message when no credentials."""
+        result = runner.invoke(cli, ["credentials", "list"])
+        assert result.exit_code == 0
+        assert "Not logged in" in result.output or "(none)" in result.output
+
+    def test_credentials_show_help(self, runner):
+        """Should show help for credentials show."""
+        result = runner.invoke(cli, ["credentials", "show", "--help"])
+        assert result.exit_code == 0
+        assert "--reveal" in result.output
+
+    def test_credentials_show_redacted(self, runner, temp_credentials):
+        """Should redact secrets by default."""
+        temp_credentials.write_text(
+            json.dumps({
+                "jwt": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ0ZXN0dXNlciIsImV4cCI6OTk5OTk5OTk5OX0.xxx",
+                "user": {"username": "testuser", "id": "12345"},
+                "room_secrets": {"room1": "verysecretvalue123"},
+            })
+        )
+        result = runner.invoke(cli, ["credentials", "show"])
+        assert result.exit_code == 0
+        # Should NOT show full secret
+        assert "verysecretvalue123" not in result.output
+        # Should show masked version
+        assert "..." in result.output or "****" in result.output
+
+    def test_credentials_clear_requires_confirmation(self, runner, temp_credentials):
+        """Should require confirmation before clearing."""
+        temp_credentials.write_text(json.dumps({"jwt": "test"}))
+        result = runner.invoke(cli, ["credentials", "clear"], input="n\n")
+        assert result.exit_code == 0
+        assert "Cancelled" in result.output
+        # File should still exist
+        assert temp_credentials.exists()
+
+    def test_credentials_clear_with_yes(self, runner, temp_credentials):
+        """Should clear credentials with --yes flag."""
+        temp_credentials.write_text(json.dumps({"jwt": "test"}))
+        result = runner.invoke(cli, ["credentials", "clear", "--yes"])
+        assert result.exit_code == 0
+        assert "cleared" in result.output.lower()
+
+    def test_credentials_remove_secret_not_found(self, runner, temp_credentials):
+        """Should show message when room secret not found."""
+        temp_credentials.write_text(json.dumps({}))
+        result = runner.invoke(cli, ["credentials", "remove-secret", "--room", "nonexistent"])
+        assert result.exit_code == 0
+        assert "No secret found" in result.output
+
+    def test_credentials_remove_token_not_found(self, runner, temp_credentials):
+        """Should show message when token not found."""
+        temp_credentials.write_text(json.dumps({}))
+        result = runner.invoke(cli, ["credentials", "remove-token", "--room", "nonexistent"])
+        assert result.exit_code == 0
+        assert "No token found" in result.output
+
+
+class TestConfigCommand:
+    """Tests for 'sleap-rtc config' command group."""
+
+    def test_config_help(self, runner):
+        """Should show help for config command group."""
+        result = runner.invoke(cli, ["config", "--help"])
+        assert result.exit_code == 0
+        assert "show" in result.output
+        assert "path" in result.output
+        assert "add-mount" in result.output
+        assert "remove-mount" in result.output
+        assert "init" in result.output
+
+    def test_config_show(self, runner):
+        """Should show current configuration."""
+        result = runner.invoke(cli, ["config", "show"])
+        assert result.exit_code == 0
+        assert "Environment" in result.output or "environment" in result.output.lower()
+        assert "Signaling" in result.output or "signaling" in result.output.lower()
+
+    def test_config_show_json(self, runner):
+        """Should output JSON when --json flag used."""
+        result = runner.invoke(cli, ["config", "show", "--json"])
+        assert result.exit_code == 0
+        # Should be valid JSON
+        import json as json_module
+        try:
+            data = json_module.loads(result.output)
+            assert "environment" in data
+            assert "signaling_websocket" in data
+        except json_module.JSONDecodeError:
+            pytest.fail("Output is not valid JSON")
+
+    def test_config_path(self, runner):
+        """Should show config file paths."""
+        result = runner.invoke(cli, ["config", "path"])
+        assert result.exit_code == 0
+        assert "sleap-rtc.toml" in result.output
+        assert "config.toml" in result.output
+
+    def test_config_add_mount_help(self, runner):
+        """Should show help for add-mount."""
+        result = runner.invoke(cli, ["config", "add-mount", "--help"])
+        assert result.exit_code == 0
+        assert "PATH" in result.output
+        assert "LABEL" in result.output
+        assert "--global" in result.output
+
+    def test_config_remove_mount_help(self, runner):
+        """Should show help for remove-mount."""
+        result = runner.invoke(cli, ["config", "remove-mount", "--help"])
+        assert result.exit_code == 0
+        assert "LABEL" in result.output
+        assert "--global" in result.output
+        assert "--yes" in result.output
+
+    def test_config_init_help(self, runner):
+        """Should show help for init."""
+        result = runner.invoke(cli, ["config", "init", "--help"])
+        assert result.exit_code == 0
+        assert "--global" in result.output
+        assert "--force" in result.output
+
+    def test_config_init_creates_file(self, runner, tmp_path):
+        """Should create config file."""
+        import os
+        from pathlib import Path
+
+        # Check if tomli_w is available (needed for config init)
+        try:
+            import tomli_w
+        except ImportError:
+            pytest.skip("tomli_w not installed")
+
+        # Change to temp directory for this test
+        original_cwd = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+            result = runner.invoke(cli, ["config", "init"])
+            assert result.exit_code == 0
+            assert "Created config file" in result.output
+            # File should exist
+            assert (Path(tmp_path) / "sleap-rtc.toml").exists()
+        finally:
+            os.chdir(original_cwd)
+
+
+class TestTokenNotRequired:
+    """Tests that --token flag has been removed."""
+
+    def test_train_no_token_flag(self, runner):
+        """Train command should NOT have --token flag."""
+        result = runner.invoke(cli, ["train", "--help"])
+        assert result.exit_code == 0
+        # --token should not appear as a standalone option
+        # Note: It may appear in deprecation text, but not as an option
+        lines = result.output.split("\n")
+        option_lines = [l for l in lines if l.strip().startswith("--token")]
+        assert len(option_lines) == 0, "--token should not be a CLI option"
+
+    def test_track_no_token_flag(self, runner):
+        """Track command should NOT have --token flag."""
+        result = runner.invoke(cli, ["track", "--help"])
+        assert result.exit_code == 0
+        lines = result.output.split("\n")
+        option_lines = [l for l in lines if l.strip().startswith("--token")]
+        assert len(option_lines) == 0, "--token should not be a CLI option"
+
+    def test_worker_no_token_flag(self, runner):
+        """Worker command should NOT have --token flag."""
+        result = runner.invoke(cli, ["worker", "--help"])
+        assert result.exit_code == 0
+        lines = result.output.split("\n")
+        option_lines = [l for l in lines if l.strip().startswith("--token")]
+        assert len(option_lines) == 0, "--token should not be a CLI option"

@@ -140,7 +140,7 @@ async def handle_connection(pc: RTCPeerConnection, websocket: ClientConnection):
 
             # Handle "trickle ICE" for non-local ICE candidates.
             elif data.get("type") == "candidate":
-                logging.info("Received ICE candidate")
+                logging.debug("Received ICE candidate")
                 candidate = data.get("candidate")
                 await pc.addIceCandidate(candidate)
 
@@ -368,8 +368,8 @@ async def run_client(
         Returns:
             None
         """
-        # Log the received message.
-        logging.info(f"Client received: {message}")
+        # Log the received message in verbose mode only.
+        logging.debug(f"Client received: {message}")
         global received_files
         global output_dir
         global win
@@ -377,7 +377,7 @@ async def run_client(
         # Handle string and bytes messages differently.
         if isinstance(message, str):
             if message == b"KEEP_ALIVE":
-                logging.info("Keep alive message received.")
+                logging.debug("Keep alive message received.")
                 return
 
             if message == "END_OF_FILE":
@@ -461,11 +461,11 @@ async def run_client(
                     win.reset()
 
             else:
-                logging.info(f"Worker sent: {message}")
+                logging.debug(f"Worker sent: {message}")
 
         elif isinstance(message, bytes):
             if message == b"KEEP_ALIVE":
-                logging.info("Keep alive message received.")
+                logging.debug("Keep alive message received.")
                 return
 
             elif b"PROGRESS_REPORT::" in message:
@@ -498,12 +498,12 @@ async def run_client(
         """
         # Log the current ICE connection state.
         global reconnecting
-        logging.info(f"ICE connection state is now {pc.iceConnectionState}")
+        logging.debug(f"ICE connection state is now {pc.iceConnectionState}")
 
         # Check the ICE connection state and handle reconnection logic.
         if pc.iceConnectionState in ["connected", "completed"]:
             reconnect_attempts = 0
-            logging.info("ICE connection established.")
+            logging.debug("ICE connection established.")
             logging.info(f"reconnect attempts reset to {reconnect_attempts}")
 
         elif (
