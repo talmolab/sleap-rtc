@@ -2009,17 +2009,34 @@ class RTCWorkerClient:
                 channel.send(f"{MSG_JOB_REJECTED}{MSG_SEPARATOR}{client_job_id}{MSG_SEPARATOR}{error_response}")
                 return
 
+            # Apply path_mappings to remap client-side paths to worker paths
+            if isinstance(spec, TrainJobSpec) and getattr(spec, "path_mappings", None):
+                mappings = spec.path_mappings
+                logging.info(f"Applying path mappings: {mappings}")
+                if spec.labels_path and spec.labels_path in mappings:
+                    spec.labels_path = mappings[spec.labels_path]
+                if spec.val_labels_path and spec.val_labels_path in mappings:
+                    spec.val_labels_path = mappings[spec.val_labels_path]
+
             # If spec has config_content, write to temp file and set config_paths
             temp_config_path = None
             if isinstance(spec, TrainJobSpec) and getattr(spec, "config_content", None):
                 try:
-                    # Write to working_dir so the file is within allowed mounts
-                    temp_dir = self.working_dir or None
+                    # Apply path_mappings to the config content (e.g., train_labels_path)
+                    content = spec.config_content
+                    if getattr(spec, "path_mappings", None):
+                        for old_path, new_path in spec.path_mappings.items():
+                            content = content.replace(old_path, new_path)
+
+                    # Write to working_dir or first mount so it's within allowed paths
+                    temp_dir = self.working_dir
+                    if temp_dir is None and self.file_manager and self.file_manager.mounts:
+                        temp_dir = self.file_manager.mounts[0].path
                     fd, temp_config_path = tempfile.mkstemp(
                         suffix=".yaml", prefix="rtc_config_", dir=temp_dir
                     )
                     with os.fdopen(fd, "w") as f:
-                        f.write(spec.config_content)
+                        f.write(content)
                     spec.config_paths = [temp_config_path]
                     logging.info(f"Wrote config_content to temp file: {temp_config_path}")
                 except OSError as e:
@@ -2029,9 +2046,6 @@ class RTCWorkerClient:
                     }]})
                     channel.send(f"{MSG_JOB_REJECTED}{MSG_SEPARATOR}{client_job_id}{MSG_SEPARATOR}{error_response}")
                     return
-
-                if getattr(spec, "path_mappings", None):
-                    logging.info(f"Path mappings: {spec.path_mappings}")
 
             try:
                 # Validate the spec using JobValidator
