@@ -756,6 +756,92 @@ class RoomBrowserDialog(QDialog):
         return self._selected_room_id, self._selected_room_name
 
 
+class SlpPathDialog(QDialog):
+    """Dialog for resolving the SLP file path on the worker.
+
+    Shown when the local SLP path doesn't exist on the remote worker,
+    prompting the user to provide the correct worker-side path.
+    """
+
+    def __init__(
+        self,
+        local_path: str,
+        error_message: str,
+        parent: QWidget | None = None,
+    ):
+        super().__init__(parent)
+        self.setWindowTitle("SLP File Path Resolution")
+        self.setMinimumWidth(550)
+        self._worker_path: str | None = None
+        self._setup_ui(local_path, error_message)
+
+    def _setup_ui(self, local_path: str, error_message: str):
+        """Build the dialog UI."""
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+
+        # Explanation
+        info_label = QLabel(
+            "The SLP file could not be found on the worker at the path "
+            "used locally. Please provide the correct path on the worker."
+        )
+        info_label.setWordWrap(True)
+        layout.addWidget(info_label)
+
+        # Error details
+        error_label = QLabel(f"<b>Error:</b> {error_message}")
+        error_label.setWordWrap(True)
+        error_label.setStyleSheet("color: #c0392b;")
+        layout.addWidget(error_label)
+
+        # Local path (read-only)
+        form = QFormLayout()
+        local_edit = QLineEdit(local_path)
+        local_edit.setReadOnly(True)
+        local_edit.setStyleSheet("color: gray;")
+        form.addRow("Local path:", local_edit)
+
+        # Worker path input
+        worker_layout = QHBoxLayout()
+        self._path_edit = QLineEdit()
+        self._path_edit.setPlaceholderText(
+            "e.g. /root/vast/data/labels.v002.slp"
+        )
+        self._path_edit.textChanged.connect(self._on_text_changed)
+        worker_layout.addWidget(self._path_edit)
+        form.addRow("Worker path:", worker_layout)
+
+        layout.addLayout(form)
+
+        # Buttons
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        button_layout.addWidget(cancel_btn)
+
+        self._ok_btn = QPushButton("Continue")
+        self._ok_btn.setEnabled(False)
+        self._ok_btn.clicked.connect(self._on_accept)
+        button_layout.addWidget(self._ok_btn)
+
+        layout.addLayout(button_layout)
+
+    def _on_text_changed(self, text: str):
+        """Enable Continue button only when a path is entered."""
+        self._ok_btn.setEnabled(bool(text.strip()))
+
+    def _on_accept(self):
+        """Accept the dialog with the entered path."""
+        self._worker_path = self._path_edit.text().strip()
+        self.accept()
+
+    def get_worker_path(self) -> str | None:
+        """Get the worker-side SLP path entered by the user."""
+        return self._worker_path
+
+
 class PathResolutionDialog(QDialog):
     """Dialog for resolving video paths that differ between client and worker.
 
