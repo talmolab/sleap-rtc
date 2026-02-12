@@ -231,17 +231,19 @@ def run_remote_training(
             on_progress(event)
 
     # Run training with progress forwarding
+    kwargs = dict(
+        config_path=config_path,
+        room_id=room_id,
+        worker_id=worker_id,
+        progress_callback=progress_handler,
+        config_content=config_content,
+        path_mappings=path_mappings,
+        spec=spec,
+    )
+    if timeout is not None:
+        kwargs["timeout"] = timeout
     with bridge:
-        result = run_training(
-            config_path=config_path,
-            room_id=room_id,
-            worker_id=worker_id,
-            progress_callback=progress_handler,
-            timeout=timeout,
-            config_content=config_content,
-            path_mappings=path_mappings,
-            spec=spec,
-        )
+        result = run_training(**kwargs)
 
     return result
 
