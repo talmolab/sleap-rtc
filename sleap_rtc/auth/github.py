@@ -34,7 +34,12 @@ def get_dashboard_url() -> str:
     return os.environ.get("SLEAP_DASHBOARD_URL", DEFAULT_DASHBOARD_URL)
 
 
-def github_login(timeout: int = 120) -> dict:
+def github_login(
+    timeout: int = 120,
+    on_url_ready: "Callable[[str], None] | None" = None,
+    on_progress: "Callable[[int], None] | None" = None,
+    silent: bool = False,
+) -> dict:
     """Perform GitHub OAuth login via dashboard.
 
     Opens browser to dashboard which handles the OAuth flow. CLI polls
@@ -42,6 +47,10 @@ def github_login(timeout: int = 120) -> dict:
 
     Args:
         timeout: Maximum seconds to wait for login (default: 120).
+        on_url_ready: Optional callback called with the login URL when ready.
+            If provided, browser is NOT opened automatically.
+        on_progress: Optional callback called with remaining seconds during polling.
+        silent: If True, suppress CLI output (for API use).
 
     Returns:
         Dictionary with jwt and user info.
@@ -49,6 +58,8 @@ def github_login(timeout: int = 120) -> dict:
     Raises:
         RuntimeError: If login fails or times out.
     """
+    from typing import Callable  # Local import for type hint
+
     config = get_config()
 
     # Generate cryptographic state token
@@ -58,13 +69,17 @@ def github_login(timeout: int = 120) -> dict:
     dashboard_url = get_dashboard_url().rstrip("/")
     login_url = f"{dashboard_url}?cli=true&cli_state={state}"
 
-    # Print URL for headless environments AND try to open browser
-    click.echo(f"\nOpen this URL to login:\n{login_url}\n")
-
-    try:
-        webbrowser.open(login_url)
-    except Exception:
-        pass  # Browser open is best-effort
+    # Notify caller of URL or print/open browser
+    if on_url_ready is not None:
+        on_url_ready(login_url)
+    else:
+        # Print URL for headless environments AND try to open browser
+        if not silent:
+            click.echo(f"\nOpen this URL to login:\n{login_url}\n")
+        try:
+            webbrowser.open(login_url)
+        except Exception:
+            pass  # Browser open is best-effort
 
     # Poll signaling server for token
     server_url = config.get_http_url()
@@ -73,7 +88,10 @@ def github_login(timeout: int = 120) -> dict:
 
     while time.time() - start_time < timeout:
         remaining = int(timeout - (time.time() - start_time))
-        click.echo(f"\rWaiting for login... ({remaining}s) ", nl=False)
+        if on_progress is not None:
+            on_progress(remaining)
+        elif not silent:
+            click.echo(f"\rWaiting for login... ({remaining}s) ", nl=False)
 
         try:
             response = requests.get(
@@ -83,7 +101,8 @@ def github_login(timeout: int = 120) -> dict:
             )
 
             if response.status_code == 200:
-                click.echo("\rLogin successful!                    ")
+                if not silent:
+                    click.echo("\rLogin successful!                    ")
                 data = response.json()
 
                 if "jwt" not in data or "user" not in data:
@@ -100,5 +119,6 @@ def github_login(timeout: int = 120) -> dict:
 
         time.sleep(POLL_INTERVAL)
 
-    click.echo("\r                                     ")
+    if not silent:
+        click.echo("\r                                     ")
     raise RuntimeError(f"Login timed out after {timeout} seconds. Please try again.")
