@@ -601,6 +601,7 @@ class JobExecutor:
                             # Process ended; flush remaining text
                             if buf:
                                 line = buf.decode(errors="replace")
+                                logging.info(f"[JOB {job_id}] {line}")
                                 if channel.readyState == "open":
                                     channel.send(line + "\n")
                             break
@@ -626,7 +627,8 @@ class JobExecutor:
                             if not text:
                                 continue
 
-                            # Send log line to client
+                            # Log and send log line to client
+                            logging.info(f"[JOB {job_id}] {text}")
                             if sep == b"\n":
                                 if channel.readyState == "open":
                                     channel.send(text + "\n")
