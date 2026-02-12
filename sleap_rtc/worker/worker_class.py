@@ -3,6 +3,7 @@ import base64
 import subprocess
 import stat
 import sys
+import tempfile
 import uuid
 import websockets
 import json
@@ -2008,44 +2009,91 @@ class RTCWorkerClient:
                 channel.send(f"{MSG_JOB_REJECTED}{MSG_SEPARATOR}{client_job_id}{MSG_SEPARATOR}{error_response}")
                 return
 
-            # Validate the spec using JobValidator
-            validator = JobValidator(file_manager=self.file_manager)
-            errors = validator.validate(spec)
+            # Apply path_mappings to remap client-side paths to worker paths
+            if isinstance(spec, TrainJobSpec) and getattr(spec, "path_mappings", None):
+                mappings = spec.path_mappings
+                logging.info(f"Applying path mappings: {mappings}")
+                if spec.labels_path and spec.labels_path in mappings:
+                    spec.labels_path = mappings[spec.labels_path]
+                if spec.val_labels_path and spec.val_labels_path in mappings:
+                    spec.val_labels_path = mappings[spec.val_labels_path]
 
-            if errors:
-                # Send JOB_REJECTED with validation errors
-                error_dicts = [e.to_dict() for e in errors]
-                error_response = json.dumps({"errors": error_dicts})
-                logging.warning(f"Job rejected with {len(errors)} validation error(s)")
-                channel.send(f"{MSG_JOB_REJECTED}{MSG_SEPARATOR}{client_job_id}{MSG_SEPARATOR}{error_response}")
-                return
+            # If spec has config_content, write to temp file and set config_paths
+            temp_config_path = None
+            if isinstance(spec, TrainJobSpec) and getattr(spec, "config_content", None):
+                try:
+                    # Apply path_mappings to the config content (e.g., train_labels_path)
+                    content = spec.config_content
+                    if getattr(spec, "path_mappings", None):
+                        for old_path, new_path in spec.path_mappings.items():
+                            content = content.replace(old_path, new_path)
 
-            # Generate job ID and send JOB_ACCEPTED
-            job_id = f"job_{uuid.uuid4().hex[:8]}"
-            logging.info(f"Job accepted: {job_id} (client ID: {client_job_id})")
-            channel.send(f"{MSG_JOB_ACCEPTED}{MSG_SEPARATOR}{job_id}")
-
-            # Build and execute commands using CommandBuilder
-            builder = CommandBuilder()
-            if isinstance(spec, TrainJobSpec):
-                # Build commands for all configs (supports multi-model training)
-                commands = builder.build_train_commands(spec)
-                total_configs = len(commands)
-
-                for i, cmd in enumerate(commands):
-                    config_name = Path(spec.config_paths[i]).stem
-                    if total_configs > 1:
-                        logging.info(f"Training model {i+1}/{total_configs}: {config_name}")
-                        channel.send(f"Training model {i+1}/{total_configs}: {config_name}\n")
-
-                    await self.job_executor.execute_from_spec(
-                        channel, cmd, f"{job_id}_{i}" if total_configs > 1 else job_id, job_type="train"
+                    # Write to working_dir or first mount so it's within allowed paths
+                    temp_dir = self.working_dir
+                    if temp_dir is None and self.file_manager and self.file_manager.mounts:
+                        temp_dir = self.file_manager.mounts[0].path
+                    fd, temp_config_path = tempfile.mkstemp(
+                        suffix=".yaml", prefix="rtc_config_", dir=temp_dir
                     )
-            elif isinstance(spec, TrackJobSpec):
-                cmd = builder.build_track_command(spec)
-                await self.job_executor.execute_from_spec(
-                    channel, cmd, job_id, job_type="track"
-                )
+                    with os.fdopen(fd, "w") as f:
+                        f.write(content)
+                    spec.config_paths = [temp_config_path]
+                    logging.info(f"Wrote config_content to temp file: {temp_config_path}")
+                except OSError as e:
+                    error_response = json.dumps({"errors": [{
+                        "field": "config_content",
+                        "message": f"Failed to write config to temp file: {e}",
+                    }]})
+                    channel.send(f"{MSG_JOB_REJECTED}{MSG_SEPARATOR}{client_job_id}{MSG_SEPARATOR}{error_response}")
+                    return
+
+            try:
+                # Validate the spec using JobValidator
+                validator = JobValidator(file_manager=self.file_manager)
+                errors = validator.validate(spec)
+
+                if errors:
+                    # Send JOB_REJECTED with validation errors
+                    error_dicts = [e.to_dict() for e in errors]
+                    error_response = json.dumps({"errors": error_dicts})
+                    logging.warning(f"Job rejected with {len(errors)} validation error(s)")
+                    channel.send(f"{MSG_JOB_REJECTED}{MSG_SEPARATOR}{client_job_id}{MSG_SEPARATOR}{error_response}")
+                    return
+
+                # Generate job ID and send JOB_ACCEPTED
+                job_id = f"job_{uuid.uuid4().hex[:8]}"
+                logging.info(f"Job accepted: {job_id} (client ID: {client_job_id})")
+                channel.send(f"{MSG_JOB_ACCEPTED}{MSG_SEPARATOR}{job_id}")
+
+                # Build and execute commands using CommandBuilder
+                builder = CommandBuilder()
+                if isinstance(spec, TrainJobSpec):
+                    # Build commands for all configs (supports multi-model training)
+                    commands = builder.build_train_commands(spec)
+                    total_configs = len(commands)
+
+                    for i, cmd in enumerate(commands):
+                        config_name = Path(spec.config_paths[i]).stem
+                        if total_configs > 1:
+                            logging.info(f"Training model {i+1}/{total_configs}: {config_name}")
+                            channel.send(f"Training model {i+1}/{total_configs}: {config_name}\n")
+
+                        await self.job_executor.execute_from_spec(
+                            channel, cmd, f"{job_id}_{i}" if total_configs > 1 else job_id, job_type="train"
+                        )
+                elif isinstance(spec, TrackJobSpec):
+                    cmd = builder.build_track_command(spec)
+                    await self.job_executor.execute_from_spec(
+                        channel, cmd, job_id, job_type="track"
+                    )
+            finally:
+                # Clean up temp config file
+                if temp_config_path and os.path.exists(temp_config_path):
+                    try:
+                        os.unlink(temp_config_path)
+                        logging.info(f"Cleaned up temp config: {temp_config_path}")
+                    except OSError as e:
+                        logging.warning(f"Failed to clean up temp config {temp_config_path}: {e}")
 
         except Exception as e:
             logging.error(f"Error handling job submit: {e}")

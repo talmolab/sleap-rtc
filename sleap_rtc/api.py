@@ -598,6 +598,7 @@ def check_video_paths(
     room_id: str,
     worker_id: str | None = None,
     timeout: float = 30.0,
+    on_path_rejected: "Callable[[str, str], str | None] | None" = None,
 ) -> PathCheckResult:
     """Check if video paths in an SLP file are accessible on a worker.
 
@@ -610,6 +611,11 @@ def check_video_paths(
         worker_id: Specific worker ID to check against. If None, connects
             to the first available worker.
         timeout: Timeout in seconds for the video check operation.
+        on_path_rejected: Optional callback invoked when the worker rejects
+            the SLP path (e.g., not within mounts, file not found). Called
+            with (attempted_path, error_message). Should return a corrected
+            path to retry, or None to abort. The retry reuses the same
+            WebRTC connection, avoiding reconnection delays.
 
     Returns:
         PathCheckResult with information about each video path.
@@ -622,8 +628,86 @@ def check_video_paths(
     import asyncio
 
     return asyncio.run(
-        _check_video_paths_async(slp_path, room_id, worker_id, timeout)
+        _check_video_paths_async(
+            slp_path, room_id, worker_id, timeout, on_path_rejected
+        )
     )
+
+
+async def _authenticate_channel(
+    data_channel,
+    response_queue: "asyncio.Queue",
+    room_secret: str,
+    timeout: float = 15.0,
+) -> None:
+    """Complete PSK authentication handshake on a data channel.
+
+    After a data channel opens, the worker sends an AUTH_CHALLENGE with a nonce.
+    This function handles the full handshake:
+    1. Receives AUTH_CHALLENGE with nonce
+    2. Computes HMAC-SHA256(secret, nonce) and sends AUTH_RESPONSE
+    3. Waits for AUTH_SUCCESS
+
+    Args:
+        data_channel: The open WebRTC data channel.
+        response_queue: Queue that receives all messages from the channel.
+        room_secret: The shared room secret for HMAC computation.
+        timeout: Max seconds to wait for each auth message.
+
+    Raises:
+        ConfigurationError: If authentication fails or times out.
+    """
+    import asyncio
+    from sleap_rtc.auth.psk import compute_hmac
+    from sleap_rtc.protocol import (
+        MSG_AUTH_CHALLENGE,
+        MSG_AUTH_RESPONSE,
+        MSG_AUTH_SUCCESS,
+        MSG_AUTH_FAILURE,
+        MSG_SEPARATOR,
+    )
+
+    # Wait for AUTH_CHALLENGE from worker
+    try:
+        challenge_msg = await asyncio.wait_for(
+            response_queue.get(), timeout=timeout
+        )
+    except asyncio.TimeoutError:
+        raise ConfigurationError("Authentication timed out waiting for challenge")
+
+    if not challenge_msg.startswith(MSG_AUTH_CHALLENGE):
+        raise ConfigurationError(
+            f"Expected AUTH_CHALLENGE, got: {challenge_msg[:50]}"
+        )
+
+    # Extract nonce
+    parts = challenge_msg.split(MSG_SEPARATOR, 1)
+    if len(parts) != 2:
+        raise ConfigurationError("Invalid AUTH_CHALLENGE format")
+    nonce = parts[1]
+
+    # Compute HMAC and send response
+    hmac_response = compute_hmac(room_secret, nonce)
+    data_channel.send(f"{MSG_AUTH_RESPONSE}{MSG_SEPARATOR}{hmac_response}")
+
+    # Wait for AUTH_SUCCESS or AUTH_FAILURE
+    try:
+        auth_result = await asyncio.wait_for(
+            response_queue.get(), timeout=timeout
+        )
+    except asyncio.TimeoutError:
+        raise ConfigurationError("Authentication timed out waiting for result")
+
+    if auth_result == MSG_AUTH_SUCCESS:
+        return
+    elif auth_result.startswith(MSG_AUTH_FAILURE):
+        parts = auth_result.split(MSG_SEPARATOR, 1)
+        reason = parts[1] if len(parts) > 1 else "unknown"
+        raise ConfigurationError(f"Authentication failed: {reason}")
+    else:
+        raise ConfigurationError(
+            f"Unexpected response during auth: {auth_result[:50]}"
+        )
 
 
 async def _check_video_paths_async(
@@ -631,6 +715,7 @@ async def _check_video_paths_async(
     room_id: str,
     worker_id: str | None,
     timeout: float,
+    on_path_rejected: "Callable[[str, str], str | None] | None" = None,
 ) -> PathCheckResult:
     """Async implementation of video path checking."""
     import json
@@ -766,20 +851,61 @@ async def _check_video_paths_async(
             # Wait for channel to open
             await asyncio.wait_for(channel_open.wait(), timeout=10.0)
 
-            # Send SLP path to worker
-            data_channel.send(f"{MSG_USE_WORKER_PATH}{MSG_SEPARATOR}{slp_path}")
+            # Authenticate with worker via PSK
+            await _authenticate_channel(
+                data_channel, response_queue, room_secret
+            )
 
-            # Wait for path OK/error response
-            path_response = await asyncio.wait_for(response_queue.get(), timeout=timeout)
-            if path_response.startswith(MSG_WORKER_PATH_ERROR):
-                parts = path_response.split(MSG_SEPARATOR)
-                error_msg = parts[1] if len(parts) > 1 else "Unknown error"
-                raise ConfigurationError(f"Worker rejected SLP path: {error_msg}")
+            # Send SLP path to worker, with retry via callback on rejection
+            current_path = slp_path
+            max_path_retries = 3
+
+            for _attempt in range(max_path_retries):
+                data_channel.send(
+                    f"{MSG_USE_WORKER_PATH}{MSG_SEPARATOR}{current_path}"
+                )
+
+                # Wait for path OK/error response
+                path_response = await asyncio.wait_for(
+                    response_queue.get(), timeout=timeout
+                )
+
+                if path_response.startswith(MSG_WORKER_PATH_ERROR):
+                    parts = path_response.split(MSG_SEPARATOR)
+                    error_msg = parts[1] if len(parts) > 1 else "Unknown error"
+
+                    # If we have a callback, ask for a corrected path
+                    if on_path_rejected is not None:
+                        corrected = on_path_rejected(current_path, error_msg)
+                        if corrected is not None:
+                            current_path = corrected
+                            continue  # Retry with corrected path
+                        else:
+                            # User cancelled
+                            raise ConfigurationError(
+                                f"Worker rejected SLP path: {error_msg}"
+                            )
+                    else:
+                        raise ConfigurationError(
+                            f"Worker rejected SLP path: {error_msg}"
+                        )
+
+                # Path accepted — update slp_path for the result
+                slp_path = current_path
+                break
+            else:
+                raise ConfigurationError(
+                    "SLP path could not be resolved after multiple attempts."
+                )
 
             # Wait for video check response
-            video_response = await asyncio.wait_for(response_queue.get(), timeout=timeout)
+            video_response = await asyncio.wait_for(
+                response_queue.get(), timeout=timeout
+            )
             if not video_response.startswith(MSG_FS_CHECK_VIDEOS_RESPONSE):
-                raise ConfigurationError(f"Unexpected response: {video_response[:50]}")
+                raise ConfigurationError(
+                    f"Unexpected response: {video_response[:50]}"
+                )
 
             # Parse video check data
             json_str = video_response.split(MSG_SEPARATOR, 1)[1]
@@ -1077,8 +1203,8 @@ class TrainingJob:
 
 
 def run_training(
-    config_path: str,
-    room_id: str,
+    config_path: str | None = None,
+    room_id: str = "",
     worker_id: str | None = None,
     labels_path: str | None = None,
     val_labels_path: str | None = None,
@@ -1089,11 +1215,19 @@ def run_training(
     resume_ckpt_path: str | None = None,
     progress_callback: "Callable[[ProgressEvent], None] | None" = None,
     timeout: float = 86400.0,  # 24 hours default
+    config_content: str | None = None,
+    path_mappings: dict[str, str] | None = None,
+    spec: "TrainJobSpec | None" = None,
 ) -> TrainingResult:
     """Run training remotely on a worker.
 
     Submits a training job to a worker in the specified room and waits
     for completion. Progress events are forwarded to the callback if provided.
+
+    There are two ways to provide the training config:
+    1. ``config_path``: Path to a config YAML file on the shared filesystem.
+    2. ``config_content``: Serialized config YAML string sent over datachannel.
+    3. ``spec``: A pre-built TrainJobSpec (overrides all other spec parameters).
 
     Args:
         config_path: Path to training config YAML file (on worker filesystem).
@@ -1108,6 +1242,11 @@ def run_training(
         resume_ckpt_path: Path to checkpoint to resume from.
         progress_callback: Function called with ProgressEvent for each update.
         timeout: Maximum time to wait for job completion in seconds.
+        config_content: Serialized training config (YAML string) sent over
+            datachannel. Alternative to config_path for GUI integration.
+        path_mappings: Maps original client-side paths to resolved worker paths.
+        spec: A pre-built TrainJobSpec. When provided, config_path,
+            config_content, labels_path, and other spec fields are ignored.
 
     Returns:
         TrainingResult with job outcome and model paths.
@@ -1134,12 +1273,15 @@ def run_training(
             resume_ckpt_path=resume_ckpt_path,
             progress_callback=progress_callback,
             timeout=timeout,
+            config_content=config_content,
+            path_mappings=path_mappings,
+            spec=spec,
         )
     )
 
 
 async def _run_training_async(
-    config_path: str,
+    config_path: str | None,
     room_id: str,
     worker_id: str | None,
     labels_path: str | None,
@@ -1151,6 +1293,9 @@ async def _run_training_async(
     resume_ckpt_path: str | None,
     progress_callback: "Callable[[ProgressEvent], None] | None",
     timeout: float,
+    config_content: str | None = None,
+    path_mappings: dict[str, str] | None = None,
+    spec: "TrainJobSpec | None" = None,
 ) -> TrainingResult:
     """Async implementation of run_training."""
     import json
@@ -1184,17 +1329,32 @@ async def _run_training_async(
     peer_id = f"api-train-{uuid.uuid4().hex[:8]}"
     job_id = str(uuid.uuid4())[:8]
 
-    # Build job spec
-    spec = TrainJobSpec(
-        config_paths=[config_path],
-        labels_path=labels_path,
-        val_labels_path=val_labels_path,
-        max_epochs=max_epochs,
-        batch_size=batch_size,
-        learning_rate=learning_rate,
-        run_name=run_name,
-        resume_ckpt_path=resume_ckpt_path,
-    )
+    # Build job spec (use pre-built spec if provided)
+    if spec is None:
+        if config_content is not None:
+            spec = TrainJobSpec(
+                config_content=config_content,
+                labels_path=labels_path,
+                val_labels_path=val_labels_path,
+                max_epochs=max_epochs,
+                batch_size=batch_size,
+                learning_rate=learning_rate,
+                run_name=run_name,
+                resume_ckpt_path=resume_ckpt_path,
+                path_mappings=path_mappings or {},
+            )
+        else:
+            spec = TrainJobSpec(
+                config_paths=[config_path] if config_path else [],
+                labels_path=labels_path,
+                val_labels_path=val_labels_path,
+                max_epochs=max_epochs,
+                batch_size=batch_size,
+                learning_rate=learning_rate,
+                run_name=run_name,
+                resume_ckpt_path=resume_ckpt_path,
+                path_mappings=path_mappings or {},
+            )
 
     # Response handling
     import asyncio
@@ -1300,6 +1460,11 @@ async def _run_training_async(
 
             # Wait for channel
             await asyncio.wait_for(channel_open.wait(), timeout=30.0)
+
+            # Authenticate with worker via PSK
+            await _authenticate_channel(
+                data_channel, response_queue, room_secret
+            )
 
             # Notify train_begin
             if progress_callback:
@@ -1669,6 +1834,11 @@ async def _run_inference_async(
 
             # Wait for channel
             await asyncio.wait_for(channel_open.wait(), timeout=30.0)
+
+            # Authenticate with worker via PSK
+            await _authenticate_channel(
+                data_channel, response_queue, room_secret
+            )
 
             # Submit job
             spec_json = spec.to_json()

@@ -40,10 +40,11 @@ class PresubmissionResult:
 
 
 def run_presubmission_checks(
-    config_path: str,
     slp_path: str,
     room_id: str,
     worker_id: str | None = None,
+    config_path: str | None = None,
+    config_content: str | None = None,
     parent_widget=None,
     on_login_required: Callable[[], bool] | None = None,
 ) -> PresubmissionResult:
@@ -52,13 +53,17 @@ def run_presubmission_checks(
     This function orchestrates the validation flow:
     1. Check authentication - if not logged in, call on_login_required callback
     2. Validate config - show ConfigValidationDialog if errors/warnings
+       (skipped when config_content is provided, since config was built in-memory)
     3. Check video paths - show PathResolutionDialog if paths need resolution
 
     Args:
-        config_path: Path to the training configuration file.
         slp_path: Path to the SLP file (for video path checking).
         room_id: The room ID to use for path checking.
         worker_id: Optional specific worker ID.
+        config_path: Path to the training configuration file.
+        config_content: Serialized config YAML string (alternative to
+            config_path). When provided, config validation is skipped since
+            the config was built from the dialog form.
         parent_widget: Parent Qt widget for dialogs.
         on_login_required: Callback called when login is required.
             Should return True if login succeeded, False otherwise.
@@ -69,25 +74,34 @@ def run_presubmission_checks(
 
     Example:
         result = run_presubmission_checks(
-            config_path="/path/to/config.yaml",
             slp_path="/path/to/labels.slp",
             room_id="my-room",
+            config_content=yaml_string,
             parent_widget=self,
             on_login_required=self._handle_login,
         )
         if result.success:
-            # Proceed with training
-            run_remote_training(...)
+            spec = TrainJobSpec(
+                config_content=yaml_string,
+                labels_path=slp_path,
+                path_mappings=result.path_mappings,
+            )
+            run_remote_training(spec=spec, room_id=room_id)
     """
     # Step 1: Check authentication
     auth_result = check_authentication(on_login_required)
     if not auth_result.success:
         return auth_result
 
-    # Step 2: Validate config
-    config_result = check_config_validation(config_path, parent_widget)
-    if not config_result.success:
-        return config_result
+    # Step 2: Validate config (skipped when config_content is provided,
+    # since the config was built from the dialog form and doesn't need
+    # file-based validation)
+    if config_path and not config_content:
+        config_result = check_config_validation(config_path, parent_widget)
+        if not config_result.success:
+            return config_result
+    else:
+        config_result = PresubmissionResult(success=True)
 
     # Step 3: Check video paths
     path_result = check_video_paths(
@@ -240,11 +254,15 @@ def check_video_paths(
 ) -> PresubmissionResult:
     """Check if video paths exist on the worker.
 
-    If any paths are missing, shows PathResolutionDialog for user to
-    specify correct worker paths.
+    Sends the SLP path to the worker for validation. If the worker rejects the
+    path (e.g., not within mounts or file not found), shows SlpPathDialog to
+    let the user provide the correct worker-side path — the retry happens on
+    the same WebRTC connection so there's no reconnection delay.
+
+    If any video paths are missing, shows PathResolutionDialog.
 
     Args:
-        slp_path: Path to the SLP file on the worker filesystem.
+        slp_path: Path to the SLP file (may be a local path).
         room_id: The room ID to check paths against.
         worker_id: Optional specific worker ID.
         parent_widget: Parent Qt widget for the dialog.
@@ -259,11 +277,47 @@ def check_video_paths(
         ConfigurationError,
     )
 
+    # Track the resolved worker SLP path (may differ from local slp_path)
+    resolved_slp_path = slp_path
+
+    def _on_path_rejected(attempted_path: str, error_msg: str) -> str | None:
+        """Callback invoked when the worker rejects the SLP path.
+
+        Shows SlpPathDialog so the user can provide the correct worker-side
+        path. Returns the corrected path, or None if the user cancels.
+        This runs within the same WebRTC connection.
+        """
+        nonlocal resolved_slp_path
+
+        if parent_widget is None:
+            return None  # Can't show dialog, abort
+
+        from sleap_rtc.gui.widgets import SlpPathDialog
+
+        logger.info(
+            f"SLP path rejected by worker: {error_msg}. "
+            f"Showing path resolution dialog."
+        )
+        dialog = SlpPathDialog(
+            local_path=attempted_path,
+            error_message=error_msg,
+            parent=parent_widget,
+        )
+        if dialog.exec():
+            corrected = dialog.get_worker_path()
+            logger.info(f"User provided worker SLP path: {corrected}")
+            resolved_slp_path = corrected
+            return corrected
+        else:
+            logger.info("User cancelled SLP path resolution")
+            return None
+
     try:
         path_result = api_check_video_paths(
             slp_path=slp_path,
             room_id=room_id,
             worker_id=worker_id,
+            on_path_rejected=_on_path_rejected,
         )
     except AuthenticationError as e:
         return PresubmissionResult(
@@ -276,9 +330,17 @@ def check_video_paths(
             error=f"Room error: {e}",
         )
     except ConfigurationError as e:
+        error_str = str(e)
+        # If user cancelled the dialog, mark as cancelled
+        if "rejected slp path" in error_str.lower() and parent_widget is not None:
+            return PresubmissionResult(
+                success=False,
+                cancelled=True,
+                error="SLP path resolution cancelled.",
+            )
         return PresubmissionResult(
             success=False,
-            error=f"Configuration error: {e}",
+            error=error_str,
         )
     except Exception as e:
         logger.warning(f"Video path check failed: {e}")
@@ -289,15 +351,17 @@ def check_video_paths(
             path_mappings={},
         )
 
-    # If all paths found, we're good
+    # Build initial path mappings: local SLP path -> worker SLP path
+    mappings: dict[str, str] = {}
+    if resolved_slp_path != slp_path:
+        mappings[slp_path] = resolved_slp_path
+
+    # If all video paths found, we're good
     if path_result.all_found:
         logger.debug(f"All {path_result.total_videos} video paths found on worker")
-        # Build path mappings from found videos
-        mappings = {
-            v.original_path: v.worker_path
-            for v in path_result.videos
-            if v.found and v.worker_path
-        }
+        for v in path_result.videos:
+            if v.found and v.worker_path:
+                mappings[v.original_path] = v.worker_path
         return PresubmissionResult(
             success=True,
             path_mappings=mappings,
@@ -318,9 +382,10 @@ def check_video_paths(
         if result:  # accepted
             resolved_paths = dialog.get_resolved_paths()
             logger.info(f"User resolved {len(resolved_paths)} video paths")
+            mappings.update(resolved_paths)
             return PresubmissionResult(
                 success=True,
-                path_mappings=resolved_paths,
+                path_mappings=mappings,
             )
         else:  # rejected/cancelled
             logger.info("User cancelled path resolution")
@@ -361,20 +426,24 @@ class PresubmissionFlow:
 
     def __init__(
         self,
-        config_path: str,
         slp_path: str,
         room_id: str,
         worker_id: str | None = None,
+        config_path: str | None = None,
+        config_content: str | None = None,
     ):
         """Initialize the pre-submission flow.
 
         Args:
-            config_path: Path to the training configuration file.
             slp_path: Path to the SLP file (for video path checking).
             room_id: The room ID to use for path checking.
             worker_id: Optional specific worker ID.
+            config_path: Path to the training configuration file.
+            config_content: Serialized config YAML string (alternative to
+                config_path).
         """
         self.config_path = config_path
+        self.config_content = config_content
         self.slp_path = slp_path
         self.room_id = room_id
         self.worker_id = worker_id
@@ -399,10 +468,11 @@ class PresubmissionFlow:
             True if all checks passed and training can proceed.
         """
         self.result = run_presubmission_checks(
-            config_path=self.config_path,
             slp_path=self.slp_path,
             room_id=self.room_id,
             worker_id=self.worker_id,
+            config_path=self.config_path,
+            config_content=self.config_content,
             parent_widget=parent,
             on_login_required=self.on_auth_required,
         )
