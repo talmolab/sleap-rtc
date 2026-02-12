@@ -133,6 +133,173 @@ class TestTrainJobSpec:
         assert spec.max_epochs == 50
 
 
+class TestTrainJobSpecConfigContent:
+    """Tests for TrainJobSpec config_content and path_mappings fields."""
+
+    def test_create_with_config_content(self):
+        """Test creating spec with config_content instead of config_path."""
+        spec = TrainJobSpec(
+            config_content="model_config:\n  backbone: unet\n",
+            labels_path="/mnt/data/labels.slp",
+        )
+
+        assert spec.config_content == "model_config:\n  backbone: unet\n"
+        assert spec.labels_path == "/mnt/data/labels.slp"
+        assert spec.config_paths == []
+        assert spec.config_path is None
+
+    def test_create_with_no_config_raises(self):
+        """Test that creating spec with no config source raises ValueError."""
+        with pytest.raises(ValueError, match="config_path.*config_paths.*config_content"):
+            TrainJobSpec(labels_path="/mnt/data/labels.slp")
+
+    def test_create_with_path_mappings(self):
+        """Test creating spec with path_mappings."""
+        mappings = {
+            "C:/Users/data/video.mp4": "/mnt/shared/video.mp4",
+            "C:/Users/data/video2.mp4": "/mnt/shared/video2.mp4",
+        }
+        spec = TrainJobSpec(
+            config_content="model_config:\n  backbone: unet\n",
+            labels_path="/mnt/data/labels.slp",
+            path_mappings=mappings,
+        )
+
+        assert spec.path_mappings == mappings
+
+    def test_default_path_mappings_is_empty(self):
+        """Test that path_mappings defaults to empty dict."""
+        spec = TrainJobSpec(config_path="/vast/config.yaml")
+        assert spec.path_mappings == {}
+
+    def test_to_json_with_config_content(self):
+        """Test JSON serialization includes config_content."""
+        spec = TrainJobSpec(
+            config_content="model_config:\n  backbone: unet\n",
+            labels_path="/mnt/data/labels.slp",
+        )
+        json_str = spec.to_json()
+        parsed = json.loads(json_str)
+
+        assert parsed["type"] == "train"
+        assert parsed["config_content"] == "model_config:\n  backbone: unet\n"
+        assert parsed["labels_path"] == "/mnt/data/labels.slp"
+        assert "config_paths" not in parsed  # empty list omitted
+        assert "config_path" not in parsed  # None omitted
+
+    def test_to_json_with_path_mappings(self):
+        """Test JSON serialization includes path_mappings."""
+        mappings = {"C:/data/vid.mp4": "/mnt/data/vid.mp4"}
+        spec = TrainJobSpec(
+            config_content="backbone: unet\n",
+            path_mappings=mappings,
+        )
+        json_str = spec.to_json()
+        parsed = json.loads(json_str)
+
+        assert parsed["path_mappings"] == mappings
+
+    def test_to_json_omits_empty_path_mappings(self):
+        """Test JSON serialization omits empty path_mappings."""
+        spec = TrainJobSpec(config_path="/vast/config.yaml")
+        json_str = spec.to_json()
+        parsed = json.loads(json_str)
+
+        assert "path_mappings" not in parsed
+
+    def test_from_json_with_config_content(self):
+        """Test JSON deserialization with config_content."""
+        json_str = json.dumps({
+            "type": "train",
+            "config_content": "backbone: unet\n",
+            "labels_path": "/mnt/data/labels.slp",
+        })
+        spec = TrainJobSpec.from_json(json_str)
+
+        assert spec.config_content == "backbone: unet\n"
+        assert spec.labels_path == "/mnt/data/labels.slp"
+        assert spec.config_paths == []
+
+    def test_from_json_with_path_mappings(self):
+        """Test JSON deserialization with path_mappings."""
+        mappings = {"C:/data/vid.mp4": "/mnt/data/vid.mp4"}
+        json_str = json.dumps({
+            "type": "train",
+            "config_content": "backbone: unet\n",
+            "path_mappings": mappings,
+        })
+        spec = TrainJobSpec.from_json(json_str)
+
+        assert spec.path_mappings == mappings
+
+    def test_roundtrip_config_content(self):
+        """Test JSON roundtrip with config_content and path_mappings."""
+        mappings = {"C:/data/vid.mp4": "/mnt/data/vid.mp4"}
+        original = TrainJobSpec(
+            config_content="model_config:\n  backbone: unet\n",
+            labels_path="/mnt/data/labels.slp",
+            path_mappings=mappings,
+            max_epochs=100,
+        )
+        json_str = original.to_json()
+        restored = TrainJobSpec.from_json(json_str)
+
+        assert restored.config_content == original.config_content
+        assert restored.labels_path == original.labels_path
+        assert restored.path_mappings == original.path_mappings
+        assert restored.max_epochs == original.max_epochs
+        assert restored.config_paths == []
+
+    def test_to_dict_with_config_content(self):
+        """Test dict conversion with config_content."""
+        spec = TrainJobSpec(
+            config_content="backbone: unet\n",
+            labels_path="/mnt/data/labels.slp",
+        )
+        d = spec.to_dict()
+
+        assert d["type"] == "train"
+        assert d["config_content"] == "backbone: unet\n"
+        assert "config_paths" not in d
+        assert "path_mappings" not in d  # empty dict omitted
+
+    def test_from_dict_with_config_content(self):
+        """Test creating spec from dict with config_content."""
+        d = {
+            "type": "train",
+            "config_content": "backbone: unet\n",
+            "path_mappings": {"a": "b"},
+        }
+        spec = TrainJobSpec.from_dict(d)
+
+        assert spec.config_content == "backbone: unet\n"
+        assert spec.path_mappings == {"a": "b"}
+
+    def test_parse_job_spec_with_config_content(self):
+        """Test parse_job_spec handles config_content."""
+        json_str = json.dumps({
+            "type": "train",
+            "config_content": "backbone: unet\n",
+            "labels_path": "/mnt/data/labels.slp",
+        })
+        spec = parse_job_spec(json_str)
+
+        assert isinstance(spec, TrainJobSpec)
+        assert spec.config_content == "backbone: unet\n"
+
+    def test_from_json_ignores_unknown_fields(self):
+        """Test that from_json ignores unknown fields for forward compatibility."""
+        json_str = json.dumps({
+            "type": "train",
+            "config_path": "/vast/config.yaml",
+            "unknown_future_field": "some_value",
+        })
+        spec = TrainJobSpec.from_json(json_str)
+
+        assert spec.config_path == "/vast/config.yaml"
+        assert not hasattr(spec, "unknown_future_field")
+
+
 class TestTrackJobSpec:
     """Tests for TrackJobSpec dataclass."""
 

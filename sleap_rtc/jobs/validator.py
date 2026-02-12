@@ -109,16 +109,18 @@ class JobValidator:
         """
         errors = []
 
-        # Validate config paths (at least one required)
+        # Validate config source: either config_paths or config_content required
         valid_config_indices = []
-        if not spec.config_paths:
+        has_config_content = getattr(spec, "config_content", None) is not None
+        if not spec.config_paths and not has_config_content:
             errors.append(
                 ValidationError(
-                    field="config_paths",
-                    message="At least one config path is required",
+                    field="config",
+                    message="Either config_paths or config_content is required",
+                    code="MISSING_CONFIG",
                 )
             )
-        else:
+        elif spec.config_paths:
             for i, config_path in enumerate(spec.config_paths):
                 # Use indexed field name for multiple configs
                 field_name = f"config_path[{i}]" if len(spec.config_paths) > 1 else "config_path"

@@ -252,6 +252,105 @@ class TestJobValidatorTrainSpec:
         assert errors[0].field == "resume_ckpt_path"
 
 
+class TestJobValidatorConfigContent:
+    """Tests for validating TrainJobSpec with config_content."""
+
+    def test_valid_spec_with_config_content(self, tmp_path):
+        """Test validation passes with config_content and valid labels_path."""
+        labels_file = tmp_path / "labels.slp"
+        labels_file.write_text("slp data")
+
+        mounts = [MockMount(path=str(tmp_path), label="test")]
+        validator = JobValidator(mounts=mounts)
+
+        spec = TrainJobSpec(
+            config_content="model_config:\n  backbone: unet\n",
+            labels_path=str(labels_file),
+        )
+
+        errors = validator.validate_train_spec(spec)
+        assert errors == []
+
+    def test_valid_spec_with_config_content_no_labels(self, tmp_path):
+        """Test validation passes with config_content and no labels_path."""
+        mounts = [MockMount(path=str(tmp_path), label="test")]
+        validator = JobValidator(mounts=mounts)
+
+        spec = TrainJobSpec(config_content="model_config:\n  backbone: unet\n")
+
+        errors = validator.validate_train_spec(spec)
+        assert errors == []
+
+    def test_missing_config_error(self, tmp_path):
+        """Test validation fails with neither config_paths nor config_content."""
+        mounts = [MockMount(path=str(tmp_path), label="test")]
+        validator = JobValidator(mounts=mounts)
+
+        # Create a spec that bypasses __post_init__ validation
+        spec = TrainJobSpec.__new__(TrainJobSpec)
+        spec.config_path = None
+        spec.config_paths = []
+        spec.config_content = None
+        spec.labels_path = None
+        spec.val_labels_path = None
+        spec.max_epochs = None
+        spec.batch_size = None
+        spec.learning_rate = None
+        spec.run_name = None
+        spec.resume_ckpt_path = None
+        spec.path_mappings = {}
+
+        errors = validator.validate_train_spec(spec)
+        config_errors = [e for e in errors if e.field == "config"]
+        assert len(config_errors) == 1
+        assert config_errors[0].code == "MISSING_CONFIG"
+
+    def test_config_content_skips_path_validation(self, tmp_path):
+        """Test that config_content specs don't validate config file paths."""
+        mounts = [MockMount(path=str(tmp_path), label="test")]
+        validator = JobValidator(mounts=mounts)
+
+        # config_content provided, no config_paths - should not get path errors
+        spec = TrainJobSpec(config_content="model_config:\n  backbone: unet\n")
+
+        errors = validator.validate_train_spec(spec)
+        config_path_errors = [
+            e for e in errors if "config_path" in e.field
+        ]
+        assert config_path_errors == []
+
+    def test_config_content_with_invalid_labels_path(self, tmp_path):
+        """Test validation catches invalid labels_path even with config_content."""
+        mounts = [MockMount(path=str(tmp_path), label="test")]
+        validator = JobValidator(mounts=mounts)
+
+        missing_labels = tmp_path / "missing.slp"
+        spec = TrainJobSpec(
+            config_content="model_config:\n  backbone: unet\n",
+            labels_path=str(missing_labels),
+        )
+
+        errors = validator.validate_train_spec(spec)
+        assert len(errors) == 1
+        assert errors[0].field == "labels_path"
+
+    def test_config_content_with_numeric_validation(self, tmp_path):
+        """Test numeric validation still works with config_content specs."""
+        mounts = [MockMount(path=str(tmp_path), label="test")]
+        validator = JobValidator(mounts=mounts)
+
+        spec = TrainJobSpec(
+            config_content="model_config:\n  backbone: unet\n",
+            max_epochs=-1,
+            batch_size=0,
+        )
+
+        errors = validator.validate_train_spec(spec)
+        fields = [e.field for e in errors]
+        assert "max_epochs" in fields
+        assert "batch_size" in fields
+
+
 class TestJobValidatorTrackSpec:
     """Tests for validating TrackJobSpec."""
 

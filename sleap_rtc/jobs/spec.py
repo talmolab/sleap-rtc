@@ -5,7 +5,7 @@ that can be serialized, validated, and converted to sleap-nn commands.
 """
 
 from dataclasses import dataclass, asdict, field
-from typing import Optional, List, Union
+from typing import Dict, Optional, List, Union
 import json
 
 
@@ -16,6 +16,7 @@ class TrainJobSpec:
     Attributes:
         config_path: Full path to config YAML file (for single model training)
         config_paths: List of config paths (for multi-model training like top-down)
+        config_content: Serialized training config (YAML string) sent over datachannel
         labels_path: Override for data_config.train_labels_path
         val_labels_path: Override for data_config.val_labels_path
         max_epochs: Maximum training epochs
@@ -23,16 +24,19 @@ class TrainJobSpec:
         learning_rate: Learning rate for optimizer
         run_name: Name for the training run (used in checkpoint directory)
         resume_ckpt_path: Path to checkpoint for resuming training
+        path_mappings: Maps original client-side paths to resolved worker-side paths
 
     Note:
-        Either config_path or config_paths should be provided, not both.
-        If both are provided, config_paths takes precedence.
-        For top-down training, provide both centroid and centered_instance configs
-        in config_paths - they will be trained sequentially.
+        Either config_path/config_paths or config_content must be provided.
+        If config_content is provided, config_paths is not required (the worker
+        writes config_content to a temp file). For top-down training, provide
+        both centroid and centered_instance configs in config_paths - they will
+        be trained sequentially.
     """
 
     config_path: Optional[str] = None
     config_paths: List[str] = field(default_factory=list)
+    config_content: Optional[str] = None
     labels_path: Optional[str] = None
     val_labels_path: Optional[str] = None
     max_epochs: Optional[int] = None
@@ -40,21 +44,28 @@ class TrainJobSpec:
     learning_rate: Optional[float] = None
     run_name: Optional[str] = None
     resume_ckpt_path: Optional[str] = None
+    path_mappings: Dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self):
         """Normalize config_path/config_paths after initialization."""
         # If config_path is provided but config_paths is empty, use config_path
         if self.config_path and not self.config_paths:
             self.config_paths = [self.config_path]
-        # Ensure we have at least one config
-        if not self.config_paths and not self.config_path:
-            raise ValueError("Must provide either config_path or config_paths")
+        # Ensure we have at least one config source
+        if not self.config_paths and not self.config_path and not self.config_content:
+            raise ValueError(
+                "Must provide either config_path, config_paths, or config_content"
+            )
 
     def to_json(self) -> str:
         """Serialize spec to JSON string."""
         data = {"type": "train", **asdict(self)}
-        # Remove None values and empty lists for cleaner JSON
-        data = {k: v for k, v in data.items() if v is not None and v != []}
+        # Remove None values, empty lists, and empty dicts for cleaner JSON
+        data = {
+            k: v
+            for k, v in data.items()
+            if v is not None and v != [] and v != {}
+        }
         return json.dumps(data)
 
     @classmethod
@@ -66,18 +77,28 @@ class TrainJobSpec:
         # Keep both fields for compatibility when coming from old format
         if "config_path" in parsed and "config_paths" not in parsed:
             parsed["config_paths"] = [parsed["config_path"]]
+        # Filter to only known fields for forward compatibility
+        known_fields = {f.name for f in cls.__dataclass_fields__.values()}
+        parsed = {k: v for k, v in parsed.items() if k in known_fields}
         return cls(**parsed)
 
     def to_dict(self) -> dict:
         """Convert spec to dictionary with type field."""
         data = {"type": "train", **asdict(self)}
-        return {k: v for k, v in data.items() if v is not None and v != []}
+        return {
+            k: v
+            for k, v in data.items()
+            if v is not None and v != [] and v != {}
+        }
 
     @classmethod
     def from_dict(cls, data: dict) -> "TrainJobSpec":
         """Create spec from dictionary."""
         data = dict(data)  # Make a copy
         data.pop("type", None)
+        # Filter to only known fields for forward compatibility
+        known_fields = {f.name for f in cls.__dataclass_fields__.values()}
+        data = {k: v for k, v in data.items() if k in known_fields}
         return cls(**data)
 
 
