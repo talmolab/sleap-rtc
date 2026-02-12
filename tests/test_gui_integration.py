@@ -507,8 +507,8 @@ class TestProgressForwarding:
 
         # Simulate training with progress events
         def simulate_training(*args, **kwargs):
-            # The handler is passed as 'on_progress' to run_training
-            on_progress = kwargs.get("on_progress")
+            # The handler is passed as 'progress_callback' to run_training
+            on_progress = kwargs.get("progress_callback")
             if on_progress:
                 on_progress(ProgressEvent(event_type="train_begin", total_epochs=10))
                 for i in range(1, 11):

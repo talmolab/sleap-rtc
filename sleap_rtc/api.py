@@ -1077,8 +1077,8 @@ class TrainingJob:
 
 
 def run_training(
-    config_path: str,
-    room_id: str,
+    config_path: str | None = None,
+    room_id: str = "",
     worker_id: str | None = None,
     labels_path: str | None = None,
     val_labels_path: str | None = None,
@@ -1089,11 +1089,19 @@ def run_training(
     resume_ckpt_path: str | None = None,
     progress_callback: "Callable[[ProgressEvent], None] | None" = None,
     timeout: float = 86400.0,  # 24 hours default
+    config_content: str | None = None,
+    path_mappings: dict[str, str] | None = None,
+    spec: "TrainJobSpec | None" = None,
 ) -> TrainingResult:
     """Run training remotely on a worker.
 
     Submits a training job to a worker in the specified room and waits
     for completion. Progress events are forwarded to the callback if provided.
+
+    There are two ways to provide the training config:
+    1. ``config_path``: Path to a config YAML file on the shared filesystem.
+    2. ``config_content``: Serialized config YAML string sent over datachannel.
+    3. ``spec``: A pre-built TrainJobSpec (overrides all other spec parameters).
 
     Args:
         config_path: Path to training config YAML file (on worker filesystem).
@@ -1108,6 +1116,11 @@ def run_training(
         resume_ckpt_path: Path to checkpoint to resume from.
         progress_callback: Function called with ProgressEvent for each update.
         timeout: Maximum time to wait for job completion in seconds.
+        config_content: Serialized training config (YAML string) sent over
+            datachannel. Alternative to config_path for GUI integration.
+        path_mappings: Maps original client-side paths to resolved worker paths.
+        spec: A pre-built TrainJobSpec. When provided, config_path,
+            config_content, labels_path, and other spec fields are ignored.
 
     Returns:
         TrainingResult with job outcome and model paths.
@@ -1134,12 +1147,15 @@ def run_training(
             resume_ckpt_path=resume_ckpt_path,
             progress_callback=progress_callback,
             timeout=timeout,
+            config_content=config_content,
+            path_mappings=path_mappings,
+            spec=spec,
         )
     )
 
 
 async def _run_training_async(
-    config_path: str,
+    config_path: str | None,
     room_id: str,
     worker_id: str | None,
     labels_path: str | None,
@@ -1151,6 +1167,9 @@ async def _run_training_async(
     resume_ckpt_path: str | None,
     progress_callback: "Callable[[ProgressEvent], None] | None",
     timeout: float,
+    config_content: str | None = None,
+    path_mappings: dict[str, str] | None = None,
+    spec: "TrainJobSpec | None" = None,
 ) -> TrainingResult:
     """Async implementation of run_training."""
     import json
@@ -1184,17 +1203,32 @@ async def _run_training_async(
     peer_id = f"api-train-{uuid.uuid4().hex[:8]}"
     job_id = str(uuid.uuid4())[:8]
 
-    # Build job spec
-    spec = TrainJobSpec(
-        config_paths=[config_path],
-        labels_path=labels_path,
-        val_labels_path=val_labels_path,
-        max_epochs=max_epochs,
-        batch_size=batch_size,
-        learning_rate=learning_rate,
-        run_name=run_name,
-        resume_ckpt_path=resume_ckpt_path,
-    )
+    # Build job spec (use pre-built spec if provided)
+    if spec is None:
+        if config_content is not None:
+            spec = TrainJobSpec(
+                config_content=config_content,
+                labels_path=labels_path,
+                val_labels_path=val_labels_path,
+                max_epochs=max_epochs,
+                batch_size=batch_size,
+                learning_rate=learning_rate,
+                run_name=run_name,
+                resume_ckpt_path=resume_ckpt_path,
+                path_mappings=path_mappings or {},
+            )
+        else:
+            spec = TrainJobSpec(
+                config_paths=[config_path] if config_path else [],
+                labels_path=labels_path,
+                val_labels_path=val_labels_path,
+                max_epochs=max_epochs,
+                batch_size=batch_size,
+                learning_rate=learning_rate,
+                run_name=run_name,
+                resume_ckpt_path=resume_ckpt_path,
+                path_mappings=path_mappings or {},
+            )
 
     # Response handling
     import asyncio

@@ -18,6 +18,7 @@ from loguru import logger
 
 if TYPE_CHECKING:
     from sleap_rtc.api import ProgressEvent, TrainingResult
+    from sleap_rtc.jobs.spec import TrainJobSpec
 
 
 class RemoteProgressBridge:
@@ -163,18 +164,25 @@ class RemoteProgressBridge:
 
 
 def run_remote_training(
-    config_path: str,
-    room_id: str,
+    config_path: str | None = None,
+    room_id: str = "",
     worker_id: str | None = None,
     publish_port: int = 9001,
     on_progress: Callable[["ProgressEvent"], None] | None = None,
     timeout: int | None = None,
+    config_content: str | None = None,
+    path_mappings: dict[str, str] | None = None,
+    spec: "TrainJobSpec | None" = None,
 ) -> "TrainingResult":
     """Run remote training with progress forwarding to ZMQ.
 
     This is the main entry point for SLEAP GUI integration. It submits a
     training job to a remote worker and forwards progress events to a local
     ZMQ socket for LossViewer to consume.
+
+    There are two ways to specify the job:
+    1. Pass a pre-built ``spec`` (TrainJobSpec) — preferred for GUI integration.
+    2. Pass individual parameters (``config_path`` or ``config_content``, etc.).
 
     Args:
         config_path: Path to the training configuration file.
@@ -183,6 +191,11 @@ def run_remote_training(
         publish_port: ZMQ port for LossViewer progress (default: 9001).
         on_progress: Optional callback for progress events (in addition to ZMQ).
         timeout: Optional timeout in seconds.
+        config_content: Serialized training config (YAML string) sent over
+            datachannel. Alternative to config_path for GUI integration.
+        path_mappings: Maps original client-side paths to resolved worker paths.
+        spec: A pre-built TrainJobSpec. When provided, config_path,
+            config_content, and other spec fields are ignored.
 
     Returns:
         TrainingResult with model paths and final status.
@@ -193,11 +206,16 @@ def run_remote_training(
         JobError: If training fails.
 
     Example:
-        # From SLEAP GUI
+        # From SLEAP GUI with pre-built spec
+        spec = TrainJobSpec(
+            config_content=yaml_string,
+            labels_path="/mnt/data/labels.slp",
+            path_mappings=resolved_mappings,
+        )
         result = run_remote_training(
-            config_path="/path/to/config.json",
+            spec=spec,
             room_id="my-room",
-            publish_port=9001,  # LossViewer listens here
+            publish_port=9001,
         )
         print(f"Model saved to: {result.model_path}")
     """
@@ -218,8 +236,11 @@ def run_remote_training(
             config_path=config_path,
             room_id=room_id,
             worker_id=worker_id,
-            on_progress=progress_handler,
+            progress_callback=progress_handler,
             timeout=timeout,
+            config_content=config_content,
+            path_mappings=path_mappings,
+            spec=spec,
         )
 
     return result

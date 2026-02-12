@@ -305,7 +305,7 @@ class TestRunRemoteTraining:
 
         # Make run_training call the progress handler DURING execution
         def simulate_training(*args, **kwargs):
-            on_progress = kwargs.get("on_progress")
+            on_progress = kwargs.get("progress_callback")
             if on_progress:
                 # Simulate progress events during training
                 on_progress(ProgressEvent(event_type="train_begin"))
@@ -338,7 +338,7 @@ class TestRunRemoteTraining:
 
         # Make run_training call the progress handler DURING execution
         def simulate_training(*args, **kwargs):
-            on_progress = kwargs.get("on_progress")
+            on_progress = kwargs.get("progress_callback")
             if on_progress:
                 on_progress(ProgressEvent(event_type="train_begin"))
             return MagicMock()

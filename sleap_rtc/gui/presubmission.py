@@ -40,10 +40,11 @@ class PresubmissionResult:
 
 
 def run_presubmission_checks(
-    config_path: str,
     slp_path: str,
     room_id: str,
     worker_id: str | None = None,
+    config_path: str | None = None,
+    config_content: str | None = None,
     parent_widget=None,
     on_login_required: Callable[[], bool] | None = None,
 ) -> PresubmissionResult:
@@ -52,13 +53,17 @@ def run_presubmission_checks(
     This function orchestrates the validation flow:
     1. Check authentication - if not logged in, call on_login_required callback
     2. Validate config - show ConfigValidationDialog if errors/warnings
+       (skipped when config_content is provided, since config was built in-memory)
     3. Check video paths - show PathResolutionDialog if paths need resolution
 
     Args:
-        config_path: Path to the training configuration file.
         slp_path: Path to the SLP file (for video path checking).
         room_id: The room ID to use for path checking.
         worker_id: Optional specific worker ID.
+        config_path: Path to the training configuration file.
+        config_content: Serialized config YAML string (alternative to
+            config_path). When provided, config validation is skipped since
+            the config was built from the dialog form.
         parent_widget: Parent Qt widget for dialogs.
         on_login_required: Callback called when login is required.
             Should return True if login succeeded, False otherwise.
@@ -69,25 +74,34 @@ def run_presubmission_checks(
 
     Example:
         result = run_presubmission_checks(
-            config_path="/path/to/config.yaml",
             slp_path="/path/to/labels.slp",
             room_id="my-room",
+            config_content=yaml_string,
             parent_widget=self,
             on_login_required=self._handle_login,
         )
         if result.success:
-            # Proceed with training
-            run_remote_training(...)
+            spec = TrainJobSpec(
+                config_content=yaml_string,
+                labels_path=slp_path,
+                path_mappings=result.path_mappings,
+            )
+            run_remote_training(spec=spec, room_id=room_id)
     """
     # Step 1: Check authentication
     auth_result = check_authentication(on_login_required)
     if not auth_result.success:
         return auth_result
 
-    # Step 2: Validate config
-    config_result = check_config_validation(config_path, parent_widget)
-    if not config_result.success:
-        return config_result
+    # Step 2: Validate config (skipped when config_content is provided,
+    # since the config was built from the dialog form and doesn't need
+    # file-based validation)
+    if config_path and not config_content:
+        config_result = check_config_validation(config_path, parent_widget)
+        if not config_result.success:
+            return config_result
+    else:
+        config_result = PresubmissionResult(success=True)
 
     # Step 3: Check video paths
     path_result = check_video_paths(
@@ -361,20 +375,24 @@ class PresubmissionFlow:
 
     def __init__(
         self,
-        config_path: str,
         slp_path: str,
         room_id: str,
         worker_id: str | None = None,
+        config_path: str | None = None,
+        config_content: str | None = None,
     ):
         """Initialize the pre-submission flow.
 
         Args:
-            config_path: Path to the training configuration file.
             slp_path: Path to the SLP file (for video path checking).
             room_id: The room ID to use for path checking.
             worker_id: Optional specific worker ID.
+            config_path: Path to the training configuration file.
+            config_content: Serialized config YAML string (alternative to
+                config_path).
         """
         self.config_path = config_path
+        self.config_content = config_content
         self.slp_path = slp_path
         self.room_id = room_id
         self.worker_id = worker_id
@@ -399,10 +417,11 @@ class PresubmissionFlow:
             True if all checks passed and training can proceed.
         """
         self.result = run_presubmission_checks(
-            config_path=self.config_path,
             slp_path=self.slp_path,
             room_id=self.room_id,
             worker_id=self.worker_id,
+            config_path=self.config_path,
+            config_content=self.config_content,
             parent_widget=parent,
             on_login_required=self.on_auth_required,
         )
