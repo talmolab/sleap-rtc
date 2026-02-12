@@ -95,6 +95,29 @@ def clear_credentials() -> None:
         logger.debug("No credentials to clear")
 
 
+def clear_jwt() -> None:
+    """Clear only JWT and user info, keeping room secrets and tokens.
+
+    This is useful for logging out while preserving room access credentials.
+    """
+    creds = get_credentials()
+    if not creds:
+        logger.debug("No credentials to clear")
+        return
+
+    # Remove JWT and user, keep everything else
+    creds.pop("jwt", None)
+    creds.pop("user", None)
+
+    if creds:
+        # Still have other credentials (room secrets, tokens)
+        save_credentials(creds)
+        logger.info("JWT cleared, other credentials preserved")
+    else:
+        # Nothing left, remove the file
+        clear_credentials()
+
+
 def get_jwt() -> Optional[str]:
     """Get the stored JWT token.
 
