@@ -191,6 +191,8 @@ class RemoteProgressBridge:
 
         # Synthesize epoch_begin before epoch_end so LossViewer tracks
         # the epoch number (it only reads epoch from epoch_begin messages).
+        # Subtract 1 to convert from 1-indexed (sleap-nn text output) to
+        # 0-indexed (LossViewer internal convention).
         if (
             event.event_type == "epoch_end"
             and event.epoch is not None
@@ -201,7 +203,7 @@ class RemoteProgressBridge:
                 {
                     "event": "epoch_begin",
                     "what": self._model_type,
-                    "epoch": event.epoch,
+                    "epoch": max(0, event.epoch - 1),
                 }
             )
 

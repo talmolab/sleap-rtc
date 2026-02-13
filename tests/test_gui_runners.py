@@ -336,9 +336,9 @@ class TestLossViewerMessageFormat:
 
         messages = _decode_all_zmq_messages(mock_socket)
         assert len(messages) == 2
-        # First message: synthesized epoch_begin
+        # First message: synthesized epoch_begin (0-indexed: 3 → 2)
         assert messages[0]["event"] == "epoch_begin"
-        assert messages[0]["epoch"] == 3
+        assert messages[0]["epoch"] == 2
         assert messages[0]["what"] == "centroid"
         # Second message: the actual epoch_end
         assert messages[1]["event"] == "epoch_end"
