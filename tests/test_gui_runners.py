@@ -323,6 +323,67 @@ class TestLossViewerMessageFormat:
         assert messages[0]["what"] == "centroid"
         assert messages[1]["what"] == "centered_instance"
 
+    def test_epoch_begin_synthesized_for_epoch_end(self, mock_zmq):
+        """epoch_end should auto-emit epoch_begin so LossViewer tracks epoch."""
+        mock_socket = _setup_zmq_mocks(mock_zmq)
+
+        event = ProgressEvent(
+            event_type="epoch_end", epoch=3, train_loss=0.1, val_loss=0.2
+        )
+
+        with RemoteProgressBridge(model_type="centroid") as bridge:
+            bridge.on_progress(event)
+
+        messages = _decode_all_zmq_messages(mock_socket)
+        assert len(messages) == 2
+        # First message: synthesized epoch_begin
+        assert messages[0]["event"] == "epoch_begin"
+        assert messages[0]["epoch"] == 3
+        assert messages[0]["what"] == "centroid"
+        # Second message: the actual epoch_end
+        assert messages[1]["event"] == "epoch_end"
+        assert messages[1]["logs"]["train/loss"] == 0.1
+
+    def test_epoch_begin_not_duplicated(self, mock_zmq):
+        """Explicit epoch_begin prevents duplicate synthesis."""
+        mock_socket = _setup_zmq_mocks(mock_zmq)
+
+        with RemoteProgressBridge(model_type="centroid") as bridge:
+            # Explicit epoch_begin
+            bridge.on_progress(ProgressEvent(event_type="epoch_begin", epoch=1))
+            # epoch_end for same epoch — should NOT synthesize another epoch_begin
+            bridge.on_progress(
+                ProgressEvent(event_type="epoch_end", epoch=1, train_loss=0.5)
+            )
+
+        messages = _decode_all_zmq_messages(mock_socket)
+        assert len(messages) == 2
+        assert messages[0]["event"] == "epoch_begin"
+        assert messages[1]["event"] == "epoch_end"
+
+    def test_epoch_begin_only_on_new_epoch(self, mock_zmq):
+        """Multiple epoch_end with same epoch should only synthesize once."""
+        mock_socket = _setup_zmq_mocks(mock_zmq)
+
+        with RemoteProgressBridge() as bridge:
+            bridge.on_progress(
+                ProgressEvent(event_type="epoch_end", epoch=1, train_loss=0.5)
+            )
+            bridge.on_progress(
+                ProgressEvent(event_type="epoch_end", epoch=1, train_loss=0.4)
+            )
+            bridge.on_progress(
+                ProgressEvent(event_type="epoch_end", epoch=2, train_loss=0.3)
+            )
+
+        messages = _decode_all_zmq_messages(mock_socket)
+        events = [m["event"] for m in messages]
+        # epoch_begin(1), epoch_end, epoch_end, epoch_begin(2), epoch_end
+        assert events == [
+            "epoch_begin", "epoch_end", "epoch_end",
+            "epoch_begin", "epoch_end",
+        ]
+
     def test_unknown_event_type(self, mock_zmq):
         """Unknown event types should be silently dropped."""
         mock_socket = _setup_zmq_mocks(mock_zmq)
@@ -481,7 +542,8 @@ class TestRunRemoteTraining:
             room_id="test-room",
         )
 
-        assert mock_socket.send_string.call_count == 3
+        # 4 messages: train_begin, synthesized epoch_begin, epoch_end, train_end
+        assert mock_socket.send_string.call_count == 4
 
     @patch("sleap_rtc.api.run_training")
     def test_custom_callback_called(self, mock_run_training, mock_zmq):

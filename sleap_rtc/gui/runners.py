@@ -70,6 +70,7 @@ class RemoteProgressBridge:
         self._send_fn: Callable[[str], None] | None = None
         self._poll_thread: threading.Thread | None = None
         self._stop_event = threading.Event()
+        self._last_epoch: int | None = None
 
     def set_model_type(self, model_type: str):
         """Update the model type for subsequent messages.
@@ -183,6 +184,26 @@ class RemoteProgressBridge:
         if not self._started or not self._socket:
             logger.warning("Progress bridge not started, dropping event")
             return
+
+        # Track explicit epoch_begin events to avoid duplicate synthesis.
+        if event.event_type == "epoch_begin" and event.epoch is not None:
+            self._last_epoch = event.epoch
+
+        # Synthesize epoch_begin before epoch_end so LossViewer tracks
+        # the epoch number (it only reads epoch from epoch_begin messages).
+        if (
+            event.event_type == "epoch_end"
+            and event.epoch is not None
+            and event.epoch != self._last_epoch
+        ):
+            self._last_epoch = event.epoch
+            self._publish(
+                {
+                    "event": "epoch_begin",
+                    "what": self._model_type,
+                    "epoch": event.epoch,
+                }
+            )
 
         message = self._format_message(event)
         if message:

@@ -607,8 +607,10 @@ class JobExecutor:
                 """Stream logs and extract progress information."""
                 buf = b""
                 epoch_pattern = re.compile(r"Epoch\s+(\d+)")
-                loss_pattern = re.compile(r"loss[:\s]+([0-9.]+)")
-                val_loss_pattern = re.compile(r"val_loss[:\s]+([0-9.]+)")
+                # Match loss=, loss:, loss  (but not val/loss= or val_loss=)
+                loss_pattern = re.compile(r"(?<![/\w])loss[=:\s]+([0-9.]+)")
+                # Match val/loss= or val_loss= or val_loss: etc.
+                val_loss_pattern = re.compile(r"val[/_]loss[=:\s]+([0-9.]+)")
 
                 current_epoch = 0
                 current_loss = None
