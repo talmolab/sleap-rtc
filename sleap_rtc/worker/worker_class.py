@@ -68,6 +68,9 @@ from sleap_rtc.protocol import (
     MSG_JOB_PROGRESS,
     MSG_JOB_COMPLETE,
     MSG_JOB_FAILED,
+    # Job control
+    MSG_JOB_STOP,
+    MSG_JOB_CANCEL,
 )
 from sleap_rtc.jobs import (
     TrainJobSpec,
@@ -2311,6 +2314,16 @@ class RTCWorkerClient:
                 if message.startswith(MSG_JOB_SUBMIT):
                     logging.info(f"Handling job submit message")
                     await self.handle_job_submit(channel, message)
+                    return
+
+                # Handle job stop/cancel commands
+                if message == MSG_JOB_STOP:
+                    logging.info("Received JOB_STOP — sending SIGINT to process")
+                    self.job_executor.stop_running_job()
+                    return
+                if message == MSG_JOB_CANCEL:
+                    logging.info("Received JOB_CANCEL — sending SIGTERM to process")
+                    self.job_executor.cancel_running_job()
                     return
 
                 # Detect package type (track or train)

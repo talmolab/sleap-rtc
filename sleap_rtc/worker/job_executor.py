@@ -8,6 +8,7 @@ import asyncio
 import logging
 import os
 import re
+import signal
 import shutil
 import stat
 import time
@@ -56,6 +57,24 @@ class JobExecutor:
         self.unzipped_dir = ""
         self.output_dir = ""
         self.package_type = "train"  # Default to training
+        self._running_process: asyncio.subprocess.Process | None = None
+
+    def stop_running_job(self):
+        """Send SIGINT to the running job process for graceful stop.
+
+        This allows sleap-nn to save the current checkpoint before exiting.
+        """
+        proc = self._running_process
+        if proc is not None and proc.returncode is None:
+            logging.info(f"Sending SIGINT to process {proc.pid} (graceful stop)")
+            proc.send_signal(signal.SIGINT)
+
+    def cancel_running_job(self):
+        """Send SIGTERM to the running job process for immediate cancellation."""
+        proc = self._running_process
+        if proc is not None and proc.returncode is None:
+            logging.info(f"Sending SIGTERM to process {proc.pid} (hard cancel)")
+            proc.terminate()
 
     def parse_training_script(self, train_script_path: str):
         """Parse train-script.sh and extract sleap-nn train commands.
@@ -579,6 +598,7 @@ class JobExecutor:
                 cwd=working_dir,
                 env={**os.environ, "PYTHONUNBUFFERED": "1"},
             )
+            self._running_process = process
 
             logging.info(f"[JOB {job_id}] Process started with PID: {process.pid}")
 
@@ -672,37 +692,53 @@ class JobExecutor:
 
             await stream_logs_with_progress()
             await process.wait()
+            self._running_process = None
 
             duration_seconds = int(time.time() - start_time)
             logging.info(
                 f"[JOB {job_id}] Process completed with return code: {process.returncode}"
             )
 
-            if process.returncode == 0:
-                # Job completed successfully
+            # SIGINT (-2) means graceful stop via "Stop Early" — treat as success
+            stopped_early = process.returncode == -signal.SIGINT
+
+            if process.returncode == 0 or stopped_early:
+                # Job completed successfully (or stopped early with checkpoint)
                 import json
                 result_data = {
                     "job_id": job_id,
                     "job_type": job_type,
                     "duration_seconds": duration_seconds,
                     "success": True,
+                    "stopped_early": stopped_early,
                 }
                 if channel.readyState == "open":
                     channel.send(f"{MSG_JOB_COMPLETE}{MSG_SEPARATOR}{json.dumps(result_data)}")
-                logging.info(f"[JOB {job_id}] Job completed successfully")
+                if stopped_early:
+                    logging.info(f"[JOB {job_id}] Job stopped early (checkpoint saved)")
+                else:
+                    logging.info(f"[JOB {job_id}] Job completed successfully")
             else:
-                # Job failed
+                # Job failed or was cancelled
                 import json
+                cancelled = process.returncode == -signal.SIGTERM
                 error_data = {
                     "job_id": job_id,
                     "job_type": job_type,
                     "exit_code": process.returncode,
                     "duration_seconds": duration_seconds,
-                    "message": f"Process exited with code {process.returncode}",
+                    "message": (
+                        "Job cancelled by user"
+                        if cancelled
+                        else f"Process exited with code {process.returncode}"
+                    ),
                 }
                 if channel.readyState == "open":
                     channel.send(f"{MSG_JOB_FAILED}{MSG_SEPARATOR}{json.dumps(error_data)}")
-                logging.error(f"[JOB {job_id}] Job failed with exit code {process.returncode}")
+                if cancelled:
+                    logging.info(f"[JOB {job_id}] Job cancelled by user")
+                else:
+                    logging.error(f"[JOB {job_id}] Job failed with exit code {process.returncode}")
 
         except Exception as e:
             # Unexpected error
