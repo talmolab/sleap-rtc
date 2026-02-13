@@ -344,10 +344,11 @@ class TestCheckVideoPaths:
         assert result.success is True
         assert result.path_mappings == {}
 
-    @patch("sleap_rtc.gui.widgets.PathResolutionDialog")
     @patch("sleap_rtc.api.check_video_paths")
-    def test_missing_paths_user_resolves(self, mock_check, mock_dialog_class):
-        """Should succeed when user resolves missing paths."""
+    def test_missing_paths_user_resolves(self, mock_check):
+        """Should succeed when user resolves missing paths via on_videos_missing."""
+        # Video resolution now happens inside the API callback, so the
+        # PathCheckResult comes back with path_mappings already populated.
         mock_check.return_value = PathCheckResult(
             all_found=False,
             total_videos=1,
@@ -361,14 +362,8 @@ class TestCheckVideoPaths:
                 ),
             ],
             slp_path="/data/labels.slp",
+            path_mappings={"/local/video.mp4": "/worker/video.mp4"},
         )
-
-        mock_dialog = MagicMock()
-        mock_dialog.exec.return_value = True  # User resolved paths
-        mock_dialog.get_resolved_paths.return_value = {
-            "/local/video.mp4": "/worker/video.mp4"
-        }
-        mock_dialog_class.return_value = mock_dialog
 
         parent = MagicMock()
         result = check_video_paths("/data/labels.slp", "test-room", parent_widget=parent)
@@ -376,28 +371,16 @@ class TestCheckVideoPaths:
         assert result.success is True
         assert result.path_mappings == {"/local/video.mp4": "/worker/video.mp4"}
 
-    @patch("sleap_rtc.gui.widgets.PathResolutionDialog")
     @patch("sleap_rtc.api.check_video_paths")
-    def test_missing_paths_user_cancels(self, mock_check, mock_dialog_class):
+    def test_missing_paths_user_cancels(self, mock_check):
         """Should fail with cancelled=True when user cancels path resolution."""
-        mock_check.return_value = PathCheckResult(
-            all_found=False,
-            total_videos=1,
-            found_count=0,
-            missing_count=1,
-            videos=[
-                VideoPathStatus(
-                    filename="video.mp4",
-                    original_path="/local/video.mp4",
-                    found=False,
-                ),
-            ],
-            slp_path="/data/labels.slp",
-        )
+        from sleap_rtc.api import ConfigurationError
 
-        mock_dialog = MagicMock()
-        mock_dialog.exec.return_value = False  # User cancelled
-        mock_dialog_class.return_value = mock_dialog
+        # When user cancels, the on_videos_missing callback returns None,
+        # causing the API to raise ConfigurationError.
+        mock_check.side_effect = ConfigurationError(
+            "Video path resolution cancelled by user."
+        )
 
         parent = MagicMock()
         result = check_video_paths("/data/labels.slp", "test-room", parent_widget=parent)
@@ -663,11 +646,17 @@ class TestSendFnThreading:
         mock_dialog_cls.return_value = mock_dialog
 
         # Simulate path rejection: on_path_rejected callback is called
+        # with (path, error, send_fn_dc) — the third arg is the thread-safe
+        # data channel send wrapper.
+        mock_dc_send = MagicMock()
+
         def check_side_effect(*args, **kwargs):
             on_rejected = kwargs.get("on_path_rejected")
             if on_rejected:
                 # Simulate worker rejecting the path
-                corrected = on_rejected("/data/labels.slp", "File not found")
+                corrected = on_rejected(
+                    "/data/labels.slp", "File not found", mock_dc_send
+                )
                 if corrected:
                     return PathCheckResult(
                         all_found=True,
@@ -696,10 +685,10 @@ class TestSendFnThreading:
             send_fn=send_fn,
         )
 
-        # Verify SlpPathDialog was created with send_fn
+        # Verify SlpPathDialog was created with the data channel's send_fn
         mock_dialog_cls.assert_called_once()
         call_kwargs = mock_dialog_cls.call_args[1]
-        assert call_kwargs.get("send_fn") == send_fn
+        assert call_kwargs.get("send_fn") == mock_dc_send
         assert result.success is True
 
     @patch("sleap_rtc.gui.widgets.PathResolutionDialog")
@@ -708,42 +697,61 @@ class TestSendFnThreading:
     def test_send_fn_passed_to_path_resolution_dialog(
         self, mock_logged_in, mock_check, mock_dialog_cls
     ):
-        """send_fn should be passed to PathResolutionDialog for missing paths."""
+        """send_fn should be passed to PathResolutionDialog via on_videos_missing."""
         mock_logged_in.return_value = True
-        send_fn = MagicMock()
 
-        mock_check.return_value = PathCheckResult(
-            all_found=False,
-            total_videos=1,
-            found_count=0,
-            missing_count=1,
-            videos=[
-                VideoPathStatus(
-                    filename="video.mp4",
-                    original_path="/local/video.mp4",
-                    found=False,
-                ),
-            ],
-            slp_path="/data/labels.slp",
-        )
-
+        # Configure the mock dialog
         mock_dialog = MagicMock()
         mock_dialog.exec.return_value = True
+        mock_dialog._browser = None
         mock_dialog.get_resolved_paths.return_value = {
             "/local/video.mp4": "/mnt/data/video.mp4"
         }
         mock_dialog_cls.return_value = mock_dialog
+
+        # Simulate on_videos_missing being called with a send_fn_dc
+        mock_dc_send = MagicMock()
+        missing_videos = [
+            VideoPathStatus(
+                filename="video.mp4",
+                original_path="/local/video.mp4",
+                found=False,
+            ),
+        ]
+
+        def check_side_effect(*args, **kwargs):
+            on_videos_missing = kwargs.get("on_videos_missing")
+            if on_videos_missing:
+                resolved = on_videos_missing(missing_videos, mock_dc_send)
+                return PathCheckResult(
+                    all_found=False,
+                    total_videos=1,
+                    found_count=0,
+                    missing_count=1,
+                    videos=missing_videos,
+                    slp_path="/data/labels.slp",
+                    path_mappings=resolved or {},
+                )
+            return PathCheckResult(
+                all_found=False,
+                total_videos=1,
+                found_count=0,
+                missing_count=1,
+                videos=missing_videos,
+                slp_path="/data/labels.slp",
+            )
+
+        mock_check.side_effect = check_side_effect
 
         parent = MagicMock()
         result = run_presubmission_checks(
             slp_path="/data/labels.slp",
             room_id="test-room",
             parent_widget=parent,
-            send_fn=send_fn,
         )
 
-        # Verify PathResolutionDialog was created with send_fn
+        # Verify PathResolutionDialog was created with the data channel send_fn
         mock_dialog_cls.assert_called_once()
         call_args = mock_dialog_cls.call_args
-        assert call_args[1].get("send_fn") == send_fn
+        assert call_args[1].get("send_fn") == mock_dc_send
         assert result.success is True

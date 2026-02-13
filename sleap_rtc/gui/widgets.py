@@ -914,7 +914,7 @@ class PathResolutionDialog(QDialog):
     ):
         super().__init__(parent)
         self.setWindowTitle("Video Path Resolution Required")
-        self.setMinimumSize(700, 400)
+        self.setMinimumSize(700, 700)
         self._path_results = path_results
         self._resolved_paths: dict[str, str] = {}
         self._path_widgets: dict[str, QLineEdit] = {}
@@ -973,11 +973,12 @@ class PathResolutionDialog(QDialog):
             )
             self._browser.file_selected.connect(self._on_browser_file_selected)
             self._browser.setVisible(False)
-            self._browser.setMinimumHeight(250)
+            self._browser.setFixedHeight(300)
             layout.addWidget(self._browser)
 
-        # Status label
+        # Status label — add top margin to separate from the browser panel
         self._status_label = QLabel("")
+        self._status_label.setContentsMargins(0, 8, 0, 0)
         layout.addWidget(self._status_label)
 
         # Button row
@@ -1002,24 +1003,28 @@ class PathResolutionDialog(QDialog):
         self._table.setRowCount(len(self._path_results))
 
         for row, video in enumerate(self._path_results):
-            # Video filename
+            # Video filename (read-only)
             name_item = QTableWidgetItem(video.filename)
             name_item.setToolTip(video.original_path)
+            name_item.setFlags(name_item.flags() & ~Qt.ItemIsEditable)
             self._table.setItem(row, 0, name_item)
 
-            # Status
+            # Status (read-only)
             if video.found:
                 status_item = QTableWidgetItem("✓ Found")
                 status_item.setForeground(Qt.darkGreen)
+                status_item.setFlags(status_item.flags() & ~Qt.ItemIsEditable)
                 self._table.setItem(row, 1, status_item)
 
                 # Worker path (read-only for found videos)
                 path_item = QTableWidgetItem(video.worker_path or "")
                 path_item.setToolTip(video.worker_path or "")
+                path_item.setFlags(path_item.flags() & ~Qt.ItemIsEditable)
                 self._table.setItem(row, 2, path_item)
             else:
                 status_item = QTableWidgetItem("✗ Missing")
                 status_item.setForeground(Qt.red)
+                status_item.setFlags(status_item.flags() & ~Qt.ItemIsEditable)
                 self._table.setItem(row, 1, status_item)
 
                 # Create editable path widget for missing videos
@@ -1517,7 +1522,9 @@ class RemoteFileBrowser(QWidget):
         # Main area: columns + preview
         self._splitter = QSplitter(Qt.Orientation.Horizontal, self)
 
-        # Column scroll area (holds mount selector + directory columns)
+        # Column scroll area (holds mount selector + directory columns).
+        # Horizontal scrolling navigates columns; each QListWidget column
+        # handles its own vertical scrolling internally.
         self._column_scroll = QScrollArea()
         self._column_scroll.setWidgetResizable(True)
         self._column_scroll.setHorizontalScrollBarPolicy(
