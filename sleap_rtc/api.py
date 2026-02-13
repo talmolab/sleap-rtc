@@ -195,6 +195,9 @@ class ProgressEvent:
         wandb_url: WandB run URL (for train_begin events).
         error_message: Error message (for train_end with failure).
         success: Whether training succeeded (for train_end events).
+        model_type: Model type string for LossViewer filtering (e.g.,
+            "centroid", "centered_instance"). Used by RemoteProgressBridge
+            to set the ``what`` field in ZMQ messages.
     """
 
     event_type: str  # "train_begin", "epoch_end", "train_end"
@@ -206,6 +209,7 @@ class ProgressEvent:
     wandb_url: str | None = None
     error_message: str | None = None
     success: bool | None = None
+    model_type: str | None = None
 
 
 @dataclass
@@ -1218,6 +1222,7 @@ def run_training(
     config_content: str | None = None,
     path_mappings: dict[str, str] | None = None,
     spec: "TrainJobSpec | None" = None,
+    model_type: str = "",
 ) -> TrainingResult:
     """Run training remotely on a worker.
 
@@ -1247,6 +1252,9 @@ def run_training(
         path_mappings: Maps original client-side paths to resolved worker paths.
         spec: A pre-built TrainJobSpec. When provided, config_path,
             config_content, labels_path, and other spec fields are ignored.
+        model_type: Model type string for LossViewer filtering (e.g.,
+            "centroid", "centered_instance"). Included in all ProgressEvent
+            objects emitted to the progress_callback.
 
     Returns:
         TrainingResult with job outcome and model paths.
@@ -1276,6 +1284,7 @@ def run_training(
             config_content=config_content,
             path_mappings=path_mappings,
             spec=spec,
+            model_type=model_type,
         )
     )
 
@@ -1296,6 +1305,7 @@ async def _run_training_async(
     config_content: str | None = None,
     path_mappings: dict[str, str] | None = None,
     spec: "TrainJobSpec | None" = None,
+    model_type: str = "",
 ) -> TrainingResult:
     """Async implementation of run_training."""
     import json
@@ -1468,7 +1478,12 @@ async def _run_training_async(
 
             # Notify train_begin
             if progress_callback:
-                progress_callback(ProgressEvent(event_type="train_begin"))
+                progress_callback(
+                    ProgressEvent(
+                        event_type="train_begin",
+                        model_type=model_type or None,
+                    )
+                )
 
             # Submit job
             spec_json = spec.to_json()
@@ -1535,6 +1550,7 @@ async def _run_training_async(
                                     epoch=epoch,
                                     train_loss=train_loss,
                                     val_loss=val_loss,
+                                    model_type=model_type or None,
                                 )
                             )
                     except json.JSONDecodeError:
@@ -1566,7 +1582,11 @@ async def _run_training_async(
 
                     if progress_callback:
                         progress_callback(
-                            ProgressEvent(event_type="train_end", success=True)
+                            ProgressEvent(
+                                event_type="train_end",
+                                success=True,
+                                model_type=model_type or None,
+                            )
                         )
                     break
 
@@ -1589,6 +1609,7 @@ async def _run_training_async(
                                 event_type="train_end",
                                 success=False,
                                 error_message=error_msg,
+                                model_type=model_type or None,
                             )
                         )
 
