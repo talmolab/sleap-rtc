@@ -613,3 +613,137 @@ class TestPresubmissionFlow:
         call_kwargs = mock_checks.call_args[1]
         assert call_kwargs["on_login_required"] == auth_callback
         assert call_kwargs["parent_widget"] == parent
+
+
+# =============================================================================
+# send_fn Threading Tests
+# =============================================================================
+
+
+class TestSendFnThreading:
+    """Tests for send_fn parameter threading through presubmission flow."""
+
+    @patch("sleap_rtc.api.check_video_paths")
+    @patch("sleap_rtc.api.is_logged_in")
+    def test_send_fn_passed_to_check_video_paths(self, mock_logged_in, mock_check):
+        """send_fn should be passed through run_presubmission_checks."""
+        mock_logged_in.return_value = True
+        mock_check.return_value = PathCheckResult(
+            all_found=True,
+            total_videos=0,
+            found_count=0,
+            missing_count=0,
+            videos=[],
+            slp_path="/data/labels.slp",
+        )
+
+        send_fn = MagicMock()
+        result = run_presubmission_checks(
+            slp_path="/data/labels.slp",
+            room_id="test-room",
+            send_fn=send_fn,
+        )
+
+        assert result.success is True
+
+    @patch("sleap_rtc.gui.widgets.SlpPathDialog")
+    @patch("sleap_rtc.api.check_video_paths")
+    @patch("sleap_rtc.api.is_logged_in")
+    def test_send_fn_passed_to_slp_dialog(
+        self, mock_logged_in, mock_check, mock_dialog_cls
+    ):
+        """send_fn should be passed to SlpPathDialog when path is rejected."""
+        mock_logged_in.return_value = True
+        send_fn = MagicMock()
+
+        # Configure the mock dialog
+        mock_dialog = MagicMock()
+        mock_dialog.exec.return_value = True
+        mock_dialog.get_worker_path.return_value = "/corrected/labels.slp"
+        mock_dialog_cls.return_value = mock_dialog
+
+        # Simulate path rejection: on_path_rejected callback is called
+        def check_side_effect(*args, **kwargs):
+            on_rejected = kwargs.get("on_path_rejected")
+            if on_rejected:
+                # Simulate worker rejecting the path
+                corrected = on_rejected("/data/labels.slp", "File not found")
+                if corrected:
+                    return PathCheckResult(
+                        all_found=True,
+                        total_videos=0,
+                        found_count=0,
+                        missing_count=0,
+                        videos=[],
+                        slp_path=corrected,
+                    )
+            return PathCheckResult(
+                all_found=True,
+                total_videos=0,
+                found_count=0,
+                missing_count=0,
+                videos=[],
+                slp_path="/data/labels.slp",
+            )
+
+        mock_check.side_effect = check_side_effect
+
+        parent = MagicMock()
+        result = run_presubmission_checks(
+            slp_path="/data/labels.slp",
+            room_id="test-room",
+            parent_widget=parent,
+            send_fn=send_fn,
+        )
+
+        # Verify SlpPathDialog was created with send_fn
+        mock_dialog_cls.assert_called_once()
+        call_kwargs = mock_dialog_cls.call_args[1]
+        assert call_kwargs.get("send_fn") == send_fn
+        assert result.success is True
+
+    @patch("sleap_rtc.gui.widgets.PathResolutionDialog")
+    @patch("sleap_rtc.api.check_video_paths")
+    @patch("sleap_rtc.api.is_logged_in")
+    def test_send_fn_passed_to_path_resolution_dialog(
+        self, mock_logged_in, mock_check, mock_dialog_cls
+    ):
+        """send_fn should be passed to PathResolutionDialog for missing paths."""
+        mock_logged_in.return_value = True
+        send_fn = MagicMock()
+
+        mock_check.return_value = PathCheckResult(
+            all_found=False,
+            total_videos=1,
+            found_count=0,
+            missing_count=1,
+            videos=[
+                VideoPathStatus(
+                    filename="video.mp4",
+                    original_path="/local/video.mp4",
+                    found=False,
+                ),
+            ],
+            slp_path="/data/labels.slp",
+        )
+
+        mock_dialog = MagicMock()
+        mock_dialog.exec.return_value = True
+        mock_dialog.get_resolved_paths.return_value = {
+            "/local/video.mp4": "/mnt/data/video.mp4"
+        }
+        mock_dialog_cls.return_value = mock_dialog
+
+        parent = MagicMock()
+        result = run_presubmission_checks(
+            slp_path="/data/labels.slp",
+            room_id="test-room",
+            parent_widget=parent,
+            send_fn=send_fn,
+        )
+
+        # Verify PathResolutionDialog was created with send_fn
+        mock_dialog_cls.assert_called_once()
+        call_args = mock_dialog_cls.call_args
+        assert call_args[1].get("send_fn") == send_fn
+        assert result.success is True

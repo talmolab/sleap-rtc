@@ -47,6 +47,7 @@ def run_presubmission_checks(
     config_content: str | None = None,
     parent_widget=None,
     on_login_required: Callable[[], bool] | None = None,
+    send_fn: "Callable[[str], None] | None" = None,
 ) -> PresubmissionResult:
     """Run the complete pre-submission validation sequence.
 
@@ -68,6 +69,9 @@ def run_presubmission_checks(
         on_login_required: Callback called when login is required.
             Should return True if login succeeded, False otherwise.
             If not provided, authentication check will fail if not logged in.
+        send_fn: Optional callable to send FS_* messages to a worker.
+            When provided, path resolution dialogs will embed a remote
+            file browser panel for navigating the worker's filesystem.
 
     Returns:
         PresubmissionResult indicating whether training can proceed.
@@ -105,7 +109,7 @@ def run_presubmission_checks(
 
     # Step 3: Check video paths
     path_result = check_video_paths(
-        slp_path, room_id, worker_id, parent_widget
+        slp_path, room_id, worker_id, parent_widget, send_fn=send_fn
     )
     if not path_result.success:
         return path_result
@@ -251,6 +255,7 @@ def check_video_paths(
     room_id: str,
     worker_id: str | None = None,
     parent_widget=None,
+    send_fn: "Callable[[str], None] | None" = None,
 ) -> PresubmissionResult:
     """Check if video paths exist on the worker.
 
@@ -301,6 +306,7 @@ def check_video_paths(
         dialog = SlpPathDialog(
             local_path=attempted_path,
             error_message=error_msg,
+            send_fn=send_fn,
             parent=parent_widget,
         )
         if dialog.exec():
@@ -376,7 +382,9 @@ def check_video_paths(
     if parent_widget is not None:
         from sleap_rtc.gui.widgets import PathResolutionDialog
 
-        dialog = PathResolutionDialog(path_result.videos, parent=parent_widget)
+        dialog = PathResolutionDialog(
+            path_result.videos, send_fn=send_fn, parent=parent_widget
+        )
         result = dialog.exec()
 
         if result:  # accepted
