@@ -17,14 +17,57 @@ from sleap_rtc.gui.runners import (
 # Create a mock zmq module for testing
 @pytest.fixture
 def mock_zmq():
-    """Create and install mock zmq module."""
+    """Create and install mock zmq module.
+
+    The mock context's socket() method returns different mocks for PUB and
+    SUB socket types. The SUB socket's poll() returns 0 (no messages) so the
+    RemoteProgressBridge poll thread stays idle during tests.
+    """
     mock_module = MagicMock()
     mock_module.PUB = 1
-    mock_module.Context.return_value = MagicMock()
+    mock_module.SUB = 2
+    mock_module.POLLIN = 1
+    mock_module.NOBLOCK = 1
+
+    mock_context = MagicMock()
+
+    def _make_socket(socket_type):
+        sock = MagicMock()
+        if socket_type == mock_module.SUB:
+            sock.poll.return_value = 0  # No messages — poll thread stays idle
+        return sock
+
+    mock_context.socket.side_effect = _make_socket
+    mock_module.Context.return_value = mock_context
 
     # Patch zmq in sys.modules so imports find it
     with patch.dict(sys.modules, {"zmq": mock_module}):
         yield mock_module
+
+
+def _setup_zmq_mocks(mock_zmq):
+    """Set up ZMQ mocks for tests that directly interact with sockets.
+
+    Returns the PUB socket mock (the one used for send_string).
+    Tests that need the PUB socket should call this instead of setting up
+    mock_context.socket.return_value manually.
+    """
+    mock_context = mock_zmq.Context.return_value
+    # The fixture's side_effect creates fresh mocks for each socket() call.
+    # Create PUB and SUB sockets to capture their mocks, then reset the
+    # side_effect so the bridge's start() creates fresh ones with the same
+    # behavior.
+    pub_socket = MagicMock()
+    sub_socket = MagicMock()
+    sub_socket.poll.return_value = 0
+
+    def _make_socket(socket_type):
+        if socket_type == mock_zmq.PUB:
+            return pub_socket
+        return sub_socket
+
+    mock_context.socket.side_effect = _make_socket
+    return pub_socket
 
 
 def _decode_zmq_message(mock_socket) -> dict:
@@ -70,48 +113,44 @@ class TestRemoteProgressBridge:
         assert bridge._model_type == "centered_instance"
 
     def test_start_connects_socket(self, mock_zmq):
-        """Should create ZMQ PUB socket and connect (not bind) on start."""
-        mock_context = MagicMock()
-        mock_socket = MagicMock()
-        mock_zmq.Context.return_value = mock_context
-        mock_context.socket.return_value = mock_socket
+        """Should create ZMQ PUB and SUB sockets on start."""
+        mock_socket = _setup_zmq_mocks(mock_zmq)
 
         bridge = RemoteProgressBridge(publish_port=9001)
         bridge.start()
 
-        mock_zmq.Context.assert_called_once()
-        mock_context.socket.assert_called_once_with(mock_zmq.PUB)
-        # Must connect (not bind) — LossViewer owns the bind
+        # PUB socket must connect (not bind) — LossViewer owns the bind
         mock_socket.connect.assert_called_once_with("tcp://127.0.0.1:9001")
         mock_socket.bind.assert_not_called()
+        # SUB socket also created and connected
+        assert bridge._sub_socket is not None
         assert bridge._started
 
+        bridge.stop()
+
     def test_stop_closes_socket(self, mock_zmq):
-        """Should close socket and context on stop."""
-        mock_context = MagicMock()
-        mock_socket = MagicMock()
-        mock_zmq.Context.return_value = mock_context
-        mock_context.socket.return_value = mock_socket
+        """Should close both PUB and SUB sockets on stop."""
+        mock_socket = _setup_zmq_mocks(mock_zmq)
 
         bridge = RemoteProgressBridge()
         bridge.start()
+        sub_socket = bridge._sub_socket
         bridge.stop()
 
         mock_socket.close.assert_called_once()
-        mock_context.term.assert_called_once()
+        sub_socket.close.assert_called_once()
         assert not bridge._started
 
     def test_context_manager(self, mock_zmq):
         """Should work as context manager."""
-        mock_context = MagicMock()
-        mock_socket = MagicMock()
-        mock_zmq.Context.return_value = mock_context
-        mock_context.socket.return_value = mock_socket
+        mock_socket = _setup_zmq_mocks(mock_zmq)
 
         with RemoteProgressBridge() as bridge:
             assert bridge._started
+            sub_socket = bridge._sub_socket
 
         mock_socket.close.assert_called_once()
+        sub_socket.close.assert_called_once()
 
     def test_on_progress_not_started(self):
         """Should not crash if bridge not started."""
@@ -140,10 +179,7 @@ class TestLossViewerMessageFormat:
 
     def test_uses_send_string_not_multipart(self, mock_zmq):
         """Must use send_string, not send_multipart."""
-        mock_context = MagicMock()
-        mock_socket = MagicMock()
-        mock_zmq.Context.return_value = mock_context
-        mock_context.socket.return_value = mock_socket
+        mock_socket = _setup_zmq_mocks(mock_zmq)
 
         event = ProgressEvent(event_type="train_begin")
         with RemoteProgressBridge() as bridge:
@@ -154,10 +190,7 @@ class TestLossViewerMessageFormat:
 
     def test_uses_jsonpickle_encoding(self, mock_zmq):
         """Must use jsonpickle.encode, decodable by jsonpickle.decode."""
-        mock_context = MagicMock()
-        mock_socket = MagicMock()
-        mock_zmq.Context.return_value = mock_context
-        mock_context.socket.return_value = mock_socket
+        mock_socket = _setup_zmq_mocks(mock_zmq)
 
         event = ProgressEvent(event_type="train_begin")
         with RemoteProgressBridge() as bridge:
@@ -171,10 +204,7 @@ class TestLossViewerMessageFormat:
 
     def test_train_begin_format(self, mock_zmq):
         """train_begin must include what field and optional wandb_url."""
-        mock_context = MagicMock()
-        mock_socket = MagicMock()
-        mock_zmq.Context.return_value = mock_context
-        mock_context.socket.return_value = mock_socket
+        mock_socket = _setup_zmq_mocks(mock_zmq)
 
         event = ProgressEvent(
             event_type="train_begin",
@@ -191,10 +221,7 @@ class TestLossViewerMessageFormat:
 
     def test_epoch_begin_format(self, mock_zmq):
         """epoch_begin must include what and epoch fields."""
-        mock_context = MagicMock()
-        mock_socket = MagicMock()
-        mock_zmq.Context.return_value = mock_context
-        mock_context.socket.return_value = mock_socket
+        mock_socket = _setup_zmq_mocks(mock_zmq)
 
         event = ProgressEvent(event_type="epoch_begin", epoch=5)
 
@@ -208,10 +235,7 @@ class TestLossViewerMessageFormat:
 
     def test_epoch_end_format_with_logs(self, mock_zmq):
         """epoch_end must wrap loss data in logs dict with sleap-nn keys."""
-        mock_context = MagicMock()
-        mock_socket = MagicMock()
-        mock_zmq.Context.return_value = mock_context
-        mock_context.socket.return_value = mock_socket
+        mock_socket = _setup_zmq_mocks(mock_zmq)
 
         event = ProgressEvent(
             event_type="epoch_end",
@@ -238,10 +262,7 @@ class TestLossViewerMessageFormat:
 
     def test_epoch_end_partial_loss(self, mock_zmq):
         """epoch_end with only train_loss should still work."""
-        mock_context = MagicMock()
-        mock_socket = MagicMock()
-        mock_zmq.Context.return_value = mock_context
-        mock_context.socket.return_value = mock_socket
+        mock_socket = _setup_zmq_mocks(mock_zmq)
 
         event = ProgressEvent(
             event_type="epoch_end",
@@ -258,10 +279,7 @@ class TestLossViewerMessageFormat:
 
     def test_train_end_format(self, mock_zmq):
         """train_end must include what field."""
-        mock_context = MagicMock()
-        mock_socket = MagicMock()
-        mock_zmq.Context.return_value = mock_context
-        mock_context.socket.return_value = mock_socket
+        mock_socket = _setup_zmq_mocks(mock_zmq)
 
         event = ProgressEvent(event_type="train_end", success=True)
 
@@ -274,10 +292,7 @@ class TestLossViewerMessageFormat:
 
     def test_model_type_in_all_events(self, mock_zmq):
         """All event types must include the what field."""
-        mock_context = MagicMock()
-        mock_socket = MagicMock()
-        mock_zmq.Context.return_value = mock_context
-        mock_context.socket.return_value = mock_socket
+        mock_socket = _setup_zmq_mocks(mock_zmq)
 
         events = [
             ProgressEvent(event_type="train_begin"),
@@ -297,10 +312,7 @@ class TestLossViewerMessageFormat:
 
     def test_model_type_updates(self, mock_zmq):
         """set_model_type should affect subsequent messages."""
-        mock_context = MagicMock()
-        mock_socket = MagicMock()
-        mock_zmq.Context.return_value = mock_context
-        mock_context.socket.return_value = mock_socket
+        mock_socket = _setup_zmq_mocks(mock_zmq)
 
         with RemoteProgressBridge(model_type="centroid") as bridge:
             bridge.on_progress(ProgressEvent(event_type="train_begin"))
@@ -313,10 +325,7 @@ class TestLossViewerMessageFormat:
 
     def test_unknown_event_type(self, mock_zmq):
         """Unknown event types should be silently dropped."""
-        mock_context = MagicMock()
-        mock_socket = MagicMock()
-        mock_zmq.Context.return_value = mock_context
-        mock_context.socket.return_value = mock_socket
+        mock_socket = _setup_zmq_mocks(mock_zmq)
 
         event = ProgressEvent(event_type="unknown_event")
 
@@ -410,10 +419,7 @@ class TestRunRemoteTraining:
     @patch("sleap_rtc.api.run_training")
     def test_basic_call(self, mock_run_training, mock_zmq):
         """Should call run_training with correct args."""
-        mock_context = MagicMock()
-        mock_socket = MagicMock()
-        mock_zmq.Context.return_value = mock_context
-        mock_context.socket.return_value = mock_socket
+        mock_socket = _setup_zmq_mocks(mock_zmq)
 
         mock_result = MagicMock()
         mock_run_training.return_value = mock_result
@@ -434,10 +440,7 @@ class TestRunRemoteTraining:
     @patch("sleap_rtc.api.run_training")
     def test_model_type_passed_to_bridge(self, mock_run_training, mock_zmq):
         """Should pass model_type to RemoteProgressBridge."""
-        mock_context = MagicMock()
-        mock_socket = MagicMock()
-        mock_zmq.Context.return_value = mock_context
-        mock_context.socket.return_value = mock_socket
+        mock_socket = _setup_zmq_mocks(mock_zmq)
 
         def simulate_training(*args, **kwargs):
             on_progress = kwargs.get("progress_callback")
@@ -459,10 +462,7 @@ class TestRunRemoteTraining:
     @patch("sleap_rtc.api.run_training")
     def test_progress_forwarded_to_zmq(self, mock_run_training, mock_zmq):
         """Should forward progress events to ZMQ."""
-        mock_context = MagicMock()
-        mock_socket = MagicMock()
-        mock_zmq.Context.return_value = mock_context
-        mock_context.socket.return_value = mock_socket
+        mock_socket = _setup_zmq_mocks(mock_zmq)
 
         def simulate_training(*args, **kwargs):
             on_progress = kwargs.get("progress_callback")
@@ -486,10 +486,7 @@ class TestRunRemoteTraining:
     @patch("sleap_rtc.api.run_training")
     def test_custom_callback_called(self, mock_run_training, mock_zmq):
         """Should call custom progress callback."""
-        mock_context = MagicMock()
-        mock_socket = MagicMock()
-        mock_zmq.Context.return_value = mock_context
-        mock_context.socket.return_value = mock_socket
+        mock_socket = _setup_zmq_mocks(mock_zmq)
 
         callback_events = []
 
@@ -516,10 +513,7 @@ class TestRunRemoteTraining:
     @patch("sleap_rtc.api.run_training")
     def test_model_type_passed_to_run_training(self, mock_run_training, mock_zmq):
         """Should pass model_type through to run_training API call."""
-        mock_context = MagicMock()
-        mock_socket = MagicMock()
-        mock_zmq.Context.return_value = mock_context
-        mock_context.socket.return_value = mock_socket
+        mock_socket = _setup_zmq_mocks(mock_zmq)
 
         mock_run_training.return_value = MagicMock()
 
@@ -531,3 +525,298 @@ class TestRunRemoteTraining:
 
         call_kwargs = mock_run_training.call_args[1]
         assert call_kwargs["model_type"] == "centroid"
+
+    @patch("sleap_rtc.api.run_training")
+    def test_on_log_passed_to_run_training(self, mock_run_training, mock_zmq):
+        """Should pass on_log through to run_training API call."""
+        mock_socket = _setup_zmq_mocks(mock_zmq)
+
+        mock_run_training.return_value = MagicMock()
+
+        log_lines = []
+        run_remote_training(
+            config_path="/path/to/config.json",
+            room_id="test-room",
+            on_log=lambda line: log_lines.append(line),
+        )
+
+        # on_log should be passed through as-is
+        call_kwargs = mock_run_training.call_args[1]
+        assert call_kwargs["on_log"] is not None
+
+    @patch("sleap_rtc.api.run_training")
+    def test_default_on_log_prints_to_stdout(self, mock_run_training, mock_zmq, capsys):
+        """When on_log is not provided, raw log lines should print to stdout."""
+        mock_socket = _setup_zmq_mocks(mock_zmq)
+
+        def simulate_training(*args, **kwargs):
+            # Simulate the on_log callback being invoked with a raw log line
+            on_log = kwargs.get("on_log")
+            if on_log:
+                on_log("Epoch 1/10: loss=0.5\n")
+            return MagicMock()
+
+        mock_run_training.side_effect = simulate_training
+
+        run_remote_training(
+            config_path="/path/to/config.json",
+            room_id="test-room",
+        )
+
+        captured = capsys.readouterr()
+        assert "Epoch 1/10: loss=0.5" in captured.out
+
+    @patch("sleap_rtc.api.run_training")
+    def test_custom_on_log_receives_lines(self, mock_run_training, mock_zmq):
+        """Custom on_log callback should receive raw log lines."""
+        mock_socket = _setup_zmq_mocks(mock_zmq)
+
+        log_lines = []
+
+        def simulate_training(*args, **kwargs):
+            on_log = kwargs.get("on_log")
+            if on_log:
+                on_log("line 1\n")
+                on_log("line 2\n")
+            return MagicMock()
+
+        mock_run_training.side_effect = simulate_training
+
+        run_remote_training(
+            config_path="/path/to/config.json",
+            room_id="test-room",
+            on_log=lambda line: log_lines.append(line),
+        )
+
+        assert log_lines == ["line 1\n", "line 2\n"]
+
+    @patch("sleap_rtc.api.run_training")
+    def test_progress_also_printed_to_terminal(self, mock_run_training, mock_zmq):
+        """Structured progress events should also be formatted and sent to on_log."""
+        mock_socket = _setup_zmq_mocks(mock_zmq)
+
+        log_lines = []
+
+        def simulate_training(*args, **kwargs):
+            on_progress = kwargs.get("progress_callback")
+            if on_progress:
+                on_progress(
+                    ProgressEvent(event_type="epoch_end", epoch=1, train_loss=0.5)
+                )
+            return MagicMock()
+
+        mock_run_training.side_effect = simulate_training
+
+        run_remote_training(
+            config_path="/path/to/config.json",
+            room_id="test-room",
+            on_log=lambda line: log_lines.append(line),
+        )
+
+        # Should have received the formatted progress line
+        assert len(log_lines) == 1
+        assert "Epoch 1" in log_lines[0]
+        assert "train_loss=0.5" in log_lines[0]
+
+    @patch("sleap_rtc.api.run_training")
+    def test_on_channel_ready_wired_to_bridge(self, mock_run_training, mock_zmq):
+        """Should pass bridge.set_send_fn as on_channel_ready."""
+        mock_socket = _setup_zmq_mocks(mock_zmq)
+
+        mock_run_training.return_value = MagicMock()
+
+        run_remote_training(
+            config_path="/path/to/config.json",
+            room_id="test-room",
+        )
+
+        call_kwargs = mock_run_training.call_args[1]
+        assert call_kwargs["on_channel_ready"] is not None
+
+
+# =============================================================================
+# Stop/Cancel Command Tests
+# =============================================================================
+
+
+class TestStopCancelCommands:
+    """Tests for stop/cancel command forwarding from LossViewer to worker."""
+
+    def test_set_send_fn(self):
+        """set_send_fn should store the send function."""
+        bridge = RemoteProgressBridge()
+        send_fn = MagicMock()
+        bridge.set_send_fn(send_fn)
+        assert bridge._send_fn is send_fn
+
+    def test_poll_commands_stop(self, mock_zmq):
+        """Should forward 'stop' command as MSG_JOB_STOP via send_fn."""
+        import jsonpickle
+
+        from sleap_rtc.protocol import MSG_JOB_STOP
+
+        mock_socket = _setup_zmq_mocks(mock_zmq)
+        mock_context = mock_zmq.Context.return_value
+
+        # Get the SUB socket that will be created
+        sub_sockets = []
+        original_side_effect = mock_context.socket.side_effect
+
+        def _capture_sockets(socket_type):
+            sock = original_side_effect(socket_type)
+            if socket_type == mock_zmq.SUB:
+                sub_sockets.append(sock)
+            return sock
+
+        mock_context.socket.side_effect = _capture_sockets
+
+        bridge = RemoteProgressBridge()
+        send_fn = MagicMock()
+        bridge.set_send_fn(send_fn)
+
+        # Configure the SUB socket to return a stop command once, then nothing
+        bridge.start()
+        sub_sock = sub_sockets[0]
+        sub_sock.poll.side_effect = [1, 0, 0, 0, 0]  # Message available once
+        sub_sock.recv_string.return_value = jsonpickle.encode({"command": "stop"})
+
+        # Give the poll thread time to process
+        import time
+
+        time.sleep(0.3)
+        bridge.stop()
+
+        send_fn.assert_called_with(MSG_JOB_STOP)
+
+    def test_poll_commands_cancel(self, mock_zmq):
+        """Should forward 'cancel' command as MSG_JOB_CANCEL via send_fn."""
+        import jsonpickle
+
+        from sleap_rtc.protocol import MSG_JOB_CANCEL
+
+        mock_socket = _setup_zmq_mocks(mock_zmq)
+        mock_context = mock_zmq.Context.return_value
+
+        sub_sockets = []
+        original_side_effect = mock_context.socket.side_effect
+
+        def _capture_sockets(socket_type):
+            sock = original_side_effect(socket_type)
+            if socket_type == mock_zmq.SUB:
+                sub_sockets.append(sock)
+            return sock
+
+        mock_context.socket.side_effect = _capture_sockets
+
+        bridge = RemoteProgressBridge()
+        send_fn = MagicMock()
+        bridge.set_send_fn(send_fn)
+
+        bridge.start()
+        sub_sock = sub_sockets[0]
+        sub_sock.poll.side_effect = [1, 0, 0, 0, 0]
+        sub_sock.recv_string.return_value = jsonpickle.encode({"command": "cancel"})
+
+        import time
+
+        time.sleep(0.3)
+        bridge.stop()
+
+        send_fn.assert_called_with(MSG_JOB_CANCEL)
+
+    def test_poll_no_send_fn(self, mock_zmq):
+        """Should not crash if stop received but no send_fn set."""
+        import jsonpickle
+
+        mock_socket = _setup_zmq_mocks(mock_zmq)
+        mock_context = mock_zmq.Context.return_value
+
+        sub_sockets = []
+        original_side_effect = mock_context.socket.side_effect
+
+        def _capture_sockets(socket_type):
+            sock = original_side_effect(socket_type)
+            if socket_type == mock_zmq.SUB:
+                sub_sockets.append(sock)
+            return sock
+
+        mock_context.socket.side_effect = _capture_sockets
+
+        bridge = RemoteProgressBridge()
+        # Don't set send_fn
+
+        bridge.start()
+        sub_sock = sub_sockets[0]
+        sub_sock.poll.side_effect = [1, 0, 0, 0, 0]
+        sub_sock.recv_string.return_value = jsonpickle.encode({"command": "stop"})
+
+        import time
+
+        time.sleep(0.3)
+        bridge.stop()
+        # Should not raise — just log a warning
+
+    def test_controller_port_configurable(self):
+        """Should accept custom controller_port."""
+        bridge = RemoteProgressBridge(controller_port=8888)
+        assert bridge._controller_port == 8888
+
+
+# =============================================================================
+# JobExecutor Stop/Cancel Tests
+# =============================================================================
+
+
+class TestJobExecutorStopCancel:
+    """Tests for JobExecutor stop/cancel methods."""
+
+    def test_stop_running_job_sends_sigint(self):
+        """stop_running_job should send SIGINT to the process."""
+        from sleap_rtc.worker.job_executor import JobExecutor
+
+        executor = JobExecutor(worker=MagicMock(), capabilities=MagicMock())
+        mock_process = MagicMock()
+        mock_process.returncode = None  # Still running
+        executor._running_process = mock_process
+
+        executor.stop_running_job()
+
+        import signal
+
+        mock_process.send_signal.assert_called_once_with(signal.SIGINT)
+
+    def test_cancel_running_job_sends_sigterm(self):
+        """cancel_running_job should call terminate() on the process."""
+        from sleap_rtc.worker.job_executor import JobExecutor
+
+        executor = JobExecutor(worker=MagicMock(), capabilities=MagicMock())
+        mock_process = MagicMock()
+        mock_process.returncode = None
+        executor._running_process = mock_process
+
+        executor.cancel_running_job()
+
+        mock_process.terminate.assert_called_once()
+
+    def test_stop_no_running_process(self):
+        """stop_running_job should not crash when no process is running."""
+        from sleap_rtc.worker.job_executor import JobExecutor
+
+        executor = JobExecutor(worker=MagicMock(), capabilities=MagicMock())
+        executor._running_process = None
+
+        # Should not raise
+        executor.stop_running_job()
+
+    def test_stop_already_exited_process(self):
+        """stop_running_job should not signal an already-exited process."""
+        from sleap_rtc.worker.job_executor import JobExecutor
+
+        executor = JobExecutor(worker=MagicMock(), capabilities=MagicMock())
+        mock_process = MagicMock()
+        mock_process.returncode = 0  # Already exited
+        executor._running_process = mock_process
+
+        executor.stop_running_job()
+
+        mock_process.send_signal.assert_not_called()

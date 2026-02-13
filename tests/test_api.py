@@ -929,6 +929,17 @@ class TestRunTraining:
             # We can verify by checking the call was made
             mock_run.assert_called_once()
 
+    def test_run_training_passes_on_log(self):
+        """Should pass on_log to _run_training_async."""
+        mock_result = TrainingResult(job_id="job_123", success=True)
+
+        log_lines = []
+        with patch("asyncio.run", return_value=mock_result) as mock_run:
+            run_training(
+                "/config.yaml", "room-1", on_log=lambda line: log_lines.append(line)
+            )
+            mock_run.assert_called_once()
+
 
 # =============================================================================
 # run_inference() Tests

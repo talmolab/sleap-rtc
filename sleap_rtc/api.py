@@ -13,7 +13,7 @@ Example usage:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -135,6 +135,9 @@ class PathCheckResult:
         missing_count: Number of videos not found on the worker.
         videos: List of VideoPathStatus for each video.
         slp_path: The SLP path that was checked.
+        path_mappings: User-resolved path mappings from interactive dialogs
+            (e.g., ``{original_path: worker_path}``). Populated when the
+            ``on_videos_missing`` callback resolves missing video paths.
     """
 
     all_found: bool
@@ -143,6 +146,7 @@ class PathCheckResult:
     missing_count: int
     videos: list[VideoPathStatus]
     slp_path: str
+    path_mappings: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -602,7 +606,9 @@ def check_video_paths(
     room_id: str,
     worker_id: str | None = None,
     timeout: float = 30.0,
-    on_path_rejected: "Callable[[str, str], str | None] | None" = None,
+    on_path_rejected: "Callable[[str, str, Callable], str | None] | None" = None,
+    on_fs_response: "Callable[[str], None] | None" = None,
+    on_videos_missing: "Callable[[list, Callable], dict[str, str] | None] | None" = None,
 ) -> PathCheckResult:
     """Check if video paths in an SLP file are accessible on a worker.
 
@@ -617,9 +623,26 @@ def check_video_paths(
         timeout: Timeout in seconds for the video check operation.
         on_path_rejected: Optional callback invoked when the worker rejects
             the SLP path (e.g., not within mounts, file not found). Called
-            with (attempted_path, error_message). Should return a corrected
+            with (attempted_path, error_message, send_fn). ``send_fn`` is
+            the data channel's send method, allowing the callback to send
+            FS_* messages for remote file browsing. Should return a corrected
             path to retry, or None to abort. The retry reuses the same
             WebRTC connection, avoiding reconnection delays.
+        on_fs_response: Optional callback for routing FS_* response messages
+            from the data channel. When provided, incoming browser-specific
+            messages (``FS_MOUNTS_RESPONSE``, ``FS_LIST_RESPONSE``,
+            ``FS_ERROR``) are dispatched to this callback instead of the
+            internal response queue. Used to feed
+            ``RemoteFileBrowser.on_response()`` for interactive file browsing
+            during path resolution dialogs.
+        on_videos_missing: Optional callback invoked when the worker reports
+            missing video paths. Called with (videos, send_fn) where
+            ``videos`` is a list of ``VideoPathStatus`` objects and
+            ``send_fn`` is a thread-safe wrapper around the data channel's
+            send method. The callback should return a dict mapping
+            ``{original_path: resolved_worker_path}`` or None to cancel.
+            Called while the data channel is alive so ``send_fn`` can be
+            used for remote file browsing.
 
     Returns:
         PathCheckResult with information about each video path.
@@ -633,7 +656,8 @@ def check_video_paths(
 
     return asyncio.run(
         _check_video_paths_async(
-            slp_path, room_id, worker_id, timeout, on_path_rejected
+            slp_path, room_id, worker_id, timeout,
+            on_path_rejected, on_fs_response, on_videos_missing,
         )
     )
 
@@ -719,7 +743,9 @@ async def _check_video_paths_async(
     room_id: str,
     worker_id: str | None,
     timeout: float,
-    on_path_rejected: "Callable[[str, str], str | None] | None" = None,
+    on_path_rejected: "Callable[[str, str, Callable], str | None] | None" = None,
+    on_fs_response: "Callable[[str], None] | None" = None,
+    on_videos_missing: "Callable[[list, Callable], dict[str, str] | None] | None" = None,
 ) -> PathCheckResult:
     """Async implementation of video path checking."""
     import json
@@ -820,10 +846,25 @@ async def _check_video_paths_async(
             def on_close():
                 channel_closed.set()
 
+            # FS_* prefixes that belong to the RemoteFileBrowser widget.
+            # Other FS_* messages (e.g. FS_CHECK_VIDEOS_RESPONSE) must go to
+            # the response queue so the path-check logic can read them.
+            _BROWSER_FS_PREFIXES = (
+                "FS_MOUNTS_RESPONSE",
+                "FS_LIST_RESPONSE",
+                "FS_ERROR",
+            )
+
             @data_channel.on("message")
             async def on_message(message):
                 if isinstance(message, str):
-                    await response_queue.put(message)
+                    # Route browser-specific FS_* responses to the widget
+                    if on_fs_response is not None and any(
+                        message.startswith(p) for p in _BROWSER_FS_PREFIXES
+                    ):
+                        on_fs_response(message)
+                    else:
+                        await response_queue.put(message)
 
             # Send offer
             offer = await pc.createOffer()
@@ -860,6 +901,15 @@ async def _check_video_paths_async(
                 data_channel, response_queue, room_secret
             )
 
+            # Thread-safe send wrapper for callbacks that may run in
+            # executor threads (Qt dialogs).  Shared by on_path_rejected
+            # and on_videos_missing.
+            loop = asyncio.get_running_loop()
+
+            def _thread_safe_send(msg: str) -> None:
+                """Schedule data_channel.send on the event loop."""
+                loop.call_soon_threadsafe(data_channel.send, msg)
+
             # Send SLP path to worker, with retry via callback on rejection
             current_path = slp_path
             max_path_retries = 3
@@ -880,7 +930,17 @@ async def _check_video_paths_async(
 
                     # If we have a callback, ask for a corrected path
                     if on_path_rejected is not None:
-                        corrected = on_path_rejected(current_path, error_msg)
+                        # Run callback in a thread-pool executor so it can
+                        # block (e.g. waiting for a Qt dialog) without
+                        # freezing the asyncio event loop.  ICE keepalives
+                        # and FS_* response routing keep working.
+                        corrected = await loop.run_in_executor(
+                            None,
+                            on_path_rejected,
+                            current_path,
+                            error_msg,
+                            _thread_safe_send,
+                        )
                         if corrected is not None:
                             current_path = corrected
                             continue  # Retry with corrected path
@@ -940,6 +1000,22 @@ async def _check_video_paths_async(
             found_count = len(video_data.get("found", []))
             missing_count = len(video_data.get("missing", []))
 
+            # If videos are missing and we have a callback, let the caller
+            # resolve them interactively while the data channel is alive.
+            resolved_mappings: dict[str, str] = {}
+            if missing_count > 0 and on_videos_missing is not None:
+                resolved_mappings_or_none = await loop.run_in_executor(
+                    None,
+                    on_videos_missing,
+                    videos,
+                    _thread_safe_send,
+                )
+                if resolved_mappings_or_none is None:
+                    raise ConfigurationError(
+                        "Video path resolution cancelled by user."
+                    )
+                resolved_mappings = resolved_mappings_or_none
+
             return PathCheckResult(
                 all_found=missing_count == 0,
                 total_videos=total,
@@ -947,6 +1023,7 @@ async def _check_video_paths_async(
                 missing_count=missing_count,
                 videos=videos,
                 slp_path=slp_path,
+                path_mappings=resolved_mappings,
             )
 
     finally:
@@ -1223,6 +1300,8 @@ def run_training(
     path_mappings: dict[str, str] | None = None,
     spec: "TrainJobSpec | None" = None,
     model_type: str = "",
+    on_log: "Callable[[str], None] | None" = None,
+    on_channel_ready: "Callable[[Callable[[str], None]], None] | None" = None,
 ) -> TrainingResult:
     """Run training remotely on a worker.
 
@@ -1255,6 +1334,13 @@ def run_training(
         model_type: Model type string for LossViewer filtering (e.g.,
             "centroid", "centered_instance"). Included in all ProgressEvent
             objects emitted to the progress_callback.
+        on_log: Optional callback invoked with each raw log line from the
+            worker that doesn't match a known protocol prefix. Use this to
+            display live training output in a terminal or text widget.
+        on_channel_ready: Optional callback invoked with a thread-safe send
+            function once the data channel is open. Use this to enable
+            bidirectional communication (e.g., sending stop/cancel commands
+            to the worker during training).
 
     Returns:
         TrainingResult with job outcome and model paths.
@@ -1285,6 +1371,8 @@ def run_training(
             path_mappings=path_mappings,
             spec=spec,
             model_type=model_type,
+            on_log=on_log,
+            on_channel_ready=on_channel_ready,
         )
     )
 
@@ -1306,6 +1394,8 @@ async def _run_training_async(
     path_mappings: dict[str, str] | None = None,
     spec: "TrainJobSpec | None" = None,
     model_type: str = "",
+    on_log: "Callable[[str], None] | None" = None,
+    on_channel_ready: "Callable[[Callable[[str], None]], None] | None" = None,
 ) -> TrainingResult:
     """Async implementation of run_training."""
     import json
@@ -1476,6 +1566,15 @@ async def _run_training_async(
                 data_channel, response_queue, room_secret
             )
 
+            # Expose thread-safe send function for bidirectional communication
+            if on_channel_ready:
+                loop = asyncio.get_running_loop()
+
+                def _thread_safe_send(msg: str) -> None:
+                    loop.call_soon_threadsafe(data_channel.send, msg)
+
+                on_channel_ready(_thread_safe_send)
+
             # Notify train_begin
             if progress_callback:
                 progress_callback(
@@ -1526,8 +1625,8 @@ async def _run_training_async(
                         raise ConfigurationError(f"Job rejected: {error_json}")
 
                 elif response.startswith(MSG_JOB_PROGRESS):
-                    parts = response.split(MSG_SEPARATOR, 2)
-                    progress_data = parts[2] if len(parts) > 2 else ""
+                    parts = response.split(MSG_SEPARATOR, 1)
+                    progress_data = parts[1] if len(parts) > 1 else ""
 
                     # Try to parse as JSON progress
                     try:
@@ -1558,8 +1657,8 @@ async def _run_training_async(
                         pass
 
                 elif response.startswith(MSG_JOB_COMPLETE):
-                    parts = response.split(MSG_SEPARATOR, 2)
-                    result_json = parts[2] if len(parts) > 2 else "{}"
+                    parts = response.split(MSG_SEPARATOR, 1)
+                    result_json = parts[1] if len(parts) > 1 else "{}"
                     try:
                         result_data = json.loads(result_json)
                         result = TrainingResult(
@@ -1623,6 +1722,11 @@ async def _run_training_async(
                         error_message=error_msg,
                     )
                     break
+
+                else:
+                    # Unrecognized message — raw training log line from worker
+                    if on_log:
+                        on_log(response)
 
     finally:
         if pc:
@@ -1909,8 +2013,8 @@ async def _run_inference_async(
                         )
 
                 elif response.startswith(MSG_JOB_COMPLETE):
-                    parts = response.split(MSG_SEPARATOR, 2)
-                    result_json = parts[2] if len(parts) > 2 else "{}"
+                    parts = response.split(MSG_SEPARATOR, 1)
+                    result_json = parts[1] if len(parts) > 1 else "{}"
                     try:
                         result_data = json.loads(result_json)
                         result = InferenceResult(
