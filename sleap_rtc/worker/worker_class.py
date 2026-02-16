@@ -79,6 +79,7 @@ from sleap_rtc.jobs import (
     JobValidator,
     ValidationError,
     CommandBuilder,
+    DEFAULT_ZMQ_PORTS,
 )
 from sleap_rtc.worker.capabilities import WorkerCapabilities
 from sleap_rtc.worker.job_executor import JobExecutor
@@ -2082,7 +2083,8 @@ class RTCWorkerClient:
                             channel.send(f"Training model {i+1}/{total_configs}: {config_name}\n")
 
                         await self.job_executor.execute_from_spec(
-                            channel, cmd, f"{job_id}_{i}" if total_configs > 1 else job_id, job_type="train"
+                            channel, cmd, f"{job_id}_{i}" if total_configs > 1 else job_id, job_type="train",
+                            zmq_ports=DEFAULT_ZMQ_PORTS,
                         )
                 elif isinstance(spec, TrackJobSpec):
                     cmd = builder.build_track_command(spec)

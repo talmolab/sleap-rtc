@@ -17,6 +17,8 @@ from typing import TYPE_CHECKING
 
 from aiortc import RTCDataChannel
 
+from sleap_rtc.worker.progress_reporter import ProgressReporter
+
 if TYPE_CHECKING:
     from sleap_rtc.worker.capabilities import WorkerCapabilities
 
@@ -561,6 +563,7 @@ class JobExecutor:
         job_id: str,
         job_type: str = "train",
         working_dir: str = None,
+        zmq_ports: dict | None = None,
     ):
         """Execute a job from a pre-built command list (structured job submission).
 
@@ -574,6 +577,10 @@ class JobExecutor:
             job_id: Unique job identifier
             job_type: Type of job ("train" or "track")
             working_dir: Working directory for execution (defaults to current dir)
+            zmq_ports: Optional dict with 'controller' and 'publish' ZMQ port
+                numbers. When provided for train jobs, a ProgressReporter is
+                started to forward sleap-nn's native ZMQ progress messages
+                over the RTC data channel.
         """
         from sleap_rtc.protocol import (
             MSG_JOB_PROGRESS,
@@ -588,6 +595,17 @@ class JobExecutor:
         logging.info(f"[JOB {job_id}] Starting {job_type} job")
         logging.info(f"[JOB {job_id}] Command: {' '.join(cmd)}")
         logging.info(f"[JOB {job_id}] Working directory: {working_dir}")
+
+        # Start ZMQ progress reporter for train jobs so sleap-nn's native
+        # ZMQ messages are forwarded over the RTC data channel.
+        progress_reporter = None
+        if job_type == "train" and zmq_ports:
+            progress_reporter = ProgressReporter(
+                control_address=f"tcp://127.0.0.1:{zmq_ports.get('controller', 9000)}",
+                progress_address=f"tcp://127.0.0.1:{zmq_ports.get('publish', 9001)}",
+            )
+            progress_reporter.start_control_socket()
+            progress_reporter.start_progress_listener_task(channel)
 
         try:
             # Start the process
@@ -753,3 +771,7 @@ class JobExecutor:
             }
             if channel.readyState == "open":
                 channel.send(f"{MSG_JOB_FAILED}{MSG_SEPARATOR}{json.dumps(error_data)}")
+
+        finally:
+            if progress_reporter is not None:
+                progress_reporter.cleanup()

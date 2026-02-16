@@ -211,6 +211,24 @@ class RemoteProgressBridge:
         if message:
             self._publish(message)
 
+    def on_raw_zmq_message(self, raw_msg: str):
+        """Publish raw jsonpickle ZMQ message directly to LossViewer.
+
+        This bypasses the ProgressEvent conversion and sends the original
+        sleap-nn ZMQ message straight through, preserving all event types
+        including batch_end (for scatter dots).
+
+        Args:
+            raw_msg: Raw jsonpickle-encoded string from the worker's
+                ProgressReporter (received via ``PROGRESS_REPORT::``).
+        """
+        if not self._started or not self._socket:
+            return
+        try:
+            self._socket.send_string(raw_msg)
+        except Exception as e:
+            logger.error(f"Failed to publish raw ZMQ progress: {e}")
+
     def _poll_commands(self):
         """Background thread: poll ZMQ SUB for stop/cancel from LossViewer.
 
@@ -410,9 +428,12 @@ def run_remote_training(
     log_fn = on_log if on_log is not None else lambda line: print(line, end="")
 
     def progress_handler(event: ProgressEvent):
-        """Handle progress by forwarding to ZMQ, terminal, and optional callback."""
-        bridge.on_progress(event)
-        # Also print structured progress to terminal
+        """Handle progress by forwarding to terminal and optional callback.
+
+        LossViewer is now fed by raw ZMQ passthrough (on_raw_progress),
+        so we no longer call bridge.on_progress() here.
+        """
+        # Print structured progress to terminal
         line = format_progress_line(event)
         if line:
             log_fn(line + "\n")
@@ -431,6 +452,7 @@ def run_remote_training(
         model_type=model_type,
         on_log=log_fn,
         on_channel_ready=bridge.set_send_fn,
+        on_raw_progress=bridge.on_raw_zmq_message,
     )
     if timeout is not None:
         kwargs["timeout"] = timeout

@@ -1302,6 +1302,7 @@ def run_training(
     model_type: str = "",
     on_log: "Callable[[str], None] | None" = None,
     on_channel_ready: "Callable[[Callable[[str], None]], None] | None" = None,
+    on_raw_progress: "Callable[[str], None] | None" = None,
 ) -> TrainingResult:
     """Run training remotely on a worker.
 
@@ -1341,6 +1342,9 @@ def run_training(
             function once the data channel is open. Use this to enable
             bidirectional communication (e.g., sending stop/cancel commands
             to the worker during training).
+        on_raw_progress: Optional callback invoked with the raw jsonpickle
+            payload string from ``PROGRESS_REPORT::`` messages. Used to
+            forward sleap-nn's native ZMQ progress directly to LossViewer.
 
     Returns:
         TrainingResult with job outcome and model paths.
@@ -1373,6 +1377,7 @@ def run_training(
             model_type=model_type,
             on_log=on_log,
             on_channel_ready=on_channel_ready,
+            on_raw_progress=on_raw_progress,
         )
     )
 
@@ -1396,6 +1401,7 @@ async def _run_training_async(
     model_type: str = "",
     on_log: "Callable[[str], None] | None" = None,
     on_channel_ready: "Callable[[Callable[[str], None]], None] | None" = None,
+    on_raw_progress: "Callable[[str], None] | None" = None,
 ) -> TrainingResult:
     """Async implementation of run_training."""
     import json
@@ -1529,7 +1535,11 @@ async def _run_training_async(
             @data_channel.on("message")
             async def on_message(message):
                 if isinstance(message, str):
-                    await response_queue.put(message)
+                    if message.startswith("PROGRESS_REPORT::") and on_raw_progress is not None:
+                        payload = message.split("PROGRESS_REPORT::", 1)[1]
+                        on_raw_progress(payload)
+                    else:
+                        await response_queue.put(message)
 
             # Send offer
             offer = await pc.createOffer()

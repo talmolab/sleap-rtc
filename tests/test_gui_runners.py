@@ -159,6 +159,23 @@ class TestRemoteProgressBridge:
         # Should not raise
         bridge.on_progress(event)
 
+    def test_on_raw_zmq_message(self, mock_zmq):
+        """on_raw_zmq_message should send raw string without re-encoding."""
+        mock_socket = _setup_zmq_mocks(mock_zmq)
+
+        raw_msg = '{"py/object": "dict", "event": "batch_end", "what": "centroid"}'
+
+        with RemoteProgressBridge() as bridge:
+            bridge.on_raw_zmq_message(raw_msg)
+
+        mock_socket.send_string.assert_called_once_with(raw_msg)
+
+    def test_on_raw_zmq_message_not_started(self):
+        """on_raw_zmq_message should not crash if bridge not started."""
+        bridge = RemoteProgressBridge()
+        # Should not raise
+        bridge.on_raw_zmq_message('{"event": "batch_end"}')
+
 
 # =============================================================================
 # LossViewer Message Format Tests
@@ -499,17 +516,11 @@ class TestRunRemoteTraining:
         assert result == mock_result
 
     @patch("sleap_rtc.api.run_training")
-    def test_model_type_passed_to_bridge(self, mock_run_training, mock_zmq):
-        """Should pass model_type to RemoteProgressBridge."""
+    def test_on_raw_progress_wired_to_bridge(self, mock_run_training, mock_zmq):
+        """Should wire on_raw_progress to bridge.on_raw_zmq_message."""
         mock_socket = _setup_zmq_mocks(mock_zmq)
 
-        def simulate_training(*args, **kwargs):
-            on_progress = kwargs.get("progress_callback")
-            if on_progress:
-                on_progress(ProgressEvent(event_type="train_begin"))
-            return MagicMock()
-
-        mock_run_training.side_effect = simulate_training
+        mock_run_training.return_value = MagicMock()
 
         run_remote_training(
             config_path="/path/to/config.json",
@@ -517,12 +528,40 @@ class TestRunRemoteTraining:
             model_type="centroid",
         )
 
-        msg = _decode_zmq_message(mock_socket)
-        assert msg["what"] == "centroid"
+        call_kwargs = mock_run_training.call_args[1]
+        assert call_kwargs["on_raw_progress"] is not None
 
     @patch("sleap_rtc.api.run_training")
-    def test_progress_forwarded_to_zmq(self, mock_run_training, mock_zmq):
-        """Should forward progress events to ZMQ."""
+    def test_raw_zmq_passthrough(self, mock_run_training, mock_zmq):
+        """Should forward raw ZMQ messages directly to LossViewer socket."""
+        mock_socket = _setup_zmq_mocks(mock_zmq)
+
+        def simulate_training(*args, **kwargs):
+            on_raw = kwargs.get("on_raw_progress")
+            if on_raw:
+                on_raw('{"event": "batch_end", "what": "centroid"}')
+                on_raw('{"event": "epoch_end", "what": "centroid"}')
+            return MagicMock()
+
+        mock_run_training.side_effect = simulate_training
+
+        run_remote_training(
+            config_path="/path/to/config.json",
+            room_id="test-room",
+        )
+
+        assert mock_socket.send_string.call_count == 2
+        # Raw strings should be passed through without re-encoding
+        mock_socket.send_string.assert_any_call(
+            '{"event": "batch_end", "what": "centroid"}'
+        )
+        mock_socket.send_string.assert_any_call(
+            '{"event": "epoch_end", "what": "centroid"}'
+        )
+
+    @patch("sleap_rtc.api.run_training")
+    def test_progress_callback_no_longer_publishes_to_zmq(self, mock_run_training, mock_zmq):
+        """Progress callback should NOT publish to ZMQ (raw passthrough handles that)."""
         mock_socket = _setup_zmq_mocks(mock_zmq)
 
         def simulate_training(*args, **kwargs):
@@ -542,8 +581,8 @@ class TestRunRemoteTraining:
             room_id="test-room",
         )
 
-        # 4 messages: train_begin, synthesized epoch_begin, epoch_end, train_end
-        assert mock_socket.send_string.call_count == 4
+        # No ZMQ messages from progress_callback — LossViewer is fed by raw passthrough
+        mock_socket.send_string.assert_not_called()
 
     @patch("sleap_rtc.api.run_training")
     def test_custom_callback_called(self, mock_run_training, mock_zmq):
