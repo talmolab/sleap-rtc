@@ -879,6 +879,7 @@ class SlpPathDialog(QDialog):
                 self._browse_toggle.setText("Hide browser")
             else:
                 self._browse_toggle.setText("Browse worker filesystem...")
+            self.adjustSize()
 
     def _on_file_selected(self, path: str):
         """Handle file selection from the browser."""
