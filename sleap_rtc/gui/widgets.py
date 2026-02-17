@@ -850,7 +850,12 @@ class SlpPathDialog(QDialog):
             self._browser.setMinimumHeight(300)
             layout.addWidget(self._browser)
 
-        # Buttons
+        # Separator + Buttons (visually distinct from browser's Select bar)
+        separator = QFrame()
+        separator.setFrameShape(QFrame.HLine)
+        separator.setFrameShadow(QFrame.Sunken)
+        layout.addWidget(separator)
+
         button_layout = QHBoxLayout()
         button_layout.addStretch()
 
