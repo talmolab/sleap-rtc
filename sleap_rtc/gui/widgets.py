@@ -32,9 +32,16 @@ from qtpy.QtWidgets import (
     QAbstractItemView,
     QLineEdit,
     QFileDialog,
+    QListWidget,
+    QListWidgetItem,
+    QScrollArea,
+    QSplitter,
+    QSizePolicy,
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from sleap_rtc.api import Room, Worker, User
 
 
@@ -761,18 +768,30 @@ class SlpPathDialog(QDialog):
 
     Shown when the local SLP path doesn't exist on the remote worker,
     prompting the user to provide the correct worker-side path.
+
+    Args:
+        local_path: The local SLP path that was rejected by the worker.
+        error_message: Error message from the worker explaining the rejection.
+        send_fn: Optional callable to send FS_* messages to the worker.
+            When provided, a collapsible remote file browser panel is shown
+            allowing the user to browse the worker's filesystem.
+        parent: Optional parent widget.
     """
 
     def __init__(
         self,
         local_path: str,
         error_message: str,
+        send_fn: "Callable[[str], None] | None" = None,
         parent: QWidget | None = None,
     ):
         super().__init__(parent)
         self.setWindowTitle("SLP File Path Resolution")
-        self.setMinimumWidth(550)
+        self.setMinimumSize(700, 500)
         self._worker_path: str | None = None
+        self._send_fn = send_fn
+        self._browser: RemoteFileBrowser | None = None
+        self._error_message = error_message
         self._setup_ui(local_path, error_message)
 
     def _setup_ui(self, local_path: str, error_message: str):
@@ -789,21 +808,23 @@ class SlpPathDialog(QDialog):
         layout.addWidget(info_label)
 
         # Error details
-        error_label = QLabel(f"<b>Error:</b> {error_message}")
-        error_label.setWordWrap(True)
-        error_label.setStyleSheet("color: #c0392b;")
-        layout.addWidget(error_label)
+        self._error_label = QLabel(f"<b>Error:</b> {error_message}")
+        self._error_label.setWordWrap(True)
+        self._error_label.setStyleSheet("color: #c0392b;")
+        layout.addWidget(self._error_label)
 
         # Local path (read-only)
         form = QFormLayout()
         local_edit = QLineEdit(local_path)
         local_edit.setReadOnly(True)
         local_edit.setStyleSheet("color: gray;")
+        local_edit.setMinimumWidth(400)
         form.addRow("Local path:", local_edit)
 
         # Worker path input
         worker_layout = QHBoxLayout()
         self._path_edit = QLineEdit()
+        self._path_edit.setMinimumWidth(400)
         self._path_edit.setPlaceholderText(
             "e.g. /root/vast/data/labels.v002.slp"
         )
@@ -813,7 +834,28 @@ class SlpPathDialog(QDialog):
 
         layout.addLayout(form)
 
-        # Buttons
+        # Collapsible file browser panel (only when send_fn is provided)
+        if self._send_fn is not None:
+            self._browse_toggle = QPushButton("Browse worker filesystem...")
+            self._browse_toggle.setCheckable(True)
+            self._browse_toggle.toggled.connect(self._on_browse_toggled)
+            layout.addWidget(self._browse_toggle)
+
+            self._browser = RemoteFileBrowser(
+                send_fn=self._send_fn,
+                file_filter="*.slp",
+            )
+            self._browser.file_selected.connect(self._on_file_selected)
+            self._browser.setVisible(False)
+            self._browser.setMinimumHeight(300)
+            layout.addWidget(self._browser)
+
+        # Separator + Buttons (visually distinct from browser's Select bar)
+        separator = QFrame()
+        separator.setFrameShape(QFrame.HLine)
+        separator.setFrameShadow(QFrame.Sunken)
+        layout.addWidget(separator)
+
         button_layout = QHBoxLayout()
         button_layout.addStretch()
 
@@ -828,9 +870,29 @@ class SlpPathDialog(QDialog):
 
         layout.addLayout(button_layout)
 
+    def _on_browse_toggled(self, checked: bool):
+        """Toggle the file browser panel visibility."""
+        if self._browser is not None:
+            self._browser.setVisible(checked)
+            if checked:
+                self._browser.load_mounts()
+                self._browse_toggle.setText("Hide browser")
+            else:
+                self._browse_toggle.setText("Browse worker filesystem...")
+            self.adjustSize()
+
+    def _on_file_selected(self, path: str):
+        """Handle file selection from the browser."""
+        self._path_edit.setText(path)
+        self._error_label.setText("<b>Status:</b> Path found")
+        self._error_label.setStyleSheet("color: green;")
+
     def _on_text_changed(self, text: str):
         """Enable Continue button only when a path is entered."""
         self._ok_btn.setEnabled(bool(text.strip()))
+        if not text.strip():
+            self._error_label.setText(f"<b>Error:</b> {self._error_message}")
+            self._error_label.setStyleSheet("color: #c0392b;")
 
     def _on_accept(self):
         """Accept the dialog with the entered path."""
@@ -847,6 +909,13 @@ class PathResolutionDialog(QDialog):
 
     This dialog is shown when video files in the SLP cannot be found on the
     worker machine, allowing the user to specify correct paths.
+
+    Args:
+        path_results: List of VideoPathStatus objects from path checking.
+        send_fn: Optional callable to send FS_* messages to the worker.
+            When provided, a shared remote file browser panel is shown
+            allowing the user to browse the worker's filesystem.
+        parent: Optional parent widget.
     """
 
     paths_resolved = Signal(dict)  # {original_path: resolved_path}
@@ -854,14 +923,18 @@ class PathResolutionDialog(QDialog):
     def __init__(
         self,
         path_results: list,  # List of VideoPathStatus
+        send_fn: "Callable[[str], None] | None" = None,
         parent: QWidget | None = None,
     ):
         super().__init__(parent)
         self.setWindowTitle("Video Path Resolution Required")
-        self.setMinimumSize(700, 400)
+        self.setMinimumSize(700, 700)
         self._path_results = path_results
         self._resolved_paths: dict[str, str] = {}
         self._path_widgets: dict[str, QLineEdit] = {}
+        self._send_fn = send_fn
+        self._browser: RemoteFileBrowser | None = None
+        self._browse_target_path: str | None = None  # original_path of row being browsed
         self._setup_ui()
 
     def _setup_ui(self):
@@ -905,8 +978,21 @@ class PathResolutionDialog(QDialog):
         auto_layout.addStretch()
         layout.addLayout(auto_layout)
 
-        # Status label
+        # Shared file browser panel (only when send_fn is provided)
+        if self._send_fn is not None:
+            _VIDEO_FILTER = "*.mp4,*.avi,*.mov,*.h264,*.mkv"
+            self._browser = RemoteFileBrowser(
+                send_fn=self._send_fn,
+                file_filter=_VIDEO_FILTER,
+            )
+            self._browser.file_selected.connect(self._on_browser_file_selected)
+            self._browser.setVisible(False)
+            self._browser.setFixedHeight(300)
+            layout.addWidget(self._browser)
+
+        # Status label — add top margin to separate from the browser panel
         self._status_label = QLabel("")
+        self._status_label.setContentsMargins(0, 8, 0, 0)
         layout.addWidget(self._status_label)
 
         # Button row
@@ -928,27 +1014,32 @@ class PathResolutionDialog(QDialog):
 
     def _populate_table(self):
         """Populate the table with path results."""
+        self._path_edit_to_row: dict[QLineEdit, int] = {}
         self._table.setRowCount(len(self._path_results))
 
         for row, video in enumerate(self._path_results):
-            # Video filename
+            # Video filename (read-only)
             name_item = QTableWidgetItem(video.filename)
             name_item.setToolTip(video.original_path)
+            name_item.setFlags(name_item.flags() & ~Qt.ItemIsEditable)
             self._table.setItem(row, 0, name_item)
 
-            # Status
+            # Status (read-only)
             if video.found:
                 status_item = QTableWidgetItem("✓ Found")
                 status_item.setForeground(Qt.darkGreen)
+                status_item.setFlags(status_item.flags() & ~Qt.ItemIsEditable)
                 self._table.setItem(row, 1, status_item)
 
                 # Worker path (read-only for found videos)
                 path_item = QTableWidgetItem(video.worker_path or "")
                 path_item.setToolTip(video.worker_path or "")
+                path_item.setFlags(path_item.flags() & ~Qt.ItemIsEditable)
                 self._table.setItem(row, 2, path_item)
             else:
                 status_item = QTableWidgetItem("✗ Missing")
                 status_item.setForeground(Qt.red)
+                status_item.setFlags(status_item.flags() & ~Qt.ItemIsEditable)
                 self._table.setItem(row, 1, status_item)
 
                 # Create editable path widget for missing videos
@@ -962,6 +1053,7 @@ class PathResolutionDialog(QDialog):
                 if video.suggestions:
                     path_edit.setText(video.suggestions[0])
                 path_edit.textChanged.connect(self._on_path_changed)
+                self._path_edit_to_row[path_edit] = row
                 path_layout.addWidget(path_edit)
 
                 browse_button = QPushButton("Browse...")
@@ -978,30 +1070,56 @@ class PathResolutionDialog(QDialog):
         self._table.resizeRowsToContents()
 
     def _on_path_changed(self):
-        """Handle path text changes."""
+        """Handle path text changes and update row status."""
+        edit = self.sender()
+        if edit is not None:
+            row = self._path_edit_to_row.get(edit)
+            if row is not None:
+                has_path = bool(edit.text().strip())
+                status_item = self._table.item(row, 1)
+                if status_item is not None:
+                    if has_path:
+                        status_item.setText("✓ Resolved")
+                        status_item.setForeground(Qt.darkGreen)
+                    else:
+                        status_item.setText("✗ Missing")
+                        status_item.setForeground(Qt.red)
         self._update_status()
 
     def _on_browse_path(self, row: int):
         """Handle browse button click for a specific row."""
         video = self._path_results[row]
 
-        # Open file dialog
-        # Note: In a real implementation, this would be a remote file browser
-        # For now, we use a simple text input dialog
-        from qtpy.QtWidgets import QInputDialog
+        if self._browser is not None:
+            # Use the shared remote file browser
+            self._browse_target_path = video.original_path
+            self._browser.setVisible(True)
+            if not self._browser._columns:
+                self._browser.load_mounts()
+        else:
+            # Fallback: simple text input dialog
+            from qtpy.QtWidgets import QInputDialog
 
-        path, ok = QInputDialog.getText(
-            self,
-            "Enter Worker Path",
-            f"Enter the path to '{video.filename}' on the worker:",
-            QLineEdit.Normal,
-            self._path_widgets.get(video.original_path, QLineEdit()).text(),
-        )
+            path, ok = QInputDialog.getText(
+                self,
+                "Enter Worker Path",
+                f"Enter the path to '{video.filename}' on the worker:",
+                QLineEdit.Normal,
+                self._path_widgets.get(video.original_path, QLineEdit()).text(),
+            )
 
-        if ok and path:
-            path_edit = self._path_widgets.get(video.original_path)
+            if ok and path:
+                path_edit = self._path_widgets.get(video.original_path)
+                if path_edit:
+                    path_edit.setText(path)
+
+    def _on_browser_file_selected(self, path: str):
+        """Handle file selection from the shared browser."""
+        if self._browse_target_path is not None:
+            path_edit = self._path_widgets.get(self._browse_target_path)
             if path_edit:
                 path_edit.setText(path)
+            self._browse_target_path = None
 
     def _on_auto_detect(self):
         """Handle auto-detect button click."""
@@ -1362,6 +1480,442 @@ class TrainingFailureDialog(QDialog):
             The resume command string, or None if no checkpoint available.
         """
         return self._resume_command
+
+
+class RemoteFileBrowser(QWidget):
+    """Column-view file browser for navigating a remote worker's filesystem.
+
+    Provides a macOS Finder-style column view where clicking a folder opens
+    a new column to the right showing its contents. Uses the FS_* protocol
+    messages over an injected ``send_fn`` callable for transport-agnostic
+    communication.
+
+    Args:
+        send_fn: Callable that sends a string message to the worker.
+        file_filter: Comma-separated glob patterns for selectable files
+            (e.g., ``"*.slp"`` or ``"*.mp4,*.avi"``). Files not matching
+            are shown greyed out and cannot be selected.
+        parent: Optional parent widget.
+
+    Signals:
+        file_selected: Emitted with the full path when a file is confirmed
+            via double-click or the Select button.
+        response_received: Internal signal for thread-safe delivery of
+            FS_* response strings from async callbacks.
+    """
+
+    file_selected = Signal(str)
+    response_received = Signal(str)
+
+    _SEPARATOR = "::"
+    _COLUMN_WIDTH = 200
+    _PREVIEW_WIDTH = 180
+
+    def __init__(
+        self,
+        send_fn: "Callable[[str], None]",
+        file_filter: str = "",
+        parent: QWidget | None = None,
+    ):
+        super().__init__(parent)
+        self._send_fn = send_fn
+        self._file_filter = file_filter
+        self._allowed_extensions: set[str] = set()
+        if file_filter:
+            for pattern in file_filter.split(","):
+                ext = pattern.strip().lstrip("*").lower()
+                if ext:
+                    self._allowed_extensions.add(ext)
+
+        # State
+        self._columns: list[QListWidget] = []
+        self._column_paths: list[str] = []  # path each column represents
+        self._selected_path: str = ""
+
+        self._build_ui()
+
+        # Thread-safe response routing
+        self.response_received.connect(
+            self._handle_response, Qt.ConnectionType.QueuedConnection
+        )
+
+    # ------------------------------------------------------------------
+    # UI construction
+    # ------------------------------------------------------------------
+
+    def _build_ui(self):
+        """Build the column-view layout."""
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        # Main area: columns + preview
+        self._splitter = QSplitter(Qt.Orientation.Horizontal, self)
+
+        # Column scroll area (holds mount selector + directory columns).
+        # Horizontal scrolling navigates columns; each QListWidget column
+        # handles its own vertical scrolling internally.
+        self._column_scroll = QScrollArea()
+        self._column_scroll.setWidgetResizable(True)
+        self._column_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        )
+        self._column_scroll.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self._column_container = QWidget()
+        self._column_layout = QHBoxLayout(self._column_container)
+        self._column_layout.setContentsMargins(0, 0, 0, 0)
+        self._column_layout.setSpacing(0)
+        self._column_layout.addStretch()
+        self._column_scroll.setWidget(self._column_container)
+
+        # File preview panel
+        self._preview = QWidget()
+        self._preview.setFixedWidth(self._PREVIEW_WIDTH)
+        preview_layout = QVBoxLayout(self._preview)
+        preview_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self._preview_name = QLabel("")
+        self._preview_name.setWordWrap(True)
+        self._preview_name.setStyleSheet("font-weight: bold;")
+        self._preview_size = QLabel("")
+        self._preview_modified = QLabel("")
+        preview_layout.addWidget(self._preview_name)
+        preview_layout.addWidget(self._preview_size)
+        preview_layout.addWidget(self._preview_modified)
+        preview_layout.addStretch()
+
+        self._splitter.addWidget(self._column_scroll)
+        self._splitter.addWidget(self._preview)
+        self._splitter.setStretchFactor(0, 1)
+        self._splitter.setStretchFactor(1, 0)
+
+        layout.addWidget(self._splitter, 1)
+
+        # Bottom bar: path + select button
+        bottom = QHBoxLayout()
+        self._path_bar = QLineEdit()
+        self._path_bar.setPlaceholderText("No file selected")
+        self._path_bar.setReadOnly(True)
+        self._select_button = QPushButton("Select")
+        self._select_button.setEnabled(False)
+        self._select_button.clicked.connect(self._on_select_clicked)
+        bottom.addWidget(self._path_bar, 1)
+        bottom.addWidget(self._select_button)
+        layout.addLayout(bottom)
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def load_mounts(self):
+        """Request mount points from the worker.
+
+        Sends ``FS_GET_MOUNTS`` via the configured ``send_fn``.
+        """
+        self._send_fn("FS_GET_MOUNTS")
+
+    def on_response(self, message: str):
+        """Route an incoming FS_* response to the widget thread-safely.
+
+        Call this from any thread (e.g. a WebRTC data channel callback).
+        The message is delivered to the Qt thread via ``response_received``.
+        """
+        self.response_received.emit(message)
+
+    # ------------------------------------------------------------------
+    # Internal response handling
+    # ------------------------------------------------------------------
+
+    def _handle_response(self, message: str):
+        """Dispatch an FS_* response to the appropriate handler."""
+        if message.startswith("FS_MOUNTS_RESPONSE" + self._SEPARATOR):
+            payload = message.split(self._SEPARATOR, 1)[1]
+            self._handle_mounts_response(payload)
+        elif message.startswith("FS_LIST_RESPONSE" + self._SEPARATOR):
+            payload = message.split(self._SEPARATOR, 1)[1]
+            self._handle_list_response(payload)
+        elif message.startswith("FS_ERROR" + self._SEPARATOR):
+            parts = message.split(self._SEPARATOR, 2)
+            error_code = parts[1] if len(parts) > 1 else "UNKNOWN"
+            error_msg = parts[2] if len(parts) > 2 else ""
+            self._handle_error(error_code, error_msg)
+
+    def _handle_mounts_response(self, payload: str):
+        """Populate the mount selector column from a FS_MOUNTS_RESPONSE."""
+        import json
+
+        try:
+            mounts = json.loads(payload)
+        except json.JSONDecodeError:
+            return
+
+        # Clear existing columns
+        self._clear_columns()
+
+        # Create mount selector column
+        mount_list = self._create_column()
+        for mount in mounts:
+            label = mount.get("label", mount.get("path", ""))
+            path = mount.get("path", "")
+            item = QListWidgetItem(label)
+            item.setData(Qt.ItemDataRole.UserRole, path)
+            item.setData(Qt.ItemDataRole.UserRole + 1, "mount")
+            mount_list.addItem(item)
+
+        self._column_paths.append("")  # mount column has no path
+
+    def _handle_list_response(self, payload: str):
+        """Populate or extend a directory column from a FS_LIST_RESPONSE."""
+        import json
+
+        try:
+            data = json.loads(payload)
+        except json.JSONDecodeError:
+            return
+
+        dir_path = data.get("path", "")
+        entries = data.get("entries", [])
+        has_more = data.get("has_more", False)
+        total_count = data.get("total_count", 0)
+
+        # Find if we already have a column for this path (pagination append)
+        existing_idx = None
+        for i, p in enumerate(self._column_paths):
+            if p == dir_path:
+                existing_idx = i
+                break
+
+        if existing_idx is not None:
+            # Pagination: remove "Load more..." item and append new entries
+            col = self._columns[existing_idx]
+            # Remove the last item if it's a "Load more..." sentinel
+            for row in range(col.count() - 1, -1, -1):
+                item = col.item(row)
+                if item and item.data(Qt.ItemDataRole.UserRole + 1) == "load_more":
+                    col.takeItem(row)
+                    break
+            self._populate_column(col, entries, dir_path, has_more, total_count)
+        else:
+            # New column for this directory
+            col = self._create_column()
+            self._column_paths.append(dir_path)
+            self._populate_column(col, entries, dir_path, has_more, total_count)
+
+    def _handle_error(self, error_code: str, error_msg: str):
+        """Handle an FS_ERROR response."""
+        from loguru import logger
+
+        logger.warning(f"RemoteFileBrowser FS error: {error_code}: {error_msg}")
+
+    # ------------------------------------------------------------------
+    # Column management
+    # ------------------------------------------------------------------
+
+    def _create_column(self) -> QListWidget:
+        """Create and add a new column to the column container."""
+        col = QListWidget()
+        col.setFixedWidth(self._COLUMN_WIDTH)
+        col.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        col.itemClicked.connect(self._on_item_clicked)
+        col.itemDoubleClicked.connect(self._on_item_double_clicked)
+        # Insert before the stretch
+        idx = self._column_layout.count() - 1  # before stretch
+        self._column_layout.insertWidget(idx, col)
+        self._columns.append(col)
+        return col
+
+    def _clear_columns(self):
+        """Remove all columns."""
+        for col in self._columns:
+            self._column_layout.removeWidget(col)
+            col.deleteLater()
+        self._columns.clear()
+        self._column_paths.clear()
+        self._clear_preview()
+        self._selected_path = ""
+        self._path_bar.clear()
+        self._select_button.setEnabled(False)
+
+    def _remove_columns_after(self, index: int):
+        """Remove all columns after the given index."""
+        while len(self._columns) > index + 1:
+            col = self._columns.pop()
+            self._column_layout.removeWidget(col)
+            col.deleteLater()
+            self._column_paths.pop()
+
+    def _populate_column(
+        self,
+        col: QListWidget,
+        entries: list[dict],
+        dir_path: str,
+        has_more: bool,
+        total_count: int,
+    ):
+        """Add entries to a column list widget."""
+        # Sort: directories first, then files, alphabetically within each
+        dirs = sorted(
+            [e for e in entries if e.get("type") == "directory"],
+            key=lambda e: e["name"].lower(),
+        )
+        files = sorted(
+            [e for e in entries if e.get("type") != "directory"],
+            key=lambda e: e["name"].lower(),
+        )
+
+        for entry in dirs:
+            name = entry["name"]
+            # Trailing indicator for folders
+            item = QListWidgetItem(name + "/")
+            full_path = dir_path.rstrip("/") + "/" + name
+            item.setData(Qt.ItemDataRole.UserRole, full_path)
+            item.setData(Qt.ItemDataRole.UserRole + 1, "directory")
+            col.addItem(item)
+
+        for entry in files:
+            name = entry["name"]
+            item = QListWidgetItem(name)
+            full_path = dir_path.rstrip("/") + "/" + name
+            item.setData(Qt.ItemDataRole.UserRole, full_path)
+            item.setData(Qt.ItemDataRole.UserRole + 1, "file")
+            # Store metadata for preview
+            item.setData(Qt.ItemDataRole.UserRole + 2, entry.get("size", 0))
+            item.setData(Qt.ItemDataRole.UserRole + 3, entry.get("modified", 0))
+
+            # Apply file filter
+            if self._allowed_extensions and not self._matches_filter(name):
+                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEnabled)
+                item.setForeground(
+                    col.palette().color(col.palette().ColorRole.PlaceholderText)
+                )
+
+            col.addItem(item)
+
+        # Pagination sentinel
+        if has_more:
+            load_more = QListWidgetItem("Load more...")
+            load_more.setData(Qt.ItemDataRole.UserRole, dir_path)
+            load_more.setData(Qt.ItemDataRole.UserRole + 1, "load_more")
+            load_more.setData(
+                Qt.ItemDataRole.UserRole + 4, col.count()
+            )  # offset = current count
+            load_more.setForeground(
+                col.palette().color(col.palette().ColorRole.Link)
+            )
+            col.addItem(load_more)
+
+        # Scroll column container to show new column
+        self._column_scroll.ensureWidgetVisible(col)
+
+    def _matches_filter(self, filename: str) -> bool:
+        """Check if a filename matches the file filter."""
+        lower = filename.lower()
+        return any(lower.endswith(ext) for ext in self._allowed_extensions)
+
+    # ------------------------------------------------------------------
+    # Event handlers
+    # ------------------------------------------------------------------
+
+    def _on_item_clicked(self, item: QListWidgetItem):
+        """Handle single click on a column item."""
+        item_type = item.data(Qt.ItemDataRole.UserRole + 1)
+        path = item.data(Qt.ItemDataRole.UserRole)
+
+        if item_type == "load_more":
+            # Pagination: request next page
+            offset = item.data(Qt.ItemDataRole.UserRole + 4)
+            self._send_fn(
+                f"FS_LIST_DIR{self._SEPARATOR}{path}{self._SEPARATOR}{offset}"
+            )
+            return
+
+        # Find which column this item belongs to
+        source_col = item.listWidget()
+        col_idx = self._columns.index(source_col) if source_col in self._columns else -1
+
+        if item_type == "mount":
+            # Mount click: clear columns after mount selector, request root listing
+            self._remove_columns_after(0)
+            self._send_fn(
+                f"FS_LIST_DIR{self._SEPARATOR}{path}{self._SEPARATOR}0"
+            )
+            self._selected_path = ""
+            self._path_bar.clear()
+            self._select_button.setEnabled(False)
+            self._clear_preview()
+
+        elif item_type == "directory":
+            # Directory click: remove deeper columns, request listing
+            if col_idx >= 0:
+                self._remove_columns_after(col_idx)
+            self._send_fn(
+                f"FS_LIST_DIR{self._SEPARATOR}{path}{self._SEPARATOR}0"
+            )
+            self._selected_path = ""
+            self._path_bar.clear()
+            self._select_button.setEnabled(False)
+            self._clear_preview()
+
+        elif item_type == "file":
+            # File click: highlight, show preview, update path bar
+            if col_idx >= 0:
+                self._remove_columns_after(col_idx)
+            self._selected_path = path
+            self._path_bar.setText(path)
+            self._select_button.setEnabled(True)
+            self._show_preview(item)
+
+    def _on_item_double_clicked(self, item: QListWidgetItem):
+        """Handle double click — confirms file selection."""
+        item_type = item.data(Qt.ItemDataRole.UserRole + 1)
+        if item_type == "file" and item.flags() & Qt.ItemFlag.ItemIsEnabled:
+            path = item.data(Qt.ItemDataRole.UserRole)
+            self._selected_path = path
+            self._path_bar.setText(path)
+            self.file_selected.emit(path)
+
+    def _on_select_clicked(self):
+        """Handle Select button click."""
+        if self._selected_path:
+            self.file_selected.emit(self._selected_path)
+
+    # ------------------------------------------------------------------
+    # Preview
+    # ------------------------------------------------------------------
+
+    def _show_preview(self, item: QListWidgetItem):
+        """Show file metadata in the preview panel."""
+        import datetime
+
+        name = item.text()
+        size = item.data(Qt.ItemDataRole.UserRole + 2) or 0
+        modified = item.data(Qt.ItemDataRole.UserRole + 3) or 0
+
+        self._preview_name.setText(name)
+        self._preview_size.setText(self._format_size(size))
+        if modified:
+            dt = datetime.datetime.fromtimestamp(modified)
+            self._preview_modified.setText(dt.strftime("%Y-%m-%d %H:%M"))
+        else:
+            self._preview_modified.setText("")
+
+    def _clear_preview(self):
+        """Clear the preview panel."""
+        self._preview_name.setText("")
+        self._preview_size.setText("")
+        self._preview_modified.setText("")
+
+    @staticmethod
+    def _format_size(size_bytes: int) -> str:
+        """Format byte count as human-readable string."""
+        if size_bytes < 1024:
+            return f"{size_bytes} B"
+        elif size_bytes < 1024 * 1024:
+            return f"{size_bytes / 1024:.1f} KB"
+        elif size_bytes < 1024 * 1024 * 1024:
+            return f"{size_bytes / (1024 * 1024):.1f} MB"
+        else:
+            return f"{size_bytes / (1024 * 1024 * 1024):.1f} GB"
 
 
 class RemoteTrainingWidget(QGroupBox):

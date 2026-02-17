@@ -8,6 +8,7 @@ import asyncio
 import logging
 import os
 import re
+import signal
 import shutil
 import stat
 import time
@@ -15,6 +16,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from aiortc import RTCDataChannel
+
+from sleap_rtc.worker.progress_reporter import ProgressReporter
 
 if TYPE_CHECKING:
     from sleap_rtc.worker.capabilities import WorkerCapabilities
@@ -56,6 +59,24 @@ class JobExecutor:
         self.unzipped_dir = ""
         self.output_dir = ""
         self.package_type = "train"  # Default to training
+        self._running_process: asyncio.subprocess.Process | None = None
+
+    def stop_running_job(self):
+        """Send SIGINT to the running job process for graceful stop.
+
+        This allows sleap-nn to save the current checkpoint before exiting.
+        """
+        proc = self._running_process
+        if proc is not None and proc.returncode is None:
+            logging.info(f"Sending SIGINT to process {proc.pid} (graceful stop)")
+            proc.send_signal(signal.SIGINT)
+
+    def cancel_running_job(self):
+        """Send SIGTERM to the running job process for immediate cancellation."""
+        proc = self._running_process
+        if proc is not None and proc.returncode is None:
+            logging.info(f"Sending SIGTERM to process {proc.pid} (hard cancel)")
+            proc.terminate()
 
     def parse_training_script(self, train_script_path: str):
         """Parse train-script.sh and extract sleap-nn train commands.
@@ -542,6 +563,7 @@ class JobExecutor:
         job_id: str,
         job_type: str = "train",
         working_dir: str = None,
+        zmq_ports: dict | None = None,
     ):
         """Execute a job from a pre-built command list (structured job submission).
 
@@ -555,6 +577,10 @@ class JobExecutor:
             job_id: Unique job identifier
             job_type: Type of job ("train" or "track")
             working_dir: Working directory for execution (defaults to current dir)
+            zmq_ports: Optional dict with 'controller' and 'publish' ZMQ port
+                numbers. When provided for train jobs, a ProgressReporter is
+                started to forward sleap-nn's native ZMQ progress messages
+                over the RTC data channel.
         """
         from sleap_rtc.protocol import (
             MSG_JOB_PROGRESS,
@@ -570,6 +596,17 @@ class JobExecutor:
         logging.info(f"[JOB {job_id}] Command: {' '.join(cmd)}")
         logging.info(f"[JOB {job_id}] Working directory: {working_dir}")
 
+        # Start ZMQ progress reporter for train jobs so sleap-nn's native
+        # ZMQ messages are forwarded over the RTC data channel.
+        progress_reporter = None
+        if job_type == "train" and zmq_ports:
+            progress_reporter = ProgressReporter(
+                control_address=f"tcp://127.0.0.1:{zmq_ports.get('controller', 9000)}",
+                progress_address=f"tcp://127.0.0.1:{zmq_ports.get('publish', 9001)}",
+            )
+            progress_reporter.start_control_socket()
+            progress_reporter.start_progress_listener_task(channel)
+
         try:
             # Start the process
             process = await asyncio.create_subprocess_exec(
@@ -579,6 +616,7 @@ class JobExecutor:
                 cwd=working_dir,
                 env={**os.environ, "PYTHONUNBUFFERED": "1"},
             )
+            self._running_process = process
 
             logging.info(f"[JOB {job_id}] Process started with PID: {process.pid}")
 
@@ -587,8 +625,10 @@ class JobExecutor:
                 """Stream logs and extract progress information."""
                 buf = b""
                 epoch_pattern = re.compile(r"Epoch\s+(\d+)")
-                loss_pattern = re.compile(r"loss[:\s]+([0-9.]+)")
-                val_loss_pattern = re.compile(r"val_loss[:\s]+([0-9.]+)")
+                # Match loss=, loss:, loss  (but not val/loss= or val_loss=)
+                loss_pattern = re.compile(r"(?<![/\w])loss[=:\s]+([0-9.]+)")
+                # Match val/loss= or val_loss= or val_loss: etc.
+                val_loss_pattern = re.compile(r"val[/_]loss[=:\s]+([0-9.]+)")
 
                 current_epoch = 0
                 current_loss = None
@@ -672,37 +712,53 @@ class JobExecutor:
 
             await stream_logs_with_progress()
             await process.wait()
+            self._running_process = None
 
             duration_seconds = int(time.time() - start_time)
             logging.info(
                 f"[JOB {job_id}] Process completed with return code: {process.returncode}"
             )
 
-            if process.returncode == 0:
-                # Job completed successfully
+            # SIGINT (-2) means graceful stop via "Stop Early" — treat as success
+            stopped_early = process.returncode == -signal.SIGINT
+
+            if process.returncode == 0 or stopped_early:
+                # Job completed successfully (or stopped early with checkpoint)
                 import json
                 result_data = {
                     "job_id": job_id,
                     "job_type": job_type,
                     "duration_seconds": duration_seconds,
                     "success": True,
+                    "stopped_early": stopped_early,
                 }
                 if channel.readyState == "open":
                     channel.send(f"{MSG_JOB_COMPLETE}{MSG_SEPARATOR}{json.dumps(result_data)}")
-                logging.info(f"[JOB {job_id}] Job completed successfully")
+                if stopped_early:
+                    logging.info(f"[JOB {job_id}] Job stopped early (checkpoint saved)")
+                else:
+                    logging.info(f"[JOB {job_id}] Job completed successfully")
             else:
-                # Job failed
+                # Job failed or was cancelled
                 import json
+                cancelled = process.returncode == -signal.SIGTERM
                 error_data = {
                     "job_id": job_id,
                     "job_type": job_type,
                     "exit_code": process.returncode,
                     "duration_seconds": duration_seconds,
-                    "message": f"Process exited with code {process.returncode}",
+                    "message": (
+                        "Job cancelled by user"
+                        if cancelled
+                        else f"Process exited with code {process.returncode}"
+                    ),
                 }
                 if channel.readyState == "open":
                     channel.send(f"{MSG_JOB_FAILED}{MSG_SEPARATOR}{json.dumps(error_data)}")
-                logging.error(f"[JOB {job_id}] Job failed with exit code {process.returncode}")
+                if cancelled:
+                    logging.info(f"[JOB {job_id}] Job cancelled by user")
+                else:
+                    logging.error(f"[JOB {job_id}] Job failed with exit code {process.returncode}")
 
         except Exception as e:
             # Unexpected error
@@ -715,3 +771,7 @@ class JobExecutor:
             }
             if channel.readyState == "open":
                 channel.send(f"{MSG_JOB_FAILED}{MSG_SEPARATOR}{json.dumps(error_data)}")
+
+        finally:
+            if progress_reporter is not None:
+                progress_reporter.cleanup()

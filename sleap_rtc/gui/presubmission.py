@@ -47,6 +47,7 @@ def run_presubmission_checks(
     config_content: str | None = None,
     parent_widget=None,
     on_login_required: Callable[[], bool] | None = None,
+    send_fn: "Callable[[str], None] | None" = None,
 ) -> PresubmissionResult:
     """Run the complete pre-submission validation sequence.
 
@@ -68,6 +69,9 @@ def run_presubmission_checks(
         on_login_required: Callback called when login is required.
             Should return True if login succeeded, False otherwise.
             If not provided, authentication check will fail if not logged in.
+        send_fn: Optional callable to send FS_* messages to a worker.
+            When provided, path resolution dialogs will embed a remote
+            file browser panel for navigating the worker's filesystem.
 
     Returns:
         PresubmissionResult indicating whether training can proceed.
@@ -105,7 +109,7 @@ def run_presubmission_checks(
 
     # Step 3: Check video paths
     path_result = check_video_paths(
-        slp_path, room_id, worker_id, parent_widget
+        slp_path, room_id, worker_id, parent_widget, send_fn=send_fn
     )
     if not path_result.success:
         return path_result
@@ -251,6 +255,7 @@ def check_video_paths(
     room_id: str,
     worker_id: str | None = None,
     parent_widget=None,
+    send_fn: "Callable[[str], None] | None" = None,
 ) -> PresubmissionResult:
     """Check if video paths exist on the worker.
 
@@ -259,17 +264,30 @@ def check_video_paths(
     let the user provide the correct worker-side path — the retry happens on
     the same WebRTC connection so there's no reconnection delay.
 
-    If any video paths are missing, shows PathResolutionDialog.
+    The API call runs in a background thread so that the asyncio event loop
+    (processing data channel messages) stays alive while Qt dialogs are shown
+    on the main thread. FS_* responses from the data channel are routed to
+    the ``RemoteFileBrowser`` widget via its thread-safe ``on_response()``
+    method, enabling interactive filesystem browsing during path resolution.
+
+    Both SLP path resolution and video path resolution happen while the data
+    channel is alive, so the ``RemoteFileBrowser`` can send FS_* requests
+    and receive responses in real time.
 
     Args:
         slp_path: Path to the SLP file (may be a local path).
         room_id: The room ID to check paths against.
         worker_id: Optional specific worker ID.
         parent_widget: Parent Qt widget for the dialog.
+        send_fn: Unused (kept for API compatibility). The data channel's
+            thread-safe send wrapper is provided by the API callbacks.
 
     Returns:
         PresubmissionResult with path mappings if successful.
     """
+    import queue
+    import threading
+
     from sleap_rtc.api import (
         check_video_paths as api_check_video_paths,
         AuthenticationError,
@@ -277,130 +295,208 @@ def check_video_paths(
         ConfigurationError,
     )
 
-    # Track the resolved worker SLP path (may differ from local slp_path)
-    resolved_slp_path = slp_path
+    # Typed dialog request tags
+    _SLP_PATH_REQUEST = "slp_path"
+    _VIDEOS_MISSING_REQUEST = "videos_missing"
 
-    def _on_path_rejected(attempted_path: str, error_msg: str) -> str | None:
-        """Callback invoked when the worker rejects the SLP path.
+    # Cross-thread dialog bridging queues (shared by both dialog types)
+    dialog_request_q: queue.Queue = queue.Queue()
+    dialog_response_q: queue.Queue = queue.Queue()
 
-        Shows SlpPathDialog so the user can provide the correct worker-side
-        path. Returns the corrected path, or None if the user cancels.
-        This runs within the same WebRTC connection.
+    # Active RemoteFileBrowser for FS_* response routing (set by main thread)
+    browser_ref: list = [None]
+
+    def _on_fs_response(message: str):
+        """Route FS_* data channel responses to the active browser widget.
+
+        Called from the asyncio thread. ``RemoteFileBrowser.on_response()``
+        is thread-safe (emits a ``QueuedConnection`` Qt signal).
         """
-        nonlocal resolved_slp_path
+        if browser_ref[0] is not None:
+            browser_ref[0].on_response(message)
 
-        if parent_widget is None:
-            return None  # Can't show dialog, abort
+    def _on_path_rejected(
+        attempted_path: str, error_msg: str, send_fn_dc: Callable
+    ) -> str | None:
+        """Callback invoked from the background thread when the worker
+        rejects the SLP path.
 
-        from sleap_rtc.gui.widgets import SlpPathDialog
+        Posts a request to the main thread to show ``SlpPathDialog``, then
+        blocks until the main thread puts the user's response (corrected
+        path or None) into ``dialog_response_q``.
+        """
+        dialog_request_q.put(
+            (_SLP_PATH_REQUEST, attempted_path, error_msg, send_fn_dc)
+        )
+        return dialog_response_q.get()
 
-        logger.info(
-            f"SLP path rejected by worker: {error_msg}. "
-            f"Showing path resolution dialog."
-        )
-        dialog = SlpPathDialog(
-            local_path=attempted_path,
-            error_message=error_msg,
-            parent=parent_widget,
-        )
-        if dialog.exec():
-            corrected = dialog.get_worker_path()
-            logger.info(f"User provided worker SLP path: {corrected}")
-            resolved_slp_path = corrected
-            return corrected
-        else:
-            logger.info("User cancelled SLP path resolution")
-            return None
+    def _on_videos_missing(
+        videos: list, send_fn_dc: Callable
+    ) -> dict[str, str] | None:
+        """Callback invoked from the background thread when videos are missing.
 
-    try:
-        path_result = api_check_video_paths(
-            slp_path=slp_path,
-            room_id=room_id,
-            worker_id=worker_id,
-            on_path_rejected=_on_path_rejected,
-        )
-    except AuthenticationError as e:
-        return PresubmissionResult(
-            success=False,
-            error=f"Authentication error: {e}",
-        )
-    except RoomNotFoundError as e:
-        return PresubmissionResult(
-            success=False,
-            error=f"Room error: {e}",
-        )
-    except ConfigurationError as e:
-        error_str = str(e)
-        # If user cancelled the dialog, mark as cancelled
-        if "rejected slp path" in error_str.lower() and parent_widget is not None:
+        Posts a request to the main thread to show ``PathResolutionDialog``
+        with a live ``send_fn`` for remote file browsing, then blocks until
+        the main thread puts the user's response (resolved mappings dict
+        or None) into ``dialog_response_q``.
+        """
+        dialog_request_q.put((_VIDEOS_MISSING_REQUEST, videos, send_fn_dc))
+        return dialog_response_q.get()
+
+    # Holders for background thread result / exception
+    result_holder: list = [None]
+    error_holder: list = [None]
+
+    def _run_api():
+        """Background thread: runs asyncio.run() with WebRTC connection."""
+        try:
+            result_holder[0] = api_check_video_paths(
+                slp_path=slp_path,
+                room_id=room_id,
+                worker_id=worker_id,
+                on_path_rejected=_on_path_rejected,
+                on_fs_response=_on_fs_response,
+                on_videos_missing=(
+                    _on_videos_missing if parent_widget is not None else None
+                ),
+            )
+        except Exception as e:
+            error_holder[0] = e
+
+    thread = threading.Thread(target=_run_api, daemon=True)
+    thread.start()
+
+    # Main thread: process Qt events and handle dialog requests while
+    # the background thread runs the API call.
+    if parent_widget is not None:
+        from qtpy.QtWidgets import QApplication
+
+        while thread.is_alive():
+            try:
+                request = dialog_request_q.get(timeout=0.05)
+            except queue.Empty:
+                QApplication.processEvents()
+                continue
+
+            request_type = request[0]
+
+            if request_type == _SLP_PATH_REQUEST:
+                _, attempted_path, error_msg, send_fn_dc = request
+
+                from sleap_rtc.gui.widgets import SlpPathDialog
+
+                logger.info(
+                    f"SLP path rejected by worker: {error_msg}. "
+                    f"Showing path resolution dialog."
+                )
+                dialog = SlpPathDialog(
+                    local_path=attempted_path,
+                    error_message=error_msg,
+                    send_fn=send_fn_dc,
+                    parent=parent_widget,
+                )
+                if dialog._browser is not None:
+                    browser_ref[0] = dialog._browser
+
+                if dialog.exec():
+                    corrected = dialog.get_worker_path()
+                    logger.info(f"User provided worker SLP path: {corrected}")
+                    dialog_response_q.put(corrected)
+                else:
+                    logger.info("User cancelled SLP path resolution")
+                    dialog_response_q.put(None)
+
+                browser_ref[0] = None
+
+            elif request_type == _VIDEOS_MISSING_REQUEST:
+                _, videos, send_fn_dc = request
+
+                from sleap_rtc.gui.widgets import PathResolutionDialog
+
+                logger.info("Video path resolution required. Showing dialog.")
+                dialog = PathResolutionDialog(
+                    videos, send_fn=send_fn_dc, parent=parent_widget
+                )
+                if dialog._browser is not None:
+                    browser_ref[0] = dialog._browser
+
+                if dialog.exec():
+                    resolved_paths = dialog.get_resolved_paths()
+                    logger.info(
+                        f"User resolved {len(resolved_paths)} video paths"
+                    )
+                    dialog_response_q.put(resolved_paths)
+                else:
+                    logger.info("User cancelled video path resolution")
+                    dialog_response_q.put(None)
+
+                browser_ref[0] = None
+
+    thread.join()
+
+    # Re-raise exceptions from background thread as PresubmissionResult
+    if error_holder[0] is not None:
+        exc = error_holder[0]
+        if isinstance(exc, AuthenticationError):
             return PresubmissionResult(
                 success=False,
-                cancelled=True,
-                error="SLP path resolution cancelled.",
+                error=f"Authentication error: {exc}",
             )
-        return PresubmissionResult(
-            success=False,
-            error=error_str,
-        )
-    except Exception as e:
-        logger.warning(f"Video path check failed: {e}")
-        # If path check fails (e.g., network error), allow proceeding
-        # with empty mappings - the worker will handle missing paths
+        if isinstance(exc, RoomNotFoundError):
+            return PresubmissionResult(
+                success=False,
+                error=f"Room error: {exc}",
+            )
+        if isinstance(exc, ConfigurationError):
+            error_str = str(exc)
+            if any(
+                s in error_str.lower()
+                for s in ("rejected slp path", "cancelled by user")
+            ):
+                return PresubmissionResult(
+                    success=False,
+                    cancelled=True,
+                    error=error_str,
+                )
+            return PresubmissionResult(
+                success=False,
+                error=error_str,
+            )
+        logger.warning(f"Video path check failed: {exc}")
         return PresubmissionResult(
             success=True,
             path_mappings={},
         )
 
-    # Build initial path mappings: local SLP path -> worker SLP path
-    mappings: dict[str, str] = {}
-    if resolved_slp_path != slp_path:
-        mappings[slp_path] = resolved_slp_path
+    path_result = result_holder[0]
 
-    # If all video paths found, we're good
-    if path_result.all_found:
-        logger.debug(f"All {path_result.total_videos} video paths found on worker")
-        for v in path_result.videos:
-            if v.found and v.worker_path:
-                mappings[v.original_path] = v.worker_path
+    # Build path mappings: local SLP path -> worker SLP path
+    mappings: dict[str, str] = {}
+    if path_result.slp_path != slp_path:
+        mappings[slp_path] = path_result.slp_path
+
+    # Merge found video paths
+    for v in path_result.videos:
+        if v.found and v.worker_path:
+            mappings[v.original_path] = v.worker_path
+
+    # Merge user-resolved video path mappings (from on_videos_missing)
+    if path_result.path_mappings:
+        mappings.update(path_result.path_mappings)
+
+    if path_result.all_found or path_result.path_mappings:
+        logger.debug(f"Video paths resolved: {len(mappings)} mappings")
         return PresubmissionResult(
             success=True,
             path_mappings=mappings,
         )
 
-    # Some paths missing, show dialog
-    logger.info(
-        f"Video path check: {path_result.found_count}/{path_result.total_videos} "
-        f"found, {path_result.missing_count} missing"
+    # Fallback: missing videos but no callback was available (headless mode)
+    missing_paths = [v.filename for v in path_result.videos if not v.found]
+    return PresubmissionResult(
+        success=False,
+        error=f"Missing video paths on worker: {', '.join(missing_paths)}",
     )
-
-    if parent_widget is not None:
-        from sleap_rtc.gui.widgets import PathResolutionDialog
-
-        dialog = PathResolutionDialog(path_result.videos, parent=parent_widget)
-        result = dialog.exec()
-
-        if result:  # accepted
-            resolved_paths = dialog.get_resolved_paths()
-            logger.info(f"User resolved {len(resolved_paths)} video paths")
-            mappings.update(resolved_paths)
-            return PresubmissionResult(
-                success=True,
-                path_mappings=mappings,
-            )
-        else:  # rejected/cancelled
-            logger.info("User cancelled path resolution")
-            return PresubmissionResult(
-                success=False,
-                cancelled=True,
-                error="Video path resolution cancelled.",
-            )
-    else:
-        # No parent widget, can't show dialog
-        missing_paths = [v.filename for v in path_result.videos if not v.found]
-        return PresubmissionResult(
-            success=False,
-            error=f"Missing video paths on worker: {', '.join(missing_paths)}",
-        )
 
 
 class PresubmissionFlow:

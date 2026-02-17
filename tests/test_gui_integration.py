@@ -37,6 +37,8 @@ from dataclasses import dataclass
 from unittest.mock import MagicMock, patch, PropertyMock
 from typing import Any
 
+from qtpy.QtCore import Qt
+
 from sleap_rtc.api import (
     User,
     Room,
@@ -104,6 +106,17 @@ class MockSLEAPPreferences:
 # =============================================================================
 # Test Fixtures
 # =============================================================================
+
+
+@pytest.fixture(scope="session")
+def qapp():
+    """Create a QApplication instance for Qt widget tests."""
+    from qtpy.QtWidgets import QApplication
+
+    app = QApplication.instance()
+    if app is None:
+        app = QApplication([])
+    yield app
 
 
 @pytest.fixture
@@ -418,7 +431,9 @@ class TestProgressForwarding:
     """Tests for progress forwarding end-to-end."""
 
     def test_progress_bridge_formats_train_begin(self, mock_zmq):
-        """Should format train_begin event correctly."""
+        """Should format train_begin event as jsonpickle via send_string."""
+        import jsonpickle
+
         mock_context = MagicMock()
         mock_socket = MagicMock()
         mock_zmq.Context.return_value = mock_context
@@ -435,18 +450,16 @@ class TestProgressForwarding:
         with RemoteProgressBridge() as bridge:
             bridge.on_progress(event)
 
-        # Verify message format
-        mock_socket.send_multipart.assert_called_once()
-        args = mock_socket.send_multipart.call_args[0][0]
-        assert args[0] == b"progress"
-
-        payload = json.loads(args[1])
+        mock_socket.send_string.assert_called_once()
+        payload = jsonpickle.decode(mock_socket.send_string.call_args[0][0])
         assert payload["event"] == "train_begin"
-        assert payload["total_epochs"] == 100
+        assert payload["what"] == ""
         assert payload["wandb_url"] == "https://wandb.ai/run/123"
 
     def test_progress_bridge_formats_epoch_end(self, mock_zmq):
-        """Should format epoch_end event correctly."""
+        """Should format epoch_end with loss in logs dict."""
+        import jsonpickle
+
         mock_context = MagicMock()
         mock_socket = MagicMock()
         mock_zmq.Context.return_value = mock_context
@@ -462,20 +475,19 @@ class TestProgressForwarding:
             val_loss=0.06,
         )
 
-        with RemoteProgressBridge() as bridge:
+        with RemoteProgressBridge(model_type="centroid") as bridge:
             bridge.on_progress(event)
 
-        args = mock_socket.send_multipart.call_args[0][0]
-        payload = json.loads(args[1])
-
+        payload = jsonpickle.decode(mock_socket.send_string.call_args[0][0])
         assert payload["event"] == "epoch_end"
-        assert payload["epoch"] == 50
-        assert payload["total_epochs"] == 100
-        assert payload["train_loss"] == 0.05
-        assert payload["val_loss"] == 0.06
+        assert payload["what"] == "centroid"
+        assert payload["logs"]["train/loss"] == 0.05
+        assert payload["logs"]["val/loss"] == 0.06
 
     def test_progress_bridge_formats_train_end(self, mock_zmq):
-        """Should format train_end event correctly."""
+        """Should format train_end with what field."""
+        import jsonpickle
+
         mock_context = MagicMock()
         mock_socket = MagicMock()
         mock_zmq.Context.return_value = mock_context
@@ -491,15 +503,13 @@ class TestProgressForwarding:
         with RemoteProgressBridge() as bridge:
             bridge.on_progress(event)
 
-        args = mock_socket.send_multipart.call_args[0][0]
-        payload = json.loads(args[1])
-
+        payload = jsonpickle.decode(mock_socket.send_string.call_args[0][0])
         assert payload["event"] == "train_end"
-        assert payload["success"] is True
+        assert payload["what"] == ""
 
     @patch("sleap_rtc.api.run_training")
     def test_run_remote_training_forwards_progress(self, mock_run_training, mock_zmq):
-        """Should forward all progress events through bridge."""
+        """Should forward all progress events through bridge via send_string."""
         mock_context = MagicMock()
         mock_socket = MagicMock()
         mock_zmq.Context.return_value = mock_context
@@ -531,7 +541,7 @@ class TestProgressForwarding:
         )
 
         # Should have published: train_begin + 10 epoch_end + train_end = 12
-        assert mock_socket.send_multipart.call_count == 12
+        assert mock_socket.send_string.call_count == 12
 
 
 # =============================================================================
@@ -892,4 +902,707 @@ class TestDocumentation:
             ))
 
         # Verify message was published
-        mock_socket.send_multipart.assert_called_once()
+        mock_socket.send_string.assert_called_once()
+
+
+# =============================================================================
+# Remote File Browser Tests
+# =============================================================================
+
+
+class TestRemoteFileBrowser:
+    """Tests for RemoteFileBrowser widget with mocked send/receive."""
+
+    @pytest.fixture
+    def send_fn(self):
+        """Mock send function that records sent messages."""
+        return MagicMock()
+
+    @pytest.fixture
+    def browser(self, send_fn, qapp):
+        """Create a RemoteFileBrowser with mocked transport."""
+        from sleap_rtc.gui.widgets import RemoteFileBrowser
+
+        browser = RemoteFileBrowser(send_fn=send_fn)
+        yield browser
+        browser.deleteLater()
+
+    @pytest.fixture
+    def browser_with_filter(self, send_fn, qapp):
+        """Create a RemoteFileBrowser with SLP file filter."""
+        from sleap_rtc.gui.widgets import RemoteFileBrowser
+
+        browser = RemoteFileBrowser(send_fn=send_fn, file_filter="*.slp")
+        yield browser
+        browser.deleteLater()
+
+    def _mounts_response(self, mounts: list[dict]) -> str:
+        """Build a FS_MOUNTS_RESPONSE message string."""
+        return f"FS_MOUNTS_RESPONSE::{json.dumps(mounts)}"
+
+    def _list_response(
+        self,
+        path: str,
+        entries: list[dict],
+        has_more: bool = False,
+        total_count: int | None = None,
+    ) -> str:
+        """Build a FS_LIST_RESPONSE message string."""
+        if total_count is None:
+            total_count = len(entries)
+        data = {
+            "path": path,
+            "entries": entries,
+            "has_more": has_more,
+            "total_count": total_count,
+        }
+        return f"FS_LIST_RESPONSE::{json.dumps(data)}"
+
+    def _error_response(self, code: str, message: str) -> str:
+        """Build a FS_ERROR message string."""
+        return f"FS_ERROR::{code}::{message}"
+
+    # --- Mount Loading ---
+
+    def test_load_mounts_sends_message(self, browser, send_fn):
+        """load_mounts() should send FS_GET_MOUNTS."""
+        browser.load_mounts()
+        send_fn.assert_called_once_with("FS_GET_MOUNTS")
+
+    def test_mounts_response_populates_column(self, browser):
+        """FS_MOUNTS_RESPONSE should create a mount selector column."""
+        mounts = [
+            {"path": "/mnt/data", "label": "Lab Data"},
+            {"path": "/mnt/models", "label": "Models"},
+        ]
+        browser._handle_response(self._mounts_response(mounts))
+
+        assert len(browser._columns) == 1
+        col = browser._columns[0]
+        assert col.count() == 2
+        assert col.item(0).text() == "Lab Data"
+        assert col.item(0).data(Qt.ItemDataRole.UserRole) == "/mnt/data"
+        assert col.item(1).text() == "Models"
+
+    def test_mounts_response_replaces_existing(self, browser):
+        """Loading mounts again should replace existing columns."""
+        mounts1 = [{"path": "/mnt/a", "label": "A"}]
+        mounts2 = [{"path": "/mnt/b", "label": "B"}, {"path": "/mnt/c", "label": "C"}]
+
+        browser._handle_response(self._mounts_response(mounts1))
+        assert len(browser._columns) == 1
+
+        browser._handle_response(self._mounts_response(mounts2))
+        assert len(browser._columns) == 1
+        assert browser._columns[0].count() == 2
+        assert browser._columns[0].item(0).text() == "B"
+
+    # --- Directory Navigation ---
+
+    def test_mount_click_sends_list_dir(self, browser, send_fn):
+        """Clicking a mount should send FS_LIST_DIR for mount root."""
+        mounts = [{"path": "/mnt/data", "label": "Lab Data"}]
+        browser._handle_response(self._mounts_response(mounts))
+
+        item = browser._columns[0].item(0)
+        browser._on_item_clicked(item)
+
+        send_fn.assert_called_with("FS_LIST_DIR::/mnt/data::0")
+
+    def test_list_response_creates_column(self, browser):
+        """FS_LIST_RESPONSE should create a new column with entries."""
+        mounts = [{"path": "/mnt/data", "label": "Lab Data"}]
+        browser._handle_response(self._mounts_response(mounts))
+
+        entries = [
+            {"name": "videos", "type": "directory", "size": 0, "modified": 1700000000},
+            {"name": "labels.slp", "type": "file", "size": 1024, "modified": 1700000100},
+        ]
+        browser._handle_response(self._list_response("/mnt/data", entries))
+
+        assert len(browser._columns) == 2
+        col = browser._columns[1]
+        # Directories first, then files
+        assert col.item(0).text() == "videos/"
+        assert col.item(1).text() == "labels.slp"
+
+    def test_directory_click_sends_list_dir(self, browser, send_fn):
+        """Clicking a directory should send FS_LIST_DIR for that path."""
+        mounts = [{"path": "/mnt/data", "label": "Lab Data"}]
+        browser._handle_response(self._mounts_response(mounts))
+
+        entries = [
+            {"name": "videos", "type": "directory", "size": 0, "modified": 0},
+        ]
+        browser._handle_response(self._list_response("/mnt/data", entries))
+
+        dir_item = browser._columns[1].item(0)
+        browser._on_item_clicked(dir_item)
+
+        send_fn.assert_called_with("FS_LIST_DIR::/mnt/data/videos::0")
+
+    def test_directory_click_removes_deeper_columns(self, browser):
+        """Clicking a folder in column N should remove columns N+1 and beyond."""
+        mounts = [{"path": "/mnt/data", "label": "Data"}]
+        browser._handle_response(self._mounts_response(mounts))
+
+        # Simulate navigating 3 levels deep
+        browser._handle_response(
+            self._list_response("/mnt/data", [
+                {"name": "a", "type": "directory", "size": 0, "modified": 0},
+            ])
+        )
+        browser._handle_response(
+            self._list_response("/mnt/data/a", [
+                {"name": "b", "type": "directory", "size": 0, "modified": 0},
+            ])
+        )
+        browser._handle_response(
+            self._list_response("/mnt/data/a/b", [
+                {"name": "c.txt", "type": "file", "size": 100, "modified": 0},
+            ])
+        )
+
+        # Now 4 columns: mount, /mnt/data, /mnt/data/a, /mnt/data/a/b
+        assert len(browser._columns) == 4
+
+        # Click mount "Data" again
+        browser._on_item_clicked(browser._columns[0].item(0))
+        # Should remove columns 1,2,3 (leaving only mount)
+        assert len(browser._columns) == 1
+
+    # --- File Selection ---
+
+    def test_file_click_selects_path(self, browser):
+        """Clicking a file should update path bar and enable Select button."""
+        mounts = [{"path": "/mnt/data", "label": "Data"}]
+        browser._handle_response(self._mounts_response(mounts))
+
+        entries = [
+            {"name": "labels.slp", "type": "file", "size": 2048, "modified": 1700000000},
+        ]
+        browser._handle_response(self._list_response("/mnt/data", entries))
+
+        file_item = browser._columns[1].item(0)
+        browser._on_item_clicked(file_item)
+
+        assert browser._selected_path == "/mnt/data/labels.slp"
+        assert browser._path_bar.text() == "/mnt/data/labels.slp"
+        assert browser._select_button.isEnabled()
+
+    def test_file_double_click_emits_signal(self, browser):
+        """Double-clicking a file should emit file_selected signal."""
+        mounts = [{"path": "/mnt/data", "label": "Data"}]
+        browser._handle_response(self._mounts_response(mounts))
+
+        entries = [
+            {"name": "labels.slp", "type": "file", "size": 2048, "modified": 0},
+        ]
+        browser._handle_response(self._list_response("/mnt/data", entries))
+
+        received = []
+        browser.file_selected.connect(received.append)
+
+        file_item = browser._columns[1].item(0)
+        browser._on_item_double_clicked(file_item)
+
+        assert received == ["/mnt/data/labels.slp"]
+
+    def test_select_button_emits_signal(self, browser):
+        """Select button should emit file_selected for the current path."""
+        mounts = [{"path": "/mnt/data", "label": "Data"}]
+        browser._handle_response(self._mounts_response(mounts))
+
+        entries = [
+            {"name": "labels.slp", "type": "file", "size": 1024, "modified": 0},
+        ]
+        browser._handle_response(self._list_response("/mnt/data", entries))
+
+        received = []
+        browser.file_selected.connect(received.append)
+
+        # Click file to select, then click Select button
+        file_item = browser._columns[1].item(0)
+        browser._on_item_clicked(file_item)
+        browser._on_select_clicked()
+
+        assert received == ["/mnt/data/labels.slp"]
+
+    def test_select_button_disabled_initially(self, browser):
+        """Select button should be disabled when no file is selected."""
+        assert not browser._select_button.isEnabled()
+
+    # --- File Filtering ---
+
+    def test_filter_greys_out_non_matching(self, browser_with_filter):
+        """Non-matching files should be greyed out and not selectable."""
+        browser = browser_with_filter
+        mounts = [{"path": "/mnt/data", "label": "Data"}]
+        browser._handle_response(self._mounts_response(mounts))
+
+        entries = [
+            {"name": "labels.slp", "type": "file", "size": 1024, "modified": 0},
+            {"name": "video.mp4", "type": "file", "size": 2048, "modified": 0},
+            {"name": "readme.txt", "type": "file", "size": 100, "modified": 0},
+        ]
+        browser._handle_response(self._list_response("/mnt/data", entries))
+
+        col = browser._columns[1]
+        # Files are sorted alphabetically: labels.slp, readme.txt, video.mp4
+        slp_item = col.item(0)
+        assert slp_item.text() == "labels.slp"
+        assert slp_item.flags() & Qt.ItemFlag.ItemIsEnabled
+
+        # readme.txt should be disabled
+        txt_item = col.item(1)
+        assert txt_item.text() == "readme.txt"
+        assert not (txt_item.flags() & Qt.ItemFlag.ItemIsEnabled)
+
+        # video.mp4 should be disabled
+        mp4_item = col.item(2)
+        assert mp4_item.text() == "video.mp4"
+        assert not (mp4_item.flags() & Qt.ItemFlag.ItemIsEnabled)
+
+    def test_filter_allows_all_directories(self, browser_with_filter):
+        """Directories should always be navigable regardless of filter."""
+        browser = browser_with_filter
+        mounts = [{"path": "/mnt/data", "label": "Data"}]
+        browser._handle_response(self._mounts_response(mounts))
+
+        entries = [
+            {"name": "subdir", "type": "directory", "size": 0, "modified": 0},
+        ]
+        browser._handle_response(self._list_response("/mnt/data", entries))
+
+        col = browser._columns[1]
+        dir_item = col.item(0)
+        assert dir_item.text() == "subdir/"
+        assert dir_item.flags() & Qt.ItemFlag.ItemIsEnabled
+
+    def test_no_filter_allows_all_files(self, browser):
+        """Without a filter, all files should be selectable."""
+        mounts = [{"path": "/mnt/data", "label": "Data"}]
+        browser._handle_response(self._mounts_response(mounts))
+
+        entries = [
+            {"name": "any.xyz", "type": "file", "size": 100, "modified": 0},
+        ]
+        browser._handle_response(self._list_response("/mnt/data", entries))
+
+        col = browser._columns[1]
+        assert col.item(0).flags() & Qt.ItemFlag.ItemIsEnabled
+
+    def test_double_click_disabled_file_no_signal(self, browser_with_filter):
+        """Double-clicking a disabled file should not emit file_selected."""
+        browser = browser_with_filter
+        mounts = [{"path": "/mnt/data", "label": "Data"}]
+        browser._handle_response(self._mounts_response(mounts))
+
+        entries = [
+            {"name": "video.mp4", "type": "file", "size": 2048, "modified": 0},
+        ]
+        browser._handle_response(self._list_response("/mnt/data", entries))
+
+        received = []
+        browser.file_selected.connect(received.append)
+
+        file_item = browser._columns[1].item(0)
+        browser._on_item_double_clicked(file_item)
+
+        assert received == []
+
+    # --- Pagination ---
+
+    def test_has_more_shows_load_more(self, browser):
+        """When has_more=true, a 'Load more...' entry should appear."""
+        mounts = [{"path": "/mnt/data", "label": "Data"}]
+        browser._handle_response(self._mounts_response(mounts))
+
+        entries = [
+            {"name": f"file{i}.txt", "type": "file", "size": 100, "modified": 0}
+            for i in range(20)
+        ]
+        browser._handle_response(
+            self._list_response("/mnt/data", entries, has_more=True, total_count=50)
+        )
+
+        col = browser._columns[1]
+        last_item = col.item(col.count() - 1)
+        assert last_item.text() == "Load more..."
+        assert last_item.data(Qt.ItemDataRole.UserRole + 1) == "load_more"
+
+    def test_load_more_sends_offset(self, browser, send_fn):
+        """Clicking 'Load more...' should send FS_LIST_DIR with correct offset."""
+        mounts = [{"path": "/mnt/data", "label": "Data"}]
+        browser._handle_response(self._mounts_response(mounts))
+
+        entries = [
+            {"name": f"file{i}.txt", "type": "file", "size": 100, "modified": 0}
+            for i in range(20)
+        ]
+        browser._handle_response(
+            self._list_response("/mnt/data", entries, has_more=True, total_count=50)
+        )
+
+        col = browser._columns[1]
+        load_more_item = col.item(col.count() - 1)
+        browser._on_item_clicked(load_more_item)
+
+        send_fn.assert_called_with("FS_LIST_DIR::/mnt/data::20")
+
+    def test_pagination_appends_entries(self, browser):
+        """Paginated response should append entries and remove 'Load more...'."""
+        mounts = [{"path": "/mnt/data", "label": "Data"}]
+        browser._handle_response(self._mounts_response(mounts))
+
+        # First page
+        entries1 = [
+            {"name": f"file{i}.txt", "type": "file", "size": 100, "modified": 0}
+            for i in range(20)
+        ]
+        browser._handle_response(
+            self._list_response("/mnt/data", entries1, has_more=True, total_count=25)
+        )
+
+        col = browser._columns[1]
+        assert col.count() == 21  # 20 files + "Load more..."
+
+        # Second page (no more)
+        entries2 = [
+            {"name": f"file{i}.txt", "type": "file", "size": 100, "modified": 0}
+            for i in range(20, 25)
+        ]
+        browser._handle_response(
+            self._list_response("/mnt/data", entries2, has_more=False, total_count=25)
+        )
+
+        # "Load more..." removed, 5 new entries added
+        assert col.count() == 25
+        # No "Load more..." at end
+        assert col.item(col.count() - 1).data(Qt.ItemDataRole.UserRole + 1) != "load_more"
+
+    # --- Preview ---
+
+    def test_file_click_shows_preview(self, browser):
+        """Clicking a file should show metadata in the preview panel."""
+        mounts = [{"path": "/mnt/data", "label": "Data"}]
+        browser._handle_response(self._mounts_response(mounts))
+
+        entries = [
+            {"name": "labels.slp", "type": "file", "size": 1048576, "modified": 1700000000},
+        ]
+        browser._handle_response(self._list_response("/mnt/data", entries))
+
+        browser._on_item_clicked(browser._columns[1].item(0))
+
+        assert browser._preview_name.text() == "labels.slp"
+        assert "1.0 MB" in browser._preview_size.text()
+        assert browser._preview_modified.text() != ""
+
+    def test_directory_click_clears_preview(self, browser):
+        """Clicking a directory should clear the preview panel."""
+        mounts = [{"path": "/mnt/data", "label": "Data"}]
+        browser._handle_response(self._mounts_response(mounts))
+
+        entries = [
+            {"name": "labels.slp", "type": "file", "size": 1024, "modified": 0},
+            {"name": "subdir", "type": "directory", "size": 0, "modified": 0},
+        ]
+        browser._handle_response(self._list_response("/mnt/data", entries))
+
+        # Click file first
+        browser._on_item_clicked(browser._columns[1].item(1))  # labels.slp (after dir)
+        assert browser._preview_name.text() != ""
+
+        # Click directory
+        browser._on_item_clicked(browser._columns[1].item(0))  # subdir/
+        assert browser._preview_name.text() == ""
+
+    # --- Format Size ---
+
+    def test_format_size_bytes(self, browser):
+        """Should format bytes correctly."""
+        assert browser._format_size(500) == "500 B"
+
+    def test_format_size_kb(self, browser):
+        """Should format kilobytes correctly."""
+        assert browser._format_size(1536) == "1.5 KB"
+
+    def test_format_size_mb(self, browser):
+        """Should format megabytes correctly."""
+        assert browser._format_size(1048576) == "1.0 MB"
+
+    def test_format_size_gb(self, browser):
+        """Should format gigabytes correctly."""
+        assert browser._format_size(1073741824) == "1.0 GB"
+
+    # --- Thread Safety ---
+
+    def test_on_response_routes_to_handler(self, browser):
+        """on_response() should route messages to _handle_response."""
+        # Call _handle_response directly (simulates what the signal does)
+        mounts = [{"path": "/mnt/data", "label": "Data"}]
+        browser._handle_response(self._mounts_response(mounts))
+        assert len(browser._columns) == 1
+
+    # --- Error Handling ---
+
+    def test_error_response_handled_gracefully(self, browser):
+        """FS_ERROR should be handled without crashing."""
+        browser._handle_response(self._error_response("PATH_NOT_FOUND", "/bad/path"))
+        # Should not crash, columns unchanged
+        assert len(browser._columns) == 0
+
+    def test_invalid_json_handled_gracefully(self, browser):
+        """Invalid JSON in responses should not crash."""
+        browser._handle_response("FS_MOUNTS_RESPONSE::not-valid-json")
+        assert len(browser._columns) == 0
+
+    # --- Multi-Extension Filter ---
+
+    def test_multi_extension_filter(self, send_fn, qapp):
+        """Multiple extensions in filter should all be selectable."""
+        from sleap_rtc.gui.widgets import RemoteFileBrowser
+
+        browser = RemoteFileBrowser(
+            send_fn=send_fn, file_filter="*.mp4,*.avi,*.mov"
+        )
+        mounts = [{"path": "/mnt/data", "label": "Data"}]
+        browser._handle_response(self._mounts_response(mounts))
+
+        entries = [
+            {"name": "clip.mp4", "type": "file", "size": 100, "modified": 0},
+            {"name": "clip.avi", "type": "file", "size": 100, "modified": 0},
+            {"name": "clip.mov", "type": "file", "size": 100, "modified": 0},
+            {"name": "clip.mkv", "type": "file", "size": 100, "modified": 0},
+        ]
+        browser._handle_response(self._list_response("/mnt/data", entries))
+
+        col = browser._columns[1]
+        # Sorted alphabetically: clip.avi, clip.mkv, clip.mov, clip.mp4
+        assert col.item(0).text() == "clip.avi"
+        assert col.item(0).flags() & Qt.ItemFlag.ItemIsEnabled  # avi
+        assert col.item(1).text() == "clip.mkv"
+        assert not (col.item(1).flags() & Qt.ItemFlag.ItemIsEnabled)  # mkv
+        assert col.item(2).text() == "clip.mov"
+        assert col.item(2).flags() & Qt.ItemFlag.ItemIsEnabled  # mov
+        assert col.item(3).text() == "clip.mp4"
+        assert col.item(3).flags() & Qt.ItemFlag.ItemIsEnabled  # mp4
+
+        browser.deleteLater()
+
+    # --- Entries Sorted ---
+
+    def test_entries_sorted_dirs_first(self, browser):
+        """Directories should appear before files, both sorted alphabetically."""
+        mounts = [{"path": "/mnt/data", "label": "Data"}]
+        browser._handle_response(self._mounts_response(mounts))
+
+        entries = [
+            {"name": "zebra.txt", "type": "file", "size": 0, "modified": 0},
+            {"name": "beta", "type": "directory", "size": 0, "modified": 0},
+            {"name": "alpha.txt", "type": "file", "size": 0, "modified": 0},
+            {"name": "alpha", "type": "directory", "size": 0, "modified": 0},
+        ]
+        browser._handle_response(self._list_response("/mnt/data", entries))
+
+        col = browser._columns[1]
+        names = [col.item(i).text() for i in range(col.count())]
+        assert names == ["alpha/", "beta/", "alpha.txt", "zebra.txt"]
+
+
+# =============================================================================
+# File Browser Integration in Dialogs (Phase 4)
+# =============================================================================
+
+
+class TestSlpPathDialogBrowser:
+    """Tests for RemoteFileBrowser integration in SlpPathDialog."""
+
+    @pytest.fixture
+    def send_fn(self):
+        return MagicMock()
+
+    def test_no_browser_without_send_fn(self, qapp):
+        """SlpPathDialog without send_fn should not have a browser panel."""
+        from sleap_rtc.gui.widgets import SlpPathDialog
+
+        dialog = SlpPathDialog(
+            local_path="/local/labels.slp",
+            error_message="File not found",
+        )
+        assert dialog._browser is None
+        dialog.deleteLater()
+
+    def test_browser_panel_present_with_send_fn(self, qapp, send_fn):
+        """SlpPathDialog with send_fn should have a browser panel."""
+        from sleap_rtc.gui.widgets import SlpPathDialog
+
+        dialog = SlpPathDialog(
+            local_path="/local/labels.slp",
+            error_message="File not found",
+            send_fn=send_fn,
+        )
+        assert dialog._browser is not None
+        assert not dialog._browser.isVisible()  # hidden by default
+        dialog.deleteLater()
+
+    def test_browse_toggle_loads_mounts(self, qapp, send_fn):
+        """Toggling browse on should load mounts and toggle visibility."""
+        from sleap_rtc.gui.widgets import SlpPathDialog
+
+        dialog = SlpPathDialog(
+            local_path="/local/labels.slp",
+            error_message="File not found",
+            send_fn=send_fn,
+        )
+        # Toggle on — browser should become visible and load mounts
+        dialog._on_browse_toggled(True)
+        send_fn.assert_called_once_with("FS_GET_MOUNTS")
+        assert dialog._browse_toggle.text() == "Hide browser"
+
+        # Toggle off
+        dialog._on_browse_toggled(False)
+        assert dialog._browse_toggle.text() == "Browse worker filesystem..."
+        dialog.deleteLater()
+
+    def test_file_selected_fills_path(self, qapp, send_fn):
+        """Selecting a file in the browser should fill the worker path input."""
+        from sleap_rtc.gui.widgets import SlpPathDialog
+
+        dialog = SlpPathDialog(
+            local_path="/local/labels.slp",
+            error_message="File not found",
+            send_fn=send_fn,
+        )
+        dialog._on_file_selected("/mnt/data/labels.slp")
+        assert dialog._path_edit.text() == "/mnt/data/labels.slp"
+        assert dialog._ok_btn.isEnabled()
+        dialog.deleteLater()
+
+    def test_browser_has_slp_filter(self, qapp, send_fn):
+        """Browser should filter for .slp files."""
+        from sleap_rtc.gui.widgets import SlpPathDialog
+
+        dialog = SlpPathDialog(
+            local_path="/local/labels.slp",
+            error_message="File not found",
+            send_fn=send_fn,
+        )
+        assert ".slp" in dialog._browser._allowed_extensions
+        dialog.deleteLater()
+
+
+class TestPathResolutionDialogBrowser:
+    """Tests for RemoteFileBrowser integration in PathResolutionDialog."""
+
+    @pytest.fixture
+    def send_fn(self):
+        return MagicMock()
+
+    @pytest.fixture
+    def missing_videos(self):
+        return [
+            VideoPathStatus(
+                filename="video1.mp4",
+                original_path="/local/video1.mp4",
+                found=False,
+            ),
+            VideoPathStatus(
+                filename="video2.avi",
+                original_path="/local/video2.avi",
+                found=False,
+            ),
+            VideoPathStatus(
+                filename="video3.mp4",
+                original_path="/local/video3.mp4",
+                found=True,
+                worker_path="/mnt/data/video3.mp4",
+            ),
+        ]
+
+    def test_no_browser_without_send_fn(self, qapp, missing_videos):
+        """PathResolutionDialog without send_fn should not have a browser."""
+        from sleap_rtc.gui.widgets import PathResolutionDialog
+
+        dialog = PathResolutionDialog(missing_videos)
+        assert dialog._browser is None
+        dialog.deleteLater()
+
+    def test_browser_present_with_send_fn(self, qapp, missing_videos, send_fn):
+        """PathResolutionDialog with send_fn should have a browser."""
+        from sleap_rtc.gui.widgets import PathResolutionDialog
+
+        dialog = PathResolutionDialog(missing_videos, send_fn=send_fn)
+        assert dialog._browser is not None
+        assert not dialog._browser.isVisible()
+        dialog.deleteLater()
+
+    def test_browse_button_sets_target_and_loads(self, qapp, missing_videos, send_fn):
+        """Clicking Browse... should set target row and load mounts."""
+        from sleap_rtc.gui.widgets import PathResolutionDialog
+
+        dialog = PathResolutionDialog(missing_videos, send_fn=send_fn)
+
+        # Click browse for first missing video (row 0)
+        dialog._on_browse_path(0)
+        assert dialog._browse_target_path == "/local/video1.mp4"
+        send_fn.assert_called_with("FS_GET_MOUNTS")
+        dialog.deleteLater()
+
+    def test_file_selected_fills_target_row(self, qapp, missing_videos, send_fn):
+        """Selecting a file in browser should fill the target row's path."""
+        from sleap_rtc.gui.widgets import PathResolutionDialog
+
+        dialog = PathResolutionDialog(missing_videos, send_fn=send_fn)
+
+        # Browse for first row
+        dialog._on_browse_path(0)
+        dialog._on_browser_file_selected("/mnt/data/video1.mp4")
+
+        path_edit = dialog._path_widgets.get("/local/video1.mp4")
+        assert path_edit is not None
+        assert path_edit.text() == "/mnt/data/video1.mp4"
+        # Target cleared after selection
+        assert dialog._browse_target_path is None
+        dialog.deleteLater()
+
+    def test_browse_different_rows(self, qapp, missing_videos, send_fn):
+        """Browsing different rows should target the correct path edit."""
+        from sleap_rtc.gui.widgets import PathResolutionDialog
+
+        dialog = PathResolutionDialog(missing_videos, send_fn=send_fn)
+
+        # Browse for row 1 (video2.avi)
+        dialog._on_browse_path(1)
+        assert dialog._browse_target_path == "/local/video2.avi"
+        dialog._on_browser_file_selected("/mnt/data/video2.avi")
+
+        path_edit = dialog._path_widgets.get("/local/video2.avi")
+        assert path_edit.text() == "/mnt/data/video2.avi"
+        dialog.deleteLater()
+
+    def test_browser_has_video_filter(self, qapp, missing_videos, send_fn):
+        """Browser should filter for video file types."""
+        from sleap_rtc.gui.widgets import PathResolutionDialog
+
+        dialog = PathResolutionDialog(missing_videos, send_fn=send_fn)
+        exts = dialog._browser._allowed_extensions
+        assert ".mp4" in exts
+        assert ".avi" in exts
+        assert ".mov" in exts
+        assert ".h264" in exts
+        assert ".mkv" in exts
+        dialog.deleteLater()
+
+    def test_browse_fallback_without_send_fn(self, qapp, missing_videos):
+        """Without send_fn, Browse... should use fallback QInputDialog."""
+        from sleap_rtc.gui.widgets import PathResolutionDialog
+
+        dialog = PathResolutionDialog(missing_videos)
+        # _on_browse_path with no browser should try QInputDialog
+        with patch("qtpy.QtWidgets.QInputDialog") as mock_input:
+            mock_input.getText.return_value = ("/mnt/data/video1.mp4", True)
+            dialog._on_browse_path(0)
+            mock_input.getText.assert_called_once()
+        dialog.deleteLater()
