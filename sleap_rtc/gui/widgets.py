@@ -787,10 +787,11 @@ class SlpPathDialog(QDialog):
     ):
         super().__init__(parent)
         self.setWindowTitle("SLP File Path Resolution")
-        self.setMinimumWidth(550)
+        self.setMinimumSize(700, 500)
         self._worker_path: str | None = None
         self._send_fn = send_fn
         self._browser: RemoteFileBrowser | None = None
+        self._error_message = error_message
         self._setup_ui(local_path, error_message)
 
     def _setup_ui(self, local_path: str, error_message: str):
@@ -807,21 +808,23 @@ class SlpPathDialog(QDialog):
         layout.addWidget(info_label)
 
         # Error details
-        error_label = QLabel(f"<b>Error:</b> {error_message}")
-        error_label.setWordWrap(True)
-        error_label.setStyleSheet("color: #c0392b;")
-        layout.addWidget(error_label)
+        self._error_label = QLabel(f"<b>Error:</b> {error_message}")
+        self._error_label.setWordWrap(True)
+        self._error_label.setStyleSheet("color: #c0392b;")
+        layout.addWidget(self._error_label)
 
         # Local path (read-only)
         form = QFormLayout()
         local_edit = QLineEdit(local_path)
         local_edit.setReadOnly(True)
         local_edit.setStyleSheet("color: gray;")
+        local_edit.setMinimumWidth(400)
         form.addRow("Local path:", local_edit)
 
         # Worker path input
         worker_layout = QHBoxLayout()
         self._path_edit = QLineEdit()
+        self._path_edit.setMinimumWidth(400)
         self._path_edit.setPlaceholderText(
             "e.g. /root/vast/data/labels.v002.slp"
         )
@@ -875,10 +878,15 @@ class SlpPathDialog(QDialog):
     def _on_file_selected(self, path: str):
         """Handle file selection from the browser."""
         self._path_edit.setText(path)
+        self._error_label.setText("<b>Status:</b> Path found")
+        self._error_label.setStyleSheet("color: green;")
 
     def _on_text_changed(self, text: str):
         """Enable Continue button only when a path is entered."""
         self._ok_btn.setEnabled(bool(text.strip()))
+        if not text.strip():
+            self._error_label.setText(f"<b>Error:</b> {self._error_message}")
+            self._error_label.setStyleSheet("color: #c0392b;")
 
     def _on_accept(self):
         """Accept the dialog with the entered path."""
@@ -1000,6 +1008,7 @@ class PathResolutionDialog(QDialog):
 
     def _populate_table(self):
         """Populate the table with path results."""
+        self._path_edit_to_row: dict[QLineEdit, int] = {}
         self._table.setRowCount(len(self._path_results))
 
         for row, video in enumerate(self._path_results):
@@ -1038,6 +1047,7 @@ class PathResolutionDialog(QDialog):
                 if video.suggestions:
                     path_edit.setText(video.suggestions[0])
                 path_edit.textChanged.connect(self._on_path_changed)
+                self._path_edit_to_row[path_edit] = row
                 path_layout.addWidget(path_edit)
 
                 browse_button = QPushButton("Browse...")
@@ -1054,7 +1064,20 @@ class PathResolutionDialog(QDialog):
         self._table.resizeRowsToContents()
 
     def _on_path_changed(self):
-        """Handle path text changes."""
+        """Handle path text changes and update row status."""
+        edit = self.sender()
+        if edit is not None:
+            row = self._path_edit_to_row.get(edit)
+            if row is not None:
+                has_path = bool(edit.text().strip())
+                status_item = self._table.item(row, 1)
+                if status_item is not None:
+                    if has_path:
+                        status_item.setText("✓ Resolved")
+                        status_item.setForeground(Qt.darkGreen)
+                    else:
+                        status_item.setText("✗ Missing")
+                        status_item.setForeground(Qt.red)
         self._update_status()
 
     def _on_browse_path(self, row: int):
