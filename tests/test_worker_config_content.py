@@ -88,7 +88,7 @@ class TestConfigContentHandling:
         # Track temp files that exist during execution
         temp_files_during_exec = []
 
-        async def capture_temp_files(channel, cmd, job_id, job_type="train"):
+        async def capture_temp_files(channel, cmd, job_id, job_type="train", **kwargs):
             """Capture temp files in working_dir during execution."""
             import glob
             temp_files_during_exec.extend(
@@ -152,7 +152,7 @@ class TestConfigContentHandling:
         # Capture the command passed to execute_from_spec
         captured_cmds = []
 
-        async def capture_cmd(channel, cmd, job_id, job_type="train"):
+        async def capture_cmd(channel, cmd, job_id, job_type="train", **kwargs):
             captured_cmds.append(cmd)
 
         worker.job_executor.execute_from_spec = AsyncMock(side_effect=capture_cmd)

@@ -2022,30 +2022,32 @@ class RTCWorkerClient:
                 if spec.val_labels_path and spec.val_labels_path in mappings:
                     spec.val_labels_path = mappings[spec.val_labels_path]
 
-            # If spec has config_content, write to temp file and set config_paths
-            temp_config_path = None
-            if isinstance(spec, TrainJobSpec) and getattr(spec, "config_content", None):
+            # If spec has config_contents, write each to a temp file and set config_paths
+            temp_config_paths: list[str] = []
+            if isinstance(spec, TrainJobSpec) and getattr(spec, "config_contents", None):
                 try:
-                    # Apply path_mappings to the config content (e.g., train_labels_path)
-                    content = spec.config_content
-                    if getattr(spec, "path_mappings", None):
-                        for old_path, new_path in spec.path_mappings.items():
-                            content = content.replace(old_path, new_path)
-
-                    # Write to working_dir or first mount so it's within allowed paths
                     temp_dir = self.working_dir
                     if temp_dir is None and self.file_manager and self.file_manager.mounts:
                         temp_dir = self.file_manager.mounts[0].path
-                    fd, temp_config_path = tempfile.mkstemp(
-                        suffix=".yaml", prefix="rtc_config_", dir=temp_dir
-                    )
-                    with os.fdopen(fd, "w") as f:
-                        f.write(content)
-                    spec.config_paths = [temp_config_path]
-                    logging.info(f"Wrote config_content to temp file: {temp_config_path}")
+
+                    for idx, content in enumerate(spec.config_contents):
+                        # Apply path_mappings to the config content (e.g., train_labels_path)
+                        if getattr(spec, "path_mappings", None):
+                            for old_path, new_path in spec.path_mappings.items():
+                                content = content.replace(old_path, new_path)
+
+                        fd, temp_path = tempfile.mkstemp(
+                            suffix=".yaml", prefix=f"rtc_config_{idx}_", dir=temp_dir
+                        )
+                        with os.fdopen(fd, "w") as f:
+                            f.write(content)
+                        temp_config_paths.append(temp_path)
+                        logging.info(f"Wrote config_contents[{idx}] to temp file: {temp_path}")
+
+                    spec.config_paths = temp_config_paths
                 except OSError as e:
                     error_response = json.dumps({"errors": [{
-                        "field": "config_content",
+                        "field": "config_contents",
                         "message": f"Failed to write config to temp file: {e}",
                     }]})
                     channel.send(f"{MSG_JOB_REJECTED}{MSG_SEPARATOR}{client_job_id}{MSG_SEPARATOR}{error_response}")
@@ -2082,6 +2084,10 @@ class RTCWorkerClient:
                             logging.info(f"Training model {i+1}/{total_configs}: {config_name}")
                             channel.send(f"Training model {i+1}/{total_configs}: {config_name}\n")
 
+                        # Send MODEL_TYPE:: so the client can switch LossViewer
+                        if getattr(spec, "model_types", None) and i < len(spec.model_types):
+                            channel.send(f"MODEL_TYPE::{spec.model_types[i]}")
+
                         await self.job_executor.execute_from_spec(
                             channel, cmd, f"{job_id}_{i}" if total_configs > 1 else job_id, job_type="train",
                             zmq_ports=DEFAULT_ZMQ_PORTS,
@@ -2092,13 +2098,14 @@ class RTCWorkerClient:
                         channel, cmd, job_id, job_type="track"
                     )
             finally:
-                # Clean up temp config file
-                if temp_config_path and os.path.exists(temp_config_path):
-                    try:
-                        os.unlink(temp_config_path)
-                        logging.info(f"Cleaned up temp config: {temp_config_path}")
-                    except OSError as e:
-                        logging.warning(f"Failed to clean up temp config {temp_config_path}: {e}")
+                # Clean up temp config files
+                for temp_path in temp_config_paths:
+                    if os.path.exists(temp_path):
+                        try:
+                            os.unlink(temp_path)
+                            logging.info(f"Cleaned up temp config: {temp_path}")
+                        except OSError as e:
+                            logging.warning(f"Failed to clean up temp config {temp_path}: {e}")
 
         except Exception as e:
             logging.error(f"Error handling job submit: {e}")
