@@ -2085,7 +2085,8 @@ class RTCWorkerClient:
                             channel.send(f"Training model {i+1}/{total_configs}: {config_name}\n")
 
                         # Send MODEL_TYPE:: so the client can switch LossViewer
-                        if getattr(spec, "model_types", None) and i < len(spec.model_types):
+                        # Skip i=0: client already initialized with first model type
+                        if i > 0 and getattr(spec, "model_types", None) and i < len(spec.model_types):
                             channel.send(f"MODEL_TYPE::{spec.model_types[i]}")
 
                         await self.job_executor.execute_from_spec(
