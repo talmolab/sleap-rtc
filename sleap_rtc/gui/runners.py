@@ -228,7 +228,7 @@ class RemoteProgressBridge:
             import jsonpickle
 
             msg = jsonpickle.decode(raw_msg)
-            if isinstance(msg, dict) and "what" not in msg:
+            if isinstance(msg, dict) and not msg.get("what"):
                 msg["what"] = self._model_type
             self._socket.send_string(jsonpickle.encode(msg))
         except Exception as e:
