@@ -257,47 +257,35 @@ class WorkerSetupDialog(QDialog):
         setup_label = QLabel("<b>Quick Setup (on your GPU machine):</b>")
         layout.addWidget(setup_label)
 
-        # Step 1: Install sleap-rtc
+        # Step 1: Login and register mount path
         step1_layout = QVBoxLayout()
-        step1_label = QLabel("1. Install sleap-rtc:")
+        step1_label = QLabel("1. Login and register your data mount path:")
         step1_layout.addWidget(step1_label)
 
-        self._install_cmd = QLabel("   <code>pip install sleap-rtc</code>")
-        self._install_cmd.setTextFormat(Qt.RichText)
-        self._install_cmd.setStyleSheet("background-color: #f0f0f0; padding: 4px;")
-        self._install_cmd.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        step1_layout.addWidget(self._install_cmd)
-        layout.addLayout(step1_layout)
-
-        # Step 2: Login and register mount path
-        step2_layout = QVBoxLayout()
-        step2_label = QLabel("2. Login and register your data mount path:")
-        step2_layout.addWidget(step2_label)
-
-        login_cmd = QLabel("   <code>sleap-rtc login</code>")
+        login_cmd = QLabel("   <code>uvx sleap-rtc login</code>")
         login_cmd.setTextFormat(Qt.RichText)
         login_cmd.setStyleSheet("background-color: #f0f0f0; padding: 4px;")
         login_cmd.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        step2_layout.addWidget(login_cmd)
+        step1_layout.addWidget(login_cmd)
 
         mount_desc = QLabel(
             "   Then register the path where your training data is mounted:"
         )
         mount_desc.setWordWrap(True)
-        step2_layout.addWidget(mount_desc)
+        step1_layout.addWidget(mount_desc)
 
         mount_cmd = QLabel(
-            "   <code>sleap-rtc config add-mount /path/to/your/data/</code>"
+            "   <code>uvx sleap-rtc config add-mount /path/to/your/data/</code>"
         )
         mount_cmd.setTextFormat(Qt.RichText)
         mount_cmd.setStyleSheet("background-color: #f0f0f0; padding: 4px;")
         mount_cmd.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        step2_layout.addWidget(mount_cmd)
-        layout.addLayout(step2_layout)
+        step1_layout.addWidget(mount_cmd)
+        layout.addLayout(step1_layout)
 
-        # Step 3: Get API key from dashboard
+        # Step 2: Get API key from dashboard
         step3_layout = QVBoxLayout()
-        step3_label = QLabel("3. Generate an API key from the dashboard:")
+        step3_label = QLabel("2. Generate an API key from the dashboard:")
         step3_layout.addWidget(step3_label)
 
         dashboard_layout = QHBoxLayout()
@@ -321,13 +309,13 @@ class WorkerSetupDialog(QDialog):
         step3_layout.addLayout(dashboard_layout)
         layout.addLayout(step3_layout)
 
-        # Step 4: Start the worker with room secret
+        # Step 3: Start the worker with room secret
         step4_layout = QVBoxLayout()
-        step4_label = QLabel("4. Start the worker:")
+        step4_label = QLabel("3. Start the worker:")
         step4_layout.addWidget(step4_label)
 
         # Build worker command with room secret if available
-        worker_cmd_parts = ['sleap-rtc worker', '--api-key YOUR_API_KEY']
+        worker_cmd_parts = ['uvx sleap-rtc worker', '--api-key YOUR_API_KEY']
         worker_cmd_parts.append('--name "My GPU Server"')
         if self._room_secret:
             worker_cmd_parts.append(f"--room-secret {self._room_secret}")
@@ -381,20 +369,17 @@ class WorkerSetupDialog(QDialog):
     def _on_copy_commands(self):
         """Copy setup commands to clipboard."""
         # Build worker command
-        worker_cmd_parts = ["sleap-rtc worker", "--api-key YOUR_API_KEY"]
+        worker_cmd_parts = ["uvx sleap-rtc worker", "--api-key YOUR_API_KEY"]
         worker_cmd_parts.append('--name "My GPU Server"')
         if self._room_secret:
             worker_cmd_parts.append(f"--room-secret {self._room_secret}")
         worker_cmd = " ".join(worker_cmd_parts)
 
-        commands = f"""# Install sleap-rtc on your GPU machine
-pip install sleap-rtc
-
-# Login to sleap-rtc
-sleap-rtc login
+        commands = f"""# Login to sleap-rtc
+uvx sleap-rtc login
 
 # Register the path where your training data is mounted
-sleap-rtc config add-mount /path/to/your/data/
+uvx sleap-rtc config add-mount /path/to/your/data/
 
 # Start the worker (replace YOUR_API_KEY with your API key from the dashboard)
 {worker_cmd}
