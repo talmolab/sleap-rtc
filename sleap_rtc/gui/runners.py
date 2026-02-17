@@ -225,7 +225,12 @@ class RemoteProgressBridge:
         if not self._started or not self._socket:
             return
         try:
-            self._socket.send_string(raw_msg)
+            import jsonpickle
+
+            msg = jsonpickle.decode(raw_msg)
+            if isinstance(msg, dict) and "what" not in msg:
+                msg["what"] = self._model_type
+            self._socket.send_string(jsonpickle.encode(msg))
         except Exception as e:
             logger.error(f"Failed to publish raw ZMQ progress: {e}")
 
