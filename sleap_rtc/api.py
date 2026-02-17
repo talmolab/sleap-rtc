@@ -1476,6 +1476,9 @@ async def _run_training_async(
     final_epoch = 0
     final_train_loss: float | None = None
     final_val_loss: float | None = None
+    # Track completions for multi-model pipelines
+    expected_completions = max(1, len(getattr(spec, "config_contents", []) or []))
+    completions_received = 0
     pc = None
 
     try:
@@ -1673,6 +1676,7 @@ async def _run_training_async(
                         pass
 
                 elif response.startswith(MSG_JOB_COMPLETE):
+                    completions_received += 1
                     parts = response.split(MSG_SEPARATOR, 1)
                     result_json = parts[1] if len(parts) > 1 else "{}"
                     try:
@@ -1695,15 +1699,16 @@ async def _run_training_async(
                             final_val_loss=final_val_loss,
                         )
 
-                    if progress_callback:
-                        progress_callback(
-                            ProgressEvent(
-                                event_type="train_end",
-                                success=True,
-                                model_type=model_type or None,
+                    if completions_received >= expected_completions:
+                        if progress_callback:
+                            progress_callback(
+                                ProgressEvent(
+                                    event_type="train_end",
+                                    success=True,
+                                    model_type=model_type or None,
+                                )
                             )
-                        )
-                    break
+                        break
 
                 elif response.startswith(MSG_JOB_FAILED):
                     parts = response.split(MSG_SEPARATOR, 2)
