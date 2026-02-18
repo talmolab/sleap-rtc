@@ -632,6 +632,52 @@ class TestRunRemoteTraining:
         assert callback_events[0].event_type == "train_begin"
 
     @patch("sleap_rtc.api.run_training")
+    def test_on_model_type_updates_bridge_and_calls_user_callback(
+        self, mock_run_training, mock_zmq
+    ):
+        """Bridge model type must update even when a custom on_model_type is provided.
+
+        Regression test: previously, providing on_model_type caused bridge.set_model_type
+        to be skipped. This meant model 2's ZMQ messages had the wrong 'what' field and
+        were filtered out by the LossViewer in multi-model pipelines.
+        """
+        import jsonpickle
+
+        mock_socket = _setup_zmq_mocks(mock_zmq)
+        user_callback_calls = []
+
+        def simulate_training(*args, **kwargs):
+            on_model_type = kwargs.get("on_model_type")
+            on_raw = kwargs.get("on_raw_progress")
+            # Simulate worker switching to model 2
+            if on_model_type:
+                on_model_type("centered_instance")
+            # Simulate model 2's ZMQ progress (no 'what' field — sleap-nn doesn't set it)
+            if on_raw:
+                on_raw(jsonpickle.encode({"event": "epoch_end", "logs": {}}))
+            return MagicMock()
+
+        mock_run_training.side_effect = simulate_training
+
+        run_remote_training(
+            config_path="/path/to/config.json",
+            room_id="test-room",
+            model_type="centroid",
+            on_model_type=lambda mt: user_callback_calls.append(mt),
+        )
+
+        # User callback must have been called
+        assert user_callback_calls == ["centered_instance"]
+
+        # The ZMQ message forwarded to LossViewer must use the updated model type
+        messages = _decode_all_zmq_messages(mock_socket)
+        assert len(messages) == 1
+        assert messages[0]["what"] == "centered_instance", (
+            "bridge._model_type was not updated — model 2 messages would be "
+            "filtered out by LossViewer"
+        )
+
+    @patch("sleap_rtc.api.run_training")
     def test_model_type_passed_to_run_training(self, mock_run_training, mock_zmq):
         """Should pass model_type through to run_training API call."""
         mock_socket = _setup_zmq_mocks(mock_zmq)

@@ -466,8 +466,15 @@ def run_remote_training(
         if on_progress:
             on_progress(event)
 
-    # Default on_model_type updates the bridge so LossViewer switches
-    model_type_fn = on_model_type if on_model_type is not None else bridge.set_model_type
+    # Always update the bridge model type so on_raw_zmq_message sets the
+    # correct 'what' field on ZMQ messages. Also call any user callback so
+    # the LossViewer can reset its display for the new model.
+    def _combined_model_type_fn(new_model_type: str) -> None:
+        bridge.set_model_type(new_model_type)
+        if on_model_type is not None:
+            on_model_type(new_model_type)
+
+    model_type_fn = _combined_model_type_fn
 
     # Run training with progress forwarding
     kwargs = dict(
