@@ -939,32 +939,40 @@ class TestJobExecutorStopCancel:
     """Tests for JobExecutor stop/cancel methods."""
 
     def test_stop_running_job_sends_sigint(self):
-        """stop_running_job should send SIGINT to the process."""
+        """stop_running_job should send SIGINT to the process group."""
+        import signal
+        from unittest.mock import patch
         from sleap_rtc.worker.job_executor import JobExecutor
 
         executor = JobExecutor(worker=MagicMock(), capabilities=MagicMock())
         mock_process = MagicMock()
+        mock_process.pid = 12345
         mock_process.returncode = None  # Still running
         executor._running_process = mock_process
 
-        executor.stop_running_job()
+        with patch("os.killpg") as mock_killpg, \
+             patch("os.getpgid", return_value=99999):
+            executor.stop_running_job()
 
-        import signal
-
-        mock_process.send_signal.assert_called_once_with(signal.SIGINT)
+        mock_killpg.assert_called_once_with(99999, signal.SIGINT)
 
     def test_cancel_running_job_sends_sigterm(self):
-        """cancel_running_job should call terminate() on the process."""
+        """cancel_running_job should send SIGTERM to the process group."""
+        import signal
+        from unittest.mock import patch
         from sleap_rtc.worker.job_executor import JobExecutor
 
         executor = JobExecutor(worker=MagicMock(), capabilities=MagicMock())
         mock_process = MagicMock()
+        mock_process.pid = 12345
         mock_process.returncode = None
         executor._running_process = mock_process
 
-        executor.cancel_running_job()
+        with patch("os.killpg") as mock_killpg, \
+             patch("os.getpgid", return_value=99999):
+            executor.cancel_running_job()
 
-        mock_process.terminate.assert_called_once()
+        mock_killpg.assert_called_once_with(99999, signal.SIGTERM)
 
     def test_stop_no_running_process(self):
         """stop_running_job should not crash when no process is running."""

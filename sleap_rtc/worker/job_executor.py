@@ -85,37 +85,51 @@ class JobExecutor:
                 "No ProgressReporter available — cannot forward ZMQ control message"
             )
 
-        # For stop commands, also SIGINT the subprocess so it exits even if
-        # PyTorch Lightning hangs in validation after setting should_stop=True.
+        # For stop commands, SIGINT the entire process group so distributed
+        # workers (rank 1, rank 2, …) also exit — not just rank 0.  Without
+        # this, rank 1 survives, keeps stdout open, and blocks the pipeline.
         try:
             payload = json.loads(raw_zmq_message)
             if payload.get("command") == "stop":
                 proc = self._running_process
                 if proc is not None and proc.returncode is None:
-                    logging.info(
-                        f"Stop Early: sending SIGINT to PID {proc.pid} "
-                        f"to bypass frozen post-epoch validation"
-                    )
-                    proc.send_signal(signal.SIGINT)
+                    try:
+                        pgid = os.getpgid(proc.pid)
+                        logging.info(
+                            f"Stop Early: sending SIGINT to process group {pgid} "
+                            f"(PID {proc.pid}) to bypass frozen post-epoch validation"
+                        )
+                        os.killpg(pgid, signal.SIGINT)
+                    except ProcessLookupError:
+                        pass
         except (json.JSONDecodeError, AttributeError):
             pass
 
     def stop_running_job(self):
-        """Send SIGINT to the running job process for graceful stop.
+        """Send SIGINT to the running job's process group for graceful stop.
 
-        This allows sleap-nn to save the current checkpoint before exiting.
+        Kills the entire process group so distributed workers (rank 1, …)
+        exit alongside the main process, allowing sleap-nn to save a checkpoint.
         """
         proc = self._running_process
         if proc is not None and proc.returncode is None:
-            logging.info(f"Sending SIGINT to process {proc.pid} (graceful stop)")
-            proc.send_signal(signal.SIGINT)
+            try:
+                pgid = os.getpgid(proc.pid)
+                logging.info(f"Sending SIGINT to process group {pgid} (graceful stop)")
+                os.killpg(pgid, signal.SIGINT)
+            except ProcessLookupError:
+                pass
 
     def cancel_running_job(self):
-        """Send SIGTERM to the running job process for immediate cancellation."""
+        """Send SIGTERM to the running job's process group for immediate cancellation."""
         proc = self._running_process
         if proc is not None and proc.returncode is None:
-            logging.info(f"Sending SIGTERM to process {proc.pid} (hard cancel)")
-            proc.terminate()
+            try:
+                pgid = os.getpgid(proc.pid)
+                logging.info(f"Sending SIGTERM to process group {pgid} (hard cancel)")
+                os.killpg(pgid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
 
     def parse_training_script(self, train_script_path: str):
         """Parse train-script.sh and extract sleap-nn train commands.
@@ -666,6 +680,7 @@ class JobExecutor:
                 stderr=asyncio.subprocess.STDOUT,
                 cwd=working_dir,
                 env={**os.environ, "PYTHONUNBUFFERED": "1"},
+                start_new_session=True,
             )
             self._running_process = process
 
