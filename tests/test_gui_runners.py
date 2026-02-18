@@ -771,10 +771,10 @@ class TestStopCancelCommands:
         assert bridge._send_fn is send_fn
 
     def test_poll_commands_stop(self, mock_zmq):
-        """Should forward 'stop' command as MSG_JOB_STOP via send_fn."""
+        """Should forward 'stop' as CONTROL_COMMAND::{raw} via send_fn."""
         import jsonpickle
 
-        from sleap_rtc.protocol import MSG_JOB_STOP
+        from sleap_rtc.protocol import MSG_CONTROL_COMMAND, MSG_SEPARATOR
 
         mock_socket = _setup_zmq_mocks(mock_zmq)
         mock_context = mock_zmq.Context.return_value
@@ -799,7 +799,8 @@ class TestStopCancelCommands:
         bridge.start()
         sub_sock = sub_sockets[0]
         sub_sock.poll.side_effect = [1, 0, 0, 0, 0]  # Message available once
-        sub_sock.recv_string.return_value = jsonpickle.encode({"command": "stop"})
+        raw = jsonpickle.encode({"command": "stop"})
+        sub_sock.recv_string.return_value = raw
 
         # Give the poll thread time to process
         import time
@@ -807,7 +808,7 @@ class TestStopCancelCommands:
         time.sleep(0.3)
         bridge.stop()
 
-        send_fn.assert_called_with(MSG_JOB_STOP)
+        send_fn.assert_called_with(f"{MSG_CONTROL_COMMAND}{MSG_SEPARATOR}{raw}")
 
     def test_poll_commands_cancel(self, mock_zmq):
         """Should forward 'cancel' command as MSG_JOB_CANCEL via send_fn."""

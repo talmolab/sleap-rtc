@@ -71,6 +71,7 @@ from sleap_rtc.protocol import (
     # Job control
     MSG_JOB_STOP,
     MSG_JOB_CANCEL,
+    MSG_CONTROL_COMMAND,
 )
 from sleap_rtc.jobs import (
     TrainJobSpec,
@@ -2326,7 +2327,17 @@ class RTCWorkerClient:
                     await self.handle_job_submit(channel, message)
                     return
 
+                # Handle ZMQ control message forwarding (transparent bridge)
+                # CONTROL_COMMAND:: carries raw ZMQ from LossViewer → sleap-nn
+                if message.startswith(f"{MSG_CONTROL_COMMAND}{MSG_SEPARATOR}"):
+                    # split(1) intentional: raw ZMQ payload may contain "::"
+                    raw_zmq = message.split(MSG_SEPARATOR, 1)[1]
+                    logging.info("Received CONTROL_COMMAND — forwarding via ZMQ")
+                    self.job_executor.send_control_message(raw_zmq)
+                    return
+
                 # Handle job stop/cancel commands
+                # MSG_JOB_STOP kept as fallback (SIGINT) for older clients
                 if message == MSG_JOB_STOP:
                     logging.info("Received JOB_STOP — sending SIGINT to process")
                     self.job_executor.stop_running_job()

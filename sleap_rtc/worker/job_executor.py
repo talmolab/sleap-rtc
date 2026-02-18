@@ -60,6 +60,25 @@ class JobExecutor:
         self.output_dir = ""
         self.package_type = "train"  # Default to training
         self._running_process: asyncio.subprocess.Process | None = None
+        self._progress_reporter = None
+
+    def send_control_message(self, raw_zmq_message: str):
+        """Forward a raw ZMQ control message to the training process.
+
+        Delegates to the ProgressReporter's ZMQ PUB control socket so
+        sleap-nn's TrainingControllerZMQ callback receives the message
+        identically to local training.
+
+        Args:
+            raw_zmq_message: Raw jsonpickle-encoded string from LossViewer
+                (e.g., ``{"command": "stop"}``).
+        """
+        if self._progress_reporter is not None:
+            self._progress_reporter.send_control_message(raw_zmq_message)
+        else:
+            logging.warning(
+                "No ProgressReporter available — cannot forward ZMQ control message"
+            )
 
     def stop_running_job(self):
         """Send SIGINT to the running job process for graceful stop.
@@ -598,6 +617,8 @@ class JobExecutor:
 
         # Start ZMQ progress reporter for train jobs so sleap-nn's native
         # ZMQ messages are forwarded over the RTC data channel.
+        # Stored on self so the worker message handler can forward
+        # control commands (e.g., stop) to sleap-nn via ZMQ.
         progress_reporter = None
         if job_type == "train" and zmq_ports:
             progress_reporter = ProgressReporter(
@@ -606,6 +627,7 @@ class JobExecutor:
             )
             progress_reporter.start_control_socket()
             progress_reporter.start_progress_listener_task(channel)
+        self._progress_reporter = progress_reporter
 
         try:
             # Start the process
@@ -775,3 +797,4 @@ class JobExecutor:
         finally:
             if progress_reporter is not None:
                 progress_reporter.cleanup()
+            self._progress_reporter = None
