@@ -160,15 +160,35 @@ class TestRemoteProgressBridge:
         bridge.on_progress(event)
 
     def test_on_raw_zmq_message(self, mock_zmq):
-        """on_raw_zmq_message should send raw string without re-encoding."""
+        """on_raw_zmq_message should decode, inject 'what' if empty, and re-encode."""
+        import jsonpickle
+
         mock_socket = _setup_zmq_mocks(mock_zmq)
 
-        raw_msg = '{"py/object": "dict", "event": "batch_end", "what": "centroid"}'
+        raw_msg = jsonpickle.encode({"event": "batch_end", "what": "centroid"})
 
         with RemoteProgressBridge() as bridge:
             bridge.on_raw_zmq_message(raw_msg)
 
-        mock_socket.send_string.assert_called_once_with(raw_msg)
+        # Should preserve existing non-empty 'what'
+        sent = jsonpickle.decode(mock_socket.send_string.call_args[0][0])
+        assert sent["event"] == "batch_end"
+        assert sent["what"] == "centroid"
+
+    def test_on_raw_zmq_message_injects_what(self, mock_zmq):
+        """on_raw_zmq_message should inject model_type when 'what' is empty."""
+        import jsonpickle
+
+        mock_socket = _setup_zmq_mocks(mock_zmq)
+
+        # sleap-nn sends what="" by default
+        raw_msg = jsonpickle.encode({"event": "batch_end", "what": ""})
+
+        with RemoteProgressBridge(model_type="centroid") as bridge:
+            bridge.on_raw_zmq_message(raw_msg)
+
+        sent = jsonpickle.decode(mock_socket.send_string.call_args[0][0])
+        assert sent["what"] == "centroid"
 
     def test_on_raw_zmq_message_not_started(self):
         """on_raw_zmq_message should not crash if bridge not started."""

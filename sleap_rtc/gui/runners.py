@@ -225,7 +225,12 @@ class RemoteProgressBridge:
         if not self._started or not self._socket:
             return
         try:
-            self._socket.send_string(raw_msg)
+            import jsonpickle
+
+            msg = jsonpickle.decode(raw_msg)
+            if isinstance(msg, dict) and not msg.get("what"):
+                msg["what"] = self._model_type
+            self._socket.send_string(jsonpickle.encode(msg))
         except Exception as e:
             logger.error(f"Failed to publish raw ZMQ progress: {e}")
 
@@ -361,6 +366,7 @@ def run_remote_training(
     spec: "TrainJobSpec | None" = None,
     model_type: str = "",
     on_log: Callable[[str], None] | None = None,
+    on_model_type: "Callable[[str], None] | None" = None,
 ) -> "TrainingResult":
     """Run remote training with progress forwarding to ZMQ.
 
@@ -391,6 +397,9 @@ def run_remote_training(
             the correct training job in multi-model pipelines.
         on_log: Optional callback invoked with each raw log line from the
             worker. When not provided, raw log lines are printed to stdout.
+        on_model_type: Optional callback invoked when the worker switches
+            model type during multi-model training. When not provided,
+            defaults to calling ``bridge.set_model_type()``.
 
     Returns:
         TrainingResult with model paths and final status.
@@ -440,6 +449,9 @@ def run_remote_training(
         if on_progress:
             on_progress(event)
 
+    # Default on_model_type updates the bridge so LossViewer switches
+    model_type_fn = on_model_type if on_model_type is not None else bridge.set_model_type
+
     # Run training with progress forwarding
     kwargs = dict(
         config_path=config_path,
@@ -453,6 +465,7 @@ def run_remote_training(
         on_log=log_fn,
         on_channel_ready=bridge.set_send_fn,
         on_raw_progress=bridge.on_raw_zmq_message,
+        on_model_type=model_type_fn,
     )
     if timeout is not None:
         kwargs["timeout"] = timeout

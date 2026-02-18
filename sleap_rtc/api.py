@@ -1303,6 +1303,7 @@ def run_training(
     on_log: "Callable[[str], None] | None" = None,
     on_channel_ready: "Callable[[Callable[[str], None]], None] | None" = None,
     on_raw_progress: "Callable[[str], None] | None" = None,
+    on_model_type: "Callable[[str], None] | None" = None,
 ) -> TrainingResult:
     """Run training remotely on a worker.
 
@@ -1345,6 +1346,9 @@ def run_training(
         on_raw_progress: Optional callback invoked with the raw jsonpickle
             payload string from ``PROGRESS_REPORT::`` messages. Used to
             forward sleap-nn's native ZMQ progress directly to LossViewer.
+        on_model_type: Optional callback invoked when the worker sends a
+            ``MODEL_TYPE::`` message indicating a switch between models
+            in multi-model pipeline training.
 
     Returns:
         TrainingResult with job outcome and model paths.
@@ -1378,6 +1382,7 @@ def run_training(
             on_log=on_log,
             on_channel_ready=on_channel_ready,
             on_raw_progress=on_raw_progress,
+            on_model_type=on_model_type,
         )
     )
 
@@ -1402,6 +1407,7 @@ async def _run_training_async(
     on_log: "Callable[[str], None] | None" = None,
     on_channel_ready: "Callable[[Callable[[str], None]], None] | None" = None,
     on_raw_progress: "Callable[[str], None] | None" = None,
+    on_model_type: "Callable[[str], None] | None" = None,
 ) -> TrainingResult:
     """Async implementation of run_training."""
     import json
@@ -1470,6 +1476,9 @@ async def _run_training_async(
     final_epoch = 0
     final_train_loss: float | None = None
     final_val_loss: float | None = None
+    # Track completions for multi-model pipelines
+    expected_completions = max(1, len(getattr(spec, "config_contents", []) or []))
+    completions_received = 0
     pc = None
 
     try:
@@ -1667,6 +1676,7 @@ async def _run_training_async(
                         pass
 
                 elif response.startswith(MSG_JOB_COMPLETE):
+                    completions_received += 1
                     parts = response.split(MSG_SEPARATOR, 1)
                     result_json = parts[1] if len(parts) > 1 else "{}"
                     try:
@@ -1689,15 +1699,16 @@ async def _run_training_async(
                             final_val_loss=final_val_loss,
                         )
 
-                    if progress_callback:
-                        progress_callback(
-                            ProgressEvent(
-                                event_type="train_end",
-                                success=True,
-                                model_type=model_type or None,
+                    if completions_received >= expected_completions:
+                        if progress_callback:
+                            progress_callback(
+                                ProgressEvent(
+                                    event_type="train_end",
+                                    success=True,
+                                    model_type=model_type or None,
+                                )
                             )
-                        )
-                    break
+                        break
 
                 elif response.startswith(MSG_JOB_FAILED):
                     parts = response.split(MSG_SEPARATOR, 2)
@@ -1732,6 +1743,12 @@ async def _run_training_async(
                         error_message=error_msg,
                     )
                     break
+
+                elif response.startswith("MODEL_TYPE::"):
+                    new_model_type = response.split("::", 1)[1]
+                    model_type = new_model_type
+                    if on_model_type:
+                        on_model_type(new_model_type)
 
                 else:
                     # Unrecognized message — raw training log line from worker

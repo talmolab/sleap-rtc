@@ -17,6 +17,9 @@ class TrainJobSpec:
         config_path: Full path to config YAML file (for single model training)
         config_paths: List of config paths (for multi-model training like top-down)
         config_content: Serialized training config (YAML string) sent over datachannel
+        config_contents: List of serialized configs (for multi-model pipeline training)
+        model_types: Model type labels matching config_contents order
+            (e.g. ["centroid", "centered_instance"])
         labels_path: Override for data_config.train_labels_path
         val_labels_path: Override for data_config.val_labels_path
         max_epochs: Maximum training epochs
@@ -27,16 +30,18 @@ class TrainJobSpec:
         path_mappings: Maps original client-side paths to resolved worker-side paths
 
     Note:
-        Either config_path/config_paths or config_content must be provided.
-        If config_content is provided, config_paths is not required (the worker
-        writes config_content to a temp file). For top-down training, provide
-        both centroid and centered_instance configs in config_paths - they will
-        be trained sequentially.
+        Either config_path/config_paths, config_content, or config_contents
+        must be provided. If config_content is provided, it is normalized to
+        config_contents = [config_content]. For top-down training, provide
+        both centroid and centered_instance configs in config_contents with
+        matching model_types - they will be trained sequentially.
     """
 
     config_path: Optional[str] = None
     config_paths: List[str] = field(default_factory=list)
     config_content: Optional[str] = None
+    config_contents: List[str] = field(default_factory=list)
+    model_types: List[str] = field(default_factory=list)
     labels_path: Optional[str] = None
     val_labels_path: Optional[str] = None
     max_epochs: Optional[int] = None
@@ -51,10 +56,19 @@ class TrainJobSpec:
         # If config_path is provided but config_paths is empty, use config_path
         if self.config_path and not self.config_paths:
             self.config_paths = [self.config_path]
+        # Normalize single config_content into config_contents list
+        if self.config_content and not self.config_contents:
+            self.config_contents = [self.config_content]
         # Ensure we have at least one config source
-        if not self.config_paths and not self.config_path and not self.config_content:
+        if (
+            not self.config_paths
+            and not self.config_path
+            and not self.config_content
+            and not self.config_contents
+        ):
             raise ValueError(
-                "Must provide either config_path, config_paths, or config_content"
+                "Must provide either config_path, config_paths, "
+                "config_content, or config_contents"
             )
 
     def to_json(self) -> str:
