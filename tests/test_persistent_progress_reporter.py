@@ -8,16 +8,11 @@ These tests verify that:
 - handle_job_submit calls async_cleanup exactly once after all models finish
 """
 
-import asyncio
-import threading
-
 import pytest
-import zmq
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from sleap_rtc.config import MountConfig
 from sleap_rtc.worker.job_executor import JobExecutor
-from sleap_rtc.worker.progress_reporter import ProgressReporter as _ProgressReporter
 from sleap_rtc.worker.worker_class import RTCWorkerClient
 from sleap_rtc.protocol import MSG_JOB_SUBMIT, MSG_SEPARATOR
 
@@ -196,69 +191,3 @@ class TestPipelineReporter:
             await worker.handle_job_submit(mock_channel, message)
 
         pipeline_reporter.async_cleanup.assert_called_once()
-
-
-# ── channel.send must not block the event loop ───────────────────────────────
-
-class TestChannelSendNonBlocking:
-    """channel.send must run in an executor, not on the event loop thread.
-
-    Calling channel.send() directly in the listener coroutine blocks the
-    entire asyncio event loop for the duration of the send.  When the
-    DataChannel's SCTP send buffer is full this causes a stdout pipe deadlock:
-    stream_logs_with_progress() cannot drain the pipe, the pipe fills up, and
-    the subprocess hangs trying to write — freezing validation output.
-
-    The fix: await loop.run_in_executor(None, channel.send, msg) so the
-    event loop remains free while the send executes in a thread.
-    """
-
-    def _make_reporter_with_one_message(self, payload: str) -> _ProgressReporter:
-        """Return a ProgressReporter whose ZMQ socket delivers one message."""
-        reporter = _ProgressReporter()
-        mock_ctx = MagicMock()
-        mock_sock = MagicMock()
-        mock_ctx.socket.return_value = mock_sock
-        reporter.context = mock_ctx  # skip real zmq.Context creation
-
-        recv_calls = [0]
-
-        def fake_recv(flags):
-            recv_calls[0] += 1
-            if recv_calls[0] == 1:
-                return payload
-            raise zmq.Again()
-
-        mock_sock.recv_string.side_effect = fake_recv
-        return reporter
-
-    @pytest.mark.asyncio
-    async def test_channel_send_runs_in_executor_thread(self):
-        """channel.send must be called from a thread pool thread, not the event loop thread."""
-        event_loop_thread = threading.current_thread()
-        call_thread: list = [None]
-        send_done = asyncio.Event()
-        loop = asyncio.get_running_loop()
-
-        def record_thread(msg):
-            call_thread[0] = threading.current_thread()
-            loop.call_soon_threadsafe(send_done.set)
-
-        channel = MagicMock()
-        channel.send = record_thread
-
-        reporter = self._make_reporter_with_one_message("progress_payload")
-        listener_task = reporter.start_progress_listener_task(channel)
-
-        try:
-            await asyncio.wait_for(send_done.wait(), timeout=2.0)
-        finally:
-            reporter.running = False
-            listener_task.cancel()
-            await asyncio.gather(listener_task, return_exceptions=True)
-
-        assert call_thread[0] is not None, "channel.send was never called"
-        assert call_thread[0] is not event_loop_thread, (
-            "channel.send ran on the event loop thread — "
-            "it must use run_in_executor to avoid blocking"
-        )

@@ -119,11 +119,7 @@ class ProgressReporter:
             if msg:
                 try:
                     logging.info(f"Sending progress report to client: {msg}")
-                    # Offload to executor so a slow/blocking DataChannel send
-                    # cannot freeze the event loop and deadlock the stdout pipe.
-                    await loop.run_in_executor(
-                        None, channel.send, f"PROGRESS_REPORT::{msg}"
-                    )
+                    channel.send(f"PROGRESS_REPORT::{msg}")
                 except Exception as e:
                     logging.error(f"Failed to send ZMQ progress: {e}")
 
