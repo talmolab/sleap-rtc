@@ -2100,12 +2100,21 @@ class RTCWorkerClient:
                             if i > 0 and getattr(spec, "model_types", None) and i < len(spec.model_types):
                                 channel.send(f"MODEL_TYPE::{spec.model_types[i]}")
 
+                            model_job_id = f"{job_id}_{i}" if total_configs > 1 else job_id
+                            logging.info(
+                                f"[PIPELINE] Starting model {i+1}/{total_configs} "
+                                f"(job_id={model_job_id}, config={config_name!r})"
+                            )
                             await self.job_executor.execute_from_spec(
-                                channel, cmd, f"{job_id}_{i}" if total_configs > 1 else job_id, job_type="train",
+                                channel, cmd, model_job_id, job_type="train",
                                 zmq_ports=DEFAULT_ZMQ_PORTS,
                                 progress_reporter=pipeline_reporter,
                             )
+                            logging.info(
+                                f"[PIPELINE] Model {i+1}/{total_configs} execute_from_spec returned"
+                            )
                     finally:
+                        logging.info("[PIPELINE] All models finished — running pipeline_reporter.async_cleanup()")
                         await pipeline_reporter.async_cleanup()
                         self.job_executor._progress_reporter = None
                 elif isinstance(spec, TrackJobSpec):
@@ -2346,7 +2355,17 @@ class RTCWorkerClient:
                 if message.startswith(f"{MSG_CONTROL_COMMAND}{MSG_SEPARATOR}"):
                     # split(1) intentional: raw ZMQ payload may contain "::"
                     raw_zmq = message.split(MSG_SEPARATOR, 1)[1]
-                    logging.info("Received CONTROL_COMMAND — forwarding via ZMQ")
+                    reporter = self.job_executor._progress_reporter
+                    reporter_state = (
+                        f"active (control={reporter.control_address!r}, "
+                        f"socket={'bound' if reporter.ctrl_socket is not None else 'NOT bound'})"
+                        if reporter is not None
+                        else "NONE — stop command will be dropped!"
+                    )
+                    logging.info(
+                        f"Received CONTROL_COMMAND — reporter={reporter_state} "
+                        f"— payload={raw_zmq!r}"
+                    )
                     self.job_executor.send_control_message(raw_zmq)
                     return
 

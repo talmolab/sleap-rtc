@@ -71,11 +71,15 @@ class ProgressReporter:
             message: Control message string to send.
         """
         if self.ctrl_socket is not None:
+            logging.info(
+                f"[ZMQ] Sending control message to {self.control_address!r}: {message!r}"
+            )
             self.ctrl_socket.send_string(message)
-            logging.info(f"Sent control message to trainer: {message}")
+            logging.info("[ZMQ] Control message sent successfully")
         else:
             logging.error(
-                f"ZMQ control socket not initialized: {self.ctrl_socket}. Cannot send control message."
+                f"[ZMQ] Control socket is NOT initialized (ctrl_socket=None) — "
+                f"cannot forward message: {message!r}"
             )
 
     async def start_progress_listener(self, channel: RTCDataChannel):

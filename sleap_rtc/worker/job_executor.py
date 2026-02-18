@@ -651,6 +651,24 @@ class JobExecutor:
 
             logging.info(f"[JOB {job_id}] Process started with PID: {process.pid}")
 
+            # Watchdog: log subprocess liveness every 30 s so we can see in
+            # the worker output whether the process is stuck or already gone.
+            async def _subprocess_watchdog():
+                while True:
+                    await asyncio.sleep(30)
+                    rc = process.returncode
+                    if rc is None:
+                        logging.info(
+                            f"[JOB {job_id}] Watchdog: PID {process.pid} still running"
+                        )
+                    else:
+                        logging.info(
+                            f"[JOB {job_id}] Watchdog: PID {process.pid} has exited (rc={rc})"
+                        )
+                        break
+
+            watchdog_task = asyncio.create_task(_subprocess_watchdog())
+
             # Stream logs with progress extraction
             async def stream_logs_with_progress():
                 """Stream logs and extract progress information."""
@@ -669,7 +687,11 @@ class JobExecutor:
                     while True:
                         chunk = await process.stdout.read(512)
                         if not chunk:
-                            # Process ended; flush remaining text
+                            # EOF — subprocess closed its stdout (process is done or pipe broke)
+                            logging.info(
+                                f"[JOB {job_id}] EOF on stdout from PID {process.pid} — "
+                                f"subprocess has closed stdout (returncode={process.returncode!r})"
+                            )
                             if buf:
                                 line = buf.decode(errors="replace")
                                 logging.info(f"[JOB {job_id}] {line}")
@@ -742,12 +764,17 @@ class JobExecutor:
                         channel.send(f"[log-stream error] {e}\n")
 
             await stream_logs_with_progress()
+            watchdog_task.cancel()
+            logging.info(
+                f"[JOB {job_id}] Stdout stream ended — waiting for PID {process.pid} to exit"
+            )
             await process.wait()
             self._running_process = None
 
             duration_seconds = int(time.time() - start_time)
             logging.info(
-                f"[JOB {job_id}] Process completed with return code: {process.returncode}"
+                f"[JOB {job_id}] Process PID {process.pid} exited "
+                f"(return code: {process.returncode})"
             )
 
             # SIGINT (-2) means graceful stop via "Stop Early" — treat as success
