@@ -2079,21 +2079,35 @@ class RTCWorkerClient:
                     commands = builder.build_train_commands(spec)
                     total_configs = len(commands)
 
-                    for i, cmd in enumerate(commands):
-                        config_name = Path(spec.config_paths[i]).stem
-                        if total_configs > 1:
-                            logging.info(f"Training model {i+1}/{total_configs}: {config_name}")
-                            channel.send(f"Training model {i+1}/{total_configs}: {config_name}\n")
+                    # Create one ProgressReporter for the entire pipeline so ZMQ
+                    # ports stay bound between models — no context.term() between
+                    # models, mirroring local SLEAP's persistent-socket design.
+                    pipeline_reporter = ProgressReporter(
+                        control_address=f"tcp://127.0.0.1:{DEFAULT_ZMQ_PORTS['controller']}",
+                        progress_address=f"tcp://127.0.0.1:{DEFAULT_ZMQ_PORTS['publish']}",
+                    )
+                    pipeline_reporter.start_control_socket()
+                    pipeline_reporter.start_progress_listener_task(channel)
+                    try:
+                        for i, cmd in enumerate(commands):
+                            config_name = Path(spec.config_paths[i]).stem
+                            if total_configs > 1:
+                                logging.info(f"Training model {i+1}/{total_configs}: {config_name}")
+                                channel.send(f"Training model {i+1}/{total_configs}: {config_name}\n")
 
-                        # Send MODEL_TYPE:: so the client can switch LossViewer
-                        # Skip i=0: client already initialized with first model type
-                        if i > 0 and getattr(spec, "model_types", None) and i < len(spec.model_types):
-                            channel.send(f"MODEL_TYPE::{spec.model_types[i]}")
+                            # Send MODEL_TYPE:: so the client can switch LossViewer
+                            # Skip i=0: client already initialized with first model type
+                            if i > 0 and getattr(spec, "model_types", None) and i < len(spec.model_types):
+                                channel.send(f"MODEL_TYPE::{spec.model_types[i]}")
 
-                        await self.job_executor.execute_from_spec(
-                            channel, cmd, f"{job_id}_{i}" if total_configs > 1 else job_id, job_type="train",
-                            zmq_ports=DEFAULT_ZMQ_PORTS,
-                        )
+                            await self.job_executor.execute_from_spec(
+                                channel, cmd, f"{job_id}_{i}" if total_configs > 1 else job_id, job_type="train",
+                                zmq_ports=DEFAULT_ZMQ_PORTS,
+                                progress_reporter=pipeline_reporter,
+                            )
+                    finally:
+                        await pipeline_reporter.async_cleanup()
+                        self.job_executor._progress_reporter = None
                 elif isinstance(spec, TrackJobSpec):
                     cmd = builder.build_track_command(spec)
                     await self.job_executor.execute_from_spec(

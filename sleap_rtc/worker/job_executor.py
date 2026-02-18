@@ -583,6 +583,7 @@ class JobExecutor:
         job_type: str = "train",
         working_dir: str = None,
         zmq_ports: dict | None = None,
+        progress_reporter=None,
     ):
         """Execute a job from a pre-built command list (structured job submission).
 
@@ -597,9 +598,12 @@ class JobExecutor:
             job_type: Type of job ("train" or "track")
             working_dir: Working directory for execution (defaults to current dir)
             zmq_ports: Optional dict with 'controller' and 'publish' ZMQ port
-                numbers. When provided for train jobs, a ProgressReporter is
-                started to forward sleap-nn's native ZMQ progress messages
-                over the RTC data channel.
+                numbers. When provided for train jobs and no progress_reporter is
+                given, a ProgressReporter is created and owned by this call.
+            progress_reporter: Optional pre-existing ProgressReporter to use for
+                the duration of this job. When provided, this call does not create
+                a new reporter and does not call async_cleanup on it — the caller
+                is responsible for the reporter's lifecycle.
         """
         from sleap_rtc.protocol import (
             MSG_JOB_PROGRESS,
@@ -619,14 +623,19 @@ class JobExecutor:
         # ZMQ messages are forwarded over the RTC data channel.
         # Stored on self so the worker message handler can forward
         # control commands (e.g., stop) to sleap-nn via ZMQ.
-        progress_reporter = None
-        if job_type == "train" and zmq_ports:
+        #
+        # If an external reporter is passed in (multi-model pipeline), use it
+        # directly without creating or owning a new one.  The caller is
+        # responsible for cleanup.
+        _owned_reporter = False
+        if progress_reporter is None and job_type == "train" and zmq_ports:
             progress_reporter = ProgressReporter(
                 control_address=f"tcp://127.0.0.1:{zmq_ports.get('controller', 9000)}",
                 progress_address=f"tcp://127.0.0.1:{zmq_ports.get('publish', 9001)}",
             )
             progress_reporter.start_control_socket()
             progress_reporter.start_progress_listener_task(channel)
+            _owned_reporter = True
         self._progress_reporter = progress_reporter
 
         try:
@@ -795,6 +804,8 @@ class JobExecutor:
                 channel.send(f"{MSG_JOB_FAILED}{MSG_SEPARATOR}{json.dumps(error_data)}")
 
         finally:
-            if progress_reporter is not None:
+            if _owned_reporter and progress_reporter is not None:
                 await progress_reporter.async_cleanup()
-            self._progress_reporter = None
+                self._progress_reporter = None
+            # External reporters are left running; self._progress_reporter stays
+            # set so stop commands continue to work during the between-model gap.

@@ -1,0 +1,264 @@
+"""Tests for persistent ProgressReporter across a multi-model pipeline.
+
+These tests verify that:
+- execute_from_spec accepts and honours an externally-provided ProgressReporter
+  (no new instance created, no cleanup called on it)
+- handle_job_submit creates ONE ProgressReporter before the model loop and
+  passes the same instance to every execute_from_spec call
+- handle_job_submit calls async_cleanup exactly once after all models finish
+"""
+
+import asyncio
+import threading
+
+import pytest
+import zmq
+from unittest.mock import AsyncMock, MagicMock, patch
+
+from sleap_rtc.config import MountConfig
+from sleap_rtc.worker.job_executor import JobExecutor
+from sleap_rtc.worker.progress_reporter import ProgressReporter as _ProgressReporter
+from sleap_rtc.worker.worker_class import RTCWorkerClient
+from sleap_rtc.protocol import MSG_JOB_SUBMIT, MSG_SEPARATOR
+
+
+# ── helpers ──────────────────────────────────────────────────────────────────
+
+def _submit_msg(spec_dict, job_id="test-job-1"):
+    import json
+    return f"{MSG_JOB_SUBMIT}{MSG_SEPARATOR}{job_id}{MSG_SEPARATOR}{json.dumps(spec_dict)}"
+
+
+# ── fixtures ─────────────────────────────────────────────────────────────────
+
+@pytest.fixture
+def temp_mount(tmp_path):
+    (tmp_path / "labels.slp").write_text("slp data")
+    return tmp_path
+
+
+@pytest.fixture
+def mock_channel():
+    ch = MagicMock()
+    ch.readyState = "open"
+    ch.send = MagicMock()
+    return ch
+
+
+@pytest.fixture
+def mock_process():
+    """Subprocess that exits immediately with return code 0."""
+    proc = MagicMock()
+    proc.pid = 12345
+    proc.returncode = 0
+    proc.stdout = AsyncMock()
+    proc.stdout.read = AsyncMock(return_value=b"")  # empty → stream loop breaks
+    proc.wait = AsyncMock()
+    return proc
+
+
+@pytest.fixture
+def executor():
+    """JobExecutor with stub worker/capabilities (no real subprocess needed)."""
+    return JobExecutor(worker=MagicMock(), capabilities=MagicMock())
+
+
+@pytest.fixture
+def worker(temp_mount):
+    """RTCWorkerClient whose job_executor.execute_from_spec is mocked out."""
+    mount = MountConfig(path=str(temp_mount), label="Test Mount")
+    w = RTCWorkerClient(mounts=[mount], working_dir=str(temp_mount))
+    w.peer_id = "test-worker-123"
+    w.job_executor = MagicMock()
+    w.job_executor.execute_from_spec = AsyncMock()
+    return w
+
+
+# ── execute_from_spec reporter ownership ─────────────────────────────────────
+
+class TestExecuteFromSpecReporterOwnership:
+    """execute_from_spec must not touch a reporter it did not create."""
+
+    @pytest.mark.asyncio
+    async def test_does_not_create_reporter_when_one_is_provided(
+        self, executor, mock_channel, mock_process
+    ):
+        """ProgressReporter() constructor must not be called when a reporter is passed in."""
+        external_reporter = MagicMock()
+        external_reporter.async_cleanup = AsyncMock()
+
+        with patch("sleap_rtc.worker.job_executor.ProgressReporter") as mock_cls, \
+             patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=mock_process)):
+            await executor.execute_from_spec(
+                mock_channel, ["echo", "done"], "job_1",
+                job_type="train",
+                zmq_ports={"controller": 9000, "publish": 9001},
+                progress_reporter=external_reporter,
+            )
+
+        mock_cls.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_does_not_cleanup_external_reporter(
+        self, executor, mock_channel, mock_process
+    ):
+        """async_cleanup must NOT be called on a reporter that was passed in externally."""
+        external_reporter = MagicMock()
+        external_reporter.async_cleanup = AsyncMock()
+
+        with patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=mock_process)):
+            await executor.execute_from_spec(
+                mock_channel, ["echo", "done"], "job_1",
+                job_type="train",
+                zmq_ports={"controller": 9000, "publish": 9001},
+                progress_reporter=external_reporter,
+            )
+
+        external_reporter.async_cleanup.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_creates_and_cleans_up_own_reporter_when_none_provided(
+        self, executor, mock_channel, mock_process
+    ):
+        """When no reporter is passed, execute_from_spec creates and cleans up its own."""
+        owned_reporter = MagicMock()
+        owned_reporter.async_cleanup = AsyncMock()
+
+        with patch("sleap_rtc.worker.job_executor.ProgressReporter", return_value=owned_reporter), \
+             patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=mock_process)):
+            await executor.execute_from_spec(
+                mock_channel, ["echo", "done"], "job_1",
+                job_type="train",
+                zmq_ports={"controller": 9000, "publish": 9001},
+            )
+
+        owned_reporter.async_cleanup.assert_called_once()
+
+
+# ── handle_job_submit pipeline reporter ──────────────────────────────────────
+
+class TestPipelineReporter:
+    """handle_job_submit must create one reporter for the whole pipeline."""
+
+    @pytest.mark.asyncio
+    async def test_passes_same_reporter_to_all_models(
+        self, worker, mock_channel, temp_mount
+    ):
+        """The same ProgressReporter instance must be passed to every execute_from_spec call."""
+        config_yaml = "model_config:\n  backbone: unet\n"
+        labels_path = str(temp_mount / "labels.slp")
+
+        spec_dict = {
+            "type": "train",
+            "config_contents": [config_yaml, config_yaml],
+            "model_types": ["centroid", "centered_instance"],
+            "labels_path": labels_path,
+        }
+        message = _submit_msg(spec_dict)
+
+        captured_reporters = []
+
+        async def capture_reporter(channel, cmd, job_id, job_type="train", **kwargs):
+            captured_reporters.append(kwargs.get("progress_reporter"))
+
+        worker.job_executor.execute_from_spec = AsyncMock(side_effect=capture_reporter)
+
+        pipeline_reporter = MagicMock()
+        pipeline_reporter.async_cleanup = AsyncMock()
+
+        with patch("sleap_rtc.worker.worker_class.ProgressReporter", return_value=pipeline_reporter):
+            await worker.handle_job_submit(mock_channel, message)
+
+        assert len(captured_reporters) == 2
+        assert captured_reporters[0] is pipeline_reporter
+        assert captured_reporters[1] is pipeline_reporter
+
+    @pytest.mark.asyncio
+    async def test_cleans_up_reporter_once_after_pipeline(
+        self, worker, mock_channel, temp_mount
+    ):
+        """async_cleanup must be called exactly once after all models complete."""
+        config_yaml = "model_config:\n  backbone: unet\n"
+        labels_path = str(temp_mount / "labels.slp")
+
+        spec_dict = {
+            "type": "train",
+            "config_contents": [config_yaml, config_yaml],
+            "model_types": ["centroid", "centered_instance"],
+            "labels_path": labels_path,
+        }
+        message = _submit_msg(spec_dict)
+
+        pipeline_reporter = MagicMock()
+        pipeline_reporter.async_cleanup = AsyncMock()
+
+        with patch("sleap_rtc.worker.worker_class.ProgressReporter", return_value=pipeline_reporter):
+            await worker.handle_job_submit(mock_channel, message)
+
+        pipeline_reporter.async_cleanup.assert_called_once()
+
+
+# ── channel.send must not block the event loop ───────────────────────────────
+
+class TestChannelSendNonBlocking:
+    """channel.send must run in an executor, not on the event loop thread.
+
+    Calling channel.send() directly in the listener coroutine blocks the
+    entire asyncio event loop for the duration of the send.  When the
+    DataChannel's SCTP send buffer is full this causes a stdout pipe deadlock:
+    stream_logs_with_progress() cannot drain the pipe, the pipe fills up, and
+    the subprocess hangs trying to write — freezing validation output.
+
+    The fix: await loop.run_in_executor(None, channel.send, msg) so the
+    event loop remains free while the send executes in a thread.
+    """
+
+    def _make_reporter_with_one_message(self, payload: str) -> _ProgressReporter:
+        """Return a ProgressReporter whose ZMQ socket delivers one message."""
+        reporter = _ProgressReporter()
+        mock_ctx = MagicMock()
+        mock_sock = MagicMock()
+        mock_ctx.socket.return_value = mock_sock
+        reporter.context = mock_ctx  # skip real zmq.Context creation
+
+        recv_calls = [0]
+
+        def fake_recv(flags):
+            recv_calls[0] += 1
+            if recv_calls[0] == 1:
+                return payload
+            raise zmq.Again()
+
+        mock_sock.recv_string.side_effect = fake_recv
+        return reporter
+
+    @pytest.mark.asyncio
+    async def test_channel_send_runs_in_executor_thread(self):
+        """channel.send must be called from a thread pool thread, not the event loop thread."""
+        event_loop_thread = threading.current_thread()
+        call_thread: list = [None]
+        send_done = asyncio.Event()
+        loop = asyncio.get_running_loop()
+
+        def record_thread(msg):
+            call_thread[0] = threading.current_thread()
+            loop.call_soon_threadsafe(send_done.set)
+
+        channel = MagicMock()
+        channel.send = record_thread
+
+        reporter = self._make_reporter_with_one_message("progress_payload")
+        listener_task = reporter.start_progress_listener_task(channel)
+
+        try:
+            await asyncio.wait_for(send_done.wait(), timeout=2.0)
+        finally:
+            reporter.running = False
+            listener_task.cancel()
+            await asyncio.gather(listener_task, return_exceptions=True)
+
+        assert call_thread[0] is not None, "channel.send was never called"
+        assert call_thread[0] is not event_loop_thread, (
+            "channel.send ran on the event loop thread — "
+            "it must use run_in_executor to avoid blocking"
+        )

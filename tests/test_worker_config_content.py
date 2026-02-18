@@ -12,6 +12,20 @@ from sleap_rtc.protocol import MSG_JOB_SUBMIT, MSG_JOB_ACCEPTED, MSG_JOB_REJECTE
 from sleap_rtc.worker.worker_class import RTCWorkerClient
 
 
+@pytest.fixture(autouse=True)
+def _mock_pipeline_reporter():
+    """Patch ProgressReporter in worker_class to prevent real ZMQ socket binding.
+
+    handle_job_submit now creates a ProgressReporter before the model loop.
+    Tests here only care about execute_from_spec interactions, not ZMQ, so stub
+    the reporter out to keep these tests fast and port-independent.
+    """
+    mock_reporter = MagicMock()
+    mock_reporter.async_cleanup = AsyncMock()
+    with patch("sleap_rtc.worker.worker_class.ProgressReporter", return_value=mock_reporter):
+        yield
+
+
 @pytest.fixture
 def temp_mount(tmp_path):
     """Create a temporary mount with test files."""
