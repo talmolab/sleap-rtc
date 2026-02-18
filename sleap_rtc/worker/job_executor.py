@@ -5,6 +5,7 @@ script parsing, process management, log streaming, and progress reporting.
 """
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -69,6 +70,10 @@ class JobExecutor:
         sleap-nn's TrainingControllerZMQ callback receives the message
         identically to local training.
 
+        For stop commands, SIGINT is also sent to the subprocess so that
+        PyTorch Lightning exits immediately rather than hanging in the
+        post-epoch validation loop.
+
         Args:
             raw_zmq_message: Raw jsonpickle-encoded string from LossViewer
                 (e.g., ``{"command": "stop"}``).
@@ -79,6 +84,21 @@ class JobExecutor:
             logging.warning(
                 "No ProgressReporter available — cannot forward ZMQ control message"
             )
+
+        # For stop commands, also SIGINT the subprocess so it exits even if
+        # PyTorch Lightning hangs in validation after setting should_stop=True.
+        try:
+            payload = json.loads(raw_zmq_message)
+            if payload.get("command") == "stop":
+                proc = self._running_process
+                if proc is not None and proc.returncode is None:
+                    logging.info(
+                        f"Stop Early: sending SIGINT to PID {proc.pid} "
+                        f"to bypass frozen post-epoch validation"
+                    )
+                    proc.send_signal(signal.SIGINT)
+        except (json.JSONDecodeError, AttributeError):
+            pass
 
     def stop_running_job(self):
         """Send SIGINT to the running job process for graceful stop.
