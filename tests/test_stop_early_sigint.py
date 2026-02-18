@@ -102,6 +102,116 @@ class TestStopRunningJob:
         mock_killpg.assert_not_called()
 
 
+class TestStopRequestedFlag:
+    """execute_from_spec must send JOB_COMPLETE (not JOB_FAILED) when PL exits
+    with code 1 after handling SIGINT gracefully (i.e. a stop was requested)."""
+
+    def _make_process(self, returncode):
+        proc = MagicMock()
+        proc.pid = 12345
+        proc.returncode = returncode
+        proc.stdout = AsyncMock()
+        proc.stdout.read = AsyncMock(return_value=b"")
+        proc.wait = AsyncMock()
+        return proc
+
+    @pytest.mark.asyncio
+    async def test_exit_code_1_after_stop_sends_job_complete(self):
+        """When stop was requested and process exits with code 1 (PL graceful
+        shutdown), JOB_COMPLETE must be sent — not JOB_FAILED."""
+        from sleap_rtc.protocol import MSG_JOB_COMPLETE, MSG_JOB_FAILED, MSG_SEPARATOR
+
+        executor = JobExecutor(worker=MagicMock(), capabilities=MagicMock())
+        mock_channel = MagicMock()
+        mock_channel.readyState = "open"
+        mock_reporter = MagicMock()
+
+        # Simulate stop command arriving before process exits
+        with patch("os.killpg"), patch("os.getpgid", return_value=99999):
+            executor.send_control_message('{"command": "stop"}')
+
+        with patch("asyncio.create_subprocess_exec",
+                   new=AsyncMock(return_value=self._make_process(1))):
+            await executor.execute_from_spec(
+                mock_channel, ["sleap-nn", "train"], "job_1",
+                job_type="train",
+                zmq_ports={"controller": 9000, "publish": 9001},
+                progress_reporter=mock_reporter,
+            )
+
+        sent = [str(c) for c in mock_channel.send.call_args_list]
+        assert any(MSG_JOB_COMPLETE in s for s in sent), (
+            f"Expected JOB_COMPLETE but got: {sent}"
+        )
+        assert not any(MSG_JOB_FAILED in s for s in sent), (
+            f"JOB_FAILED must not be sent after a requested stop: {sent}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_exit_code_1_without_stop_sends_job_failed(self):
+        """Exit code 1 with no prior stop command must still send JOB_FAILED."""
+        from sleap_rtc.protocol import MSG_JOB_FAILED
+
+        executor = JobExecutor(worker=MagicMock(), capabilities=MagicMock())
+        mock_channel = MagicMock()
+        mock_channel.readyState = "open"
+
+        with patch("asyncio.create_subprocess_exec",
+                   new=AsyncMock(return_value=self._make_process(1))):
+            await executor.execute_from_spec(
+                mock_channel, ["sleap-nn", "train"], "job_1",
+                job_type="train",
+                zmq_ports={"controller": 9000, "publish": 9001},
+                progress_reporter=MagicMock(),
+            )
+
+        sent = [str(c) for c in mock_channel.send.call_args_list]
+        assert any(MSG_JOB_FAILED in s for s in sent), (
+            f"Expected JOB_FAILED for genuine failure: {sent}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_stop_flag_resets_for_next_job(self):
+        """_stop_requested must be False at the start of each execute_from_spec
+        so a stop for model 1 does not make model 2's genuine failure look like
+        a clean stop."""
+        from sleap_rtc.protocol import MSG_JOB_FAILED
+
+        executor = JobExecutor(worker=MagicMock(), capabilities=MagicMock())
+        mock_channel = MagicMock()
+        mock_channel.readyState = "open"
+        mock_reporter = MagicMock()
+
+        # Model 1: stop requested, exits with 1
+        with patch("os.killpg"), patch("os.getpgid", return_value=99999):
+            executor.send_control_message('{"command": "stop"}')
+
+        with patch("asyncio.create_subprocess_exec",
+                   new=AsyncMock(return_value=self._make_process(1))):
+            await executor.execute_from_spec(
+                mock_channel, ["sleap-nn", "train"], "job_1",
+                job_type="train",
+                zmq_ports={"controller": 9000, "publish": 9001},
+                progress_reporter=mock_reporter,
+            )
+
+        # Model 2: no stop requested, exits with 1 (genuine failure)
+        mock_channel.send.reset_mock()
+        with patch("asyncio.create_subprocess_exec",
+                   new=AsyncMock(return_value=self._make_process(1))):
+            await executor.execute_from_spec(
+                mock_channel, ["sleap-nn", "train"], "job_2",
+                job_type="train",
+                zmq_ports={"controller": 9000, "publish": 9001},
+                progress_reporter=mock_reporter,
+            )
+
+        sent = [str(c) for c in mock_channel.send.call_args_list]
+        assert any(MSG_JOB_FAILED in s for s in sent), (
+            f"Model 2 genuine failure must send JOB_FAILED: {sent}"
+        )
+
+
 class TestSubprocessNewSession:
 
     @pytest.mark.asyncio

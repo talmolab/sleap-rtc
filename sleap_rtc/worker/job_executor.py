@@ -62,6 +62,7 @@ class JobExecutor:
         self.package_type = "train"  # Default to training
         self._running_process: asyncio.subprocess.Process | None = None
         self._progress_reporter = None
+        self._stop_requested = False  # True when ZMQ "stop" command was sent
 
     def send_control_message(self, raw_zmq_message: str):
         """Forward a raw ZMQ control message to the training process.
@@ -91,6 +92,7 @@ class JobExecutor:
         try:
             payload = json.loads(raw_zmq_message)
             if payload.get("command") == "stop":
+                self._stop_requested = True
                 proc = self._running_process
                 if proc is not None and proc.returncode is None:
                     try:
@@ -812,8 +814,15 @@ class JobExecutor:
                 f"(return code: {process.returncode})"
             )
 
-            # SIGINT (-2) means graceful stop via "Stop Early" — treat as success
-            stopped_early = process.returncode == -signal.SIGINT
+            # Treat as stopped-early if:
+            # - killed by SIGINT (-2): process group killed by OS signal, OR
+            # - exited with code 1 after a stop was requested: PyTorch Lightning
+            #   caught SIGINT, ran graceful shutdown, then called sys.exit(1)
+            cancelled = process.returncode == -signal.SIGTERM
+            stopped_early = (
+                process.returncode == -signal.SIGINT
+                or (self._stop_requested and not cancelled and process.returncode != 0)
+            )
 
             if process.returncode == 0 or stopped_early:
                 # Job completed successfully (or stopped early with checkpoint)
@@ -834,7 +843,6 @@ class JobExecutor:
             else:
                 # Job failed or was cancelled
                 import json
-                cancelled = process.returncode == -signal.SIGTERM
                 error_data = {
                     "job_id": job_id,
                     "job_type": job_type,
@@ -866,6 +874,7 @@ class JobExecutor:
                 channel.send(f"{MSG_JOB_FAILED}{MSG_SEPARATOR}{json.dumps(error_data)}")
 
         finally:
+            self._stop_requested = False  # reset so next job starts clean
             if _owned_reporter and progress_reporter is not None:
                 await progress_reporter.async_cleanup()
                 self._progress_reporter = None
