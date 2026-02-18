@@ -238,7 +238,7 @@ class RTCWorkerClient:
 
         logging.info("Cleaning up ZMQ sockets...")
         if self.progress_reporter:
-            self.progress_reporter.cleanup()
+            await self.progress_reporter.async_cleanup()
 
         if self.peer_id_for_cleanup and self.state_manager:
             self.state_manager.request_peer_room_deletion(self.peer_id_for_cleanup)

@@ -796,5 +796,5 @@ class JobExecutor:
 
         finally:
             if progress_reporter is not None:
-                progress_reporter.cleanup()
+                await progress_reporter.async_cleanup()
             self._progress_reporter = None

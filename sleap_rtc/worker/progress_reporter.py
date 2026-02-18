@@ -151,25 +151,67 @@ class ProgressReporter:
             logging.info("Progress listener task stopped")
 
     def cleanup(self):
-        """Clean up ZMQ sockets and context."""
+        """Clean up ZMQ sockets and context (synchronous).
+
+        Prefer ``async_cleanup()`` when called from an async context: this
+        synchronous version cancels the listener task but cannot await its
+        termination, so ``context.term()`` may block the event loop briefly
+        if the executor thread is still in flight.
+        """
         logging.info("Cleaning up ZMQ progress reporter...")
 
         # Stop listener if running
         if self.listener_task and not self.listener_task.done():
             self.stop_progress_listener()
 
-        # Close sockets
+        # Close sockets with linger=0 so term() doesn't block on pending msgs
         if self.ctrl_socket:
+            self.ctrl_socket.setsockopt(zmq.LINGER, 0)
             self.ctrl_socket.close()
             self.ctrl_socket = None
             logging.info("Control socket closed")
 
         if self.progress_socket:
+            self.progress_socket.setsockopt(zmq.LINGER, 0)
             self.progress_socket.close()
             self.progress_socket = None
             logging.info("Progress socket closed")
 
         # Terminate context
+        if self.context:
+            self.context.term()
+            self.context = None
+            logging.info("ZMQ context terminated")
+
+    async def async_cleanup(self) -> None:
+        """Clean up ZMQ sockets and context (async).
+
+        Cancels and awaits the listener task before closing sockets so that
+        the executor thread has stopped using the ZMQ socket before
+        ``context.term()`` is called.  Use this from async contexts to avoid
+        blocking the asyncio event loop.
+        """
+        logging.info("Cleaning up ZMQ progress reporter (async)...")
+
+        if self.listener_task and not self.listener_task.done():
+            self.running = False
+            self.listener_task.cancel()
+            # Wait up to 2 s for the task to acknowledge cancellation so the
+            # run_in_executor thread stops accessing the socket.
+            await asyncio.wait({self.listener_task}, timeout=2.0)
+
+        if self.ctrl_socket:
+            self.ctrl_socket.setsockopt(zmq.LINGER, 0)
+            self.ctrl_socket.close()
+            self.ctrl_socket = None
+            logging.info("Control socket closed")
+
+        if self.progress_socket:
+            self.progress_socket.setsockopt(zmq.LINGER, 0)
+            self.progress_socket.close()
+            self.progress_socket = None
+            logging.info("Progress socket closed")
+
         if self.context:
             self.context.term()
             self.context = None
