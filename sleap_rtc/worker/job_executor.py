@@ -586,6 +586,94 @@ class JobExecutor:
                 await self.worker.update_status("available")
                 self.worker.current_job = None
 
+    async def run_inference(
+        self,
+        channel,
+        cmd: list,
+        predictions_path: str,
+    ):
+        """Run a post-training inference subprocess and forward progress to client.
+
+        Spawns ``sleap track`` (or equivalent command), forwards JSON progress
+        lines from stdout as ``INFERENCE_PROGRESS::`` messages, and sends
+        ``INFERENCE_COMPLETE::`` or ``INFERENCE_FAILED::`` when the subprocess
+        exits.
+
+        Args:
+            channel: RTC data channel for sending messages to the client.
+            cmd: Full command list to execute (e.g. ``["sleap-nn", "track", ...]``).
+            predictions_path: Expected output path for the predictions ``.slp``
+                file.  Used to confirm the file exists before sending
+                ``INFERENCE_COMPLETE``.
+        """
+        logging.info(f"[INFERENCE] Running: {' '.join(cmd)}")
+
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                env={**os.environ, "PYTHONUNBUFFERED": "1"},
+                start_new_session=True,
+            )
+            self._running_process = process
+            logging.info(f"[INFERENCE] Process started with PID: {process.pid}")
+
+            assert process.stdout is not None
+            async for raw_line in process.stdout:
+                line = raw_line.decode(errors="replace").rstrip()
+                if not line:
+                    continue
+                logging.info(f"[INFERENCE] {line}")
+                # Forward JSON progress lines; log non-JSON lines only.
+                if line.startswith("{"):
+                    if channel.readyState == "open":
+                        channel.send(f"INFERENCE_PROGRESS::{line}")
+                else:
+                    if channel.readyState == "open":
+                        channel.send(f"{line}\n")
+
+            await process.wait()
+            self._running_process = None
+            logging.info(f"[INFERENCE] Process exited with code {process.returncode}")
+
+            cancelled = process.returncode == -signal.SIGTERM
+
+            if cancelled:
+                logging.info("[INFERENCE] Inference was cancelled by user")
+                if channel.readyState == "open":
+                    channel.send('INFERENCE_FAILED::{"error": "cancelled"}')
+                return
+
+            predictions_exist = Path(predictions_path).exists()
+            if process.returncode == 0 and predictions_exist:
+                logging.info(f"[INFERENCE] Complete — predictions at {predictions_path}")
+                if channel.readyState == "open":
+                    channel.send(
+                        f'INFERENCE_COMPLETE::{{"predictions_path": "{predictions_path}"}}'
+                    )
+            elif not predictions_exist:
+                logging.error(
+                    f"[INFERENCE] Subprocess exited 0 but predictions file not found: "
+                    f"{predictions_path}"
+                )
+                if channel.readyState == "open":
+                    channel.send('INFERENCE_FAILED::{"error": "no output file"}')
+            else:
+                logging.error(
+                    f"[INFERENCE] Subprocess exited with code {process.returncode}"
+                )
+                if channel.readyState == "open":
+                    channel.send(
+                        f'INFERENCE_FAILED::{{"error": "exit code {process.returncode}"}}'
+                    )
+
+        except Exception as e:
+            logging.exception(f"[INFERENCE] Unexpected error: {e}")
+            self._running_process = None
+            if channel.readyState == "open":
+                channel.send(f'INFERENCE_FAILED::{{"error": "{e}"}}')
+
     async def _send_peer_message(self, to_peer_id: str, payload: dict):
         """Send peer message via worker's websocket.
 
