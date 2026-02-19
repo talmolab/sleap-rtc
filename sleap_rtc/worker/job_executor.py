@@ -67,13 +67,12 @@ class JobExecutor:
     def send_control_message(self, raw_zmq_message: str):
         """Forward a raw ZMQ control message to the training process.
 
-        Delegates to the ProgressReporter's ZMQ PUB control socket so
-        sleap-nn's TrainingControllerZMQ callback receives the message
-        identically to local training.
+        Forwards the raw ZMQ message to sleap-nn's TrainingControllerZMQ via
+        the ProgressReporter's ZMQ PUB socket, identically to local training.
 
-        For stop commands, SIGINT is also sent to the subprocess so that
-        PyTorch Lightning exits immediately rather than hanging in the
-        post-epoch validation loop.
+        sleap-nn's TrainingControllerZMQ.on_train_batch_end handles rank
+        synchronization via reduce_boolean_decision so all DDP ranks stop
+        together cleanly without a SIGINT.
 
         Args:
             raw_zmq_message: Raw jsonpickle-encoded string from LossViewer
@@ -86,27 +85,6 @@ class JobExecutor:
                 "No ProgressReporter available — cannot forward ZMQ control message"
             )
 
-        # For stop commands, SIGINT the entire process group so distributed
-        # workers (rank 1, rank 2, …) also exit — not just rank 0.  Without
-        # this, rank 1 survives, keeps stdout open, and blocks the pipeline.
-        # TEMPORARILY DISABLED to diagnose the validation DataLoader freeze.
-        # try:
-        #     payload = json.loads(raw_zmq_message)
-        #     if payload.get("command") == "stop":
-        #         self._stop_requested = True
-        #         proc = self._running_process
-        #         if proc is not None and proc.returncode is None:
-        #             try:
-        #                 pgid = os.getpgid(proc.pid)
-        #                 logging.info(
-        #                     f"Stop Early: sending SIGINT to process group {pgid} "
-        #                     f"(PID {proc.pid}) to bypass frozen post-epoch validation"
-        #                 )
-        #                 os.killpg(pgid, signal.SIGINT)
-        #             except ProcessLookupError:
-        #                 pass
-        # except (json.JSONDecodeError, AttributeError):
-        #     pass
         try:
             payload = json.loads(raw_zmq_message)
             if payload.get("command") == "stop":
