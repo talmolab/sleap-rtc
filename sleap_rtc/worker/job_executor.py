@@ -89,21 +89,28 @@ class JobExecutor:
         # For stop commands, SIGINT the entire process group so distributed
         # workers (rank 1, rank 2, …) also exit — not just rank 0.  Without
         # this, rank 1 survives, keeps stdout open, and blocks the pipeline.
+        # TEMPORARILY DISABLED to diagnose the validation DataLoader freeze.
+        # try:
+        #     payload = json.loads(raw_zmq_message)
+        #     if payload.get("command") == "stop":
+        #         self._stop_requested = True
+        #         proc = self._running_process
+        #         if proc is not None and proc.returncode is None:
+        #             try:
+        #                 pgid = os.getpgid(proc.pid)
+        #                 logging.info(
+        #                     f"Stop Early: sending SIGINT to process group {pgid} "
+        #                     f"(PID {proc.pid}) to bypass frozen post-epoch validation"
+        #                 )
+        #                 os.killpg(pgid, signal.SIGINT)
+        #             except ProcessLookupError:
+        #                 pass
+        # except (json.JSONDecodeError, AttributeError):
+        #     pass
         try:
             payload = json.loads(raw_zmq_message)
             if payload.get("command") == "stop":
                 self._stop_requested = True
-                proc = self._running_process
-                if proc is not None and proc.returncode is None:
-                    try:
-                        pgid = os.getpgid(proc.pid)
-                        logging.info(
-                            f"Stop Early: sending SIGINT to process group {pgid} "
-                            f"(PID {proc.pid}) to bypass frozen post-epoch validation"
-                        )
-                        os.killpg(pgid, signal.SIGINT)
-                    except ProcessLookupError:
-                        pass
         except (json.JSONDecodeError, AttributeError):
             pass
 
