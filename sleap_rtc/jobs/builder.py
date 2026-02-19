@@ -77,8 +77,16 @@ class CommandBuilder:
         if spec.learning_rate is not None:
             cmd.append(f"trainer_config.optimizer.lr={spec.learning_rate}")
 
-        if spec.run_name:
-            cmd.append(f"trainer_config.run_name={spec.run_name}")
+        # Determine run_name: explicit spec.run_name takes priority, then
+        # per-model model_types entry (e.g. "centroid"), so the checkpoint
+        # directory is always predictable for post-training inference.
+        effective_run_name = spec.run_name or (
+            spec.model_types[config_index]
+            if spec.model_types and config_index < len(spec.model_types)
+            else None
+        )
+        if effective_run_name:
+            cmd.append(f"trainer_config.run_name={effective_run_name}")
 
         if spec.resume_ckpt_path:
             cmd.append(f"trainer_config.resume_ckpt_path={spec.resume_ckpt_path}")

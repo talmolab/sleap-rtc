@@ -2175,9 +2175,15 @@ class RTCWorkerClient:
                                 break
 
                             # Derive checkpoint directory from the written config.
+                            # Use the same run_name precedence as build_train_command:
+                            # spec.run_name → model_types[i] → None (unknown).
+                            model_types = getattr(spec, "model_types", []) or []
+                            per_model_run_name = spec.run_name or (
+                                model_types[i] if i < len(model_types) else None
+                            )
                             ckpt_dir = _get_checkpoint_dir(
                                 spec.config_paths[i],
-                                run_name_override=spec.run_name,
+                                run_name_override=per_model_run_name,
                             )
                             if ckpt_dir:
                                 trained_model_paths.append(ckpt_dir)
