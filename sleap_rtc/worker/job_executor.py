@@ -5,6 +5,7 @@ script parsing, process management, log streaming, and progress reporting.
 """
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -60,23 +61,62 @@ class JobExecutor:
         self.output_dir = ""
         self.package_type = "train"  # Default to training
         self._running_process: asyncio.subprocess.Process | None = None
+        self._progress_reporter = None
+        self._stop_requested = False  # True when ZMQ "stop" command was sent
+
+    def send_control_message(self, raw_zmq_message: str):
+        """Forward a raw ZMQ control message to the training process.
+
+        Forwards the raw ZMQ message to sleap-nn's TrainingControllerZMQ via
+        the ProgressReporter's ZMQ PUB socket, identically to local training.
+
+        sleap-nn's TrainingControllerZMQ.on_train_batch_end handles rank
+        synchronization via reduce_boolean_decision so all DDP ranks stop
+        together cleanly without a SIGINT.
+
+        Args:
+            raw_zmq_message: Raw jsonpickle-encoded string from LossViewer
+                (e.g., ``{"command": "stop"}``).
+        """
+        if self._progress_reporter is not None:
+            self._progress_reporter.send_control_message(raw_zmq_message)
+        else:
+            logging.warning(
+                "No ProgressReporter available — cannot forward ZMQ control message"
+            )
+
+        try:
+            payload = json.loads(raw_zmq_message)
+            if payload.get("command") == "stop":
+                self._stop_requested = True
+        except (json.JSONDecodeError, AttributeError):
+            pass
 
     def stop_running_job(self):
-        """Send SIGINT to the running job process for graceful stop.
+        """Send SIGINT to the running job's process group for graceful stop.
 
-        This allows sleap-nn to save the current checkpoint before exiting.
+        Kills the entire process group so distributed workers (rank 1, …)
+        exit alongside the main process, allowing sleap-nn to save a checkpoint.
         """
         proc = self._running_process
         if proc is not None and proc.returncode is None:
-            logging.info(f"Sending SIGINT to process {proc.pid} (graceful stop)")
-            proc.send_signal(signal.SIGINT)
+            try:
+                pgid = os.getpgid(proc.pid)
+                logging.info(f"Sending SIGINT to process group {pgid} (graceful stop)")
+                os.killpg(pgid, signal.SIGINT)
+            except ProcessLookupError:
+                pass
 
     def cancel_running_job(self):
-        """Send SIGTERM to the running job process for immediate cancellation."""
+        """Send SIGTERM to the running job's process group for immediate cancellation."""
         proc = self._running_process
         if proc is not None and proc.returncode is None:
-            logging.info(f"Sending SIGTERM to process {proc.pid} (hard cancel)")
-            proc.terminate()
+            try:
+                pgid = os.getpgid(proc.pid)
+                logging.info(f"Sending SIGTERM to process group {pgid} (hard cancel)")
+                os.killpg(pgid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
 
     def parse_training_script(self, train_script_path: str):
         """Parse train-script.sh and extract sleap-nn train commands.
@@ -564,6 +604,7 @@ class JobExecutor:
         job_type: str = "train",
         working_dir: str = None,
         zmq_ports: dict | None = None,
+        progress_reporter=None,
     ):
         """Execute a job from a pre-built command list (structured job submission).
 
@@ -578,9 +619,12 @@ class JobExecutor:
             job_type: Type of job ("train" or "track")
             working_dir: Working directory for execution (defaults to current dir)
             zmq_ports: Optional dict with 'controller' and 'publish' ZMQ port
-                numbers. When provided for train jobs, a ProgressReporter is
-                started to forward sleap-nn's native ZMQ progress messages
-                over the RTC data channel.
+                numbers. When provided for train jobs and no progress_reporter is
+                given, a ProgressReporter is created and owned by this call.
+            progress_reporter: Optional pre-existing ProgressReporter to use for
+                the duration of this job. When provided, this call does not create
+                a new reporter and does not call async_cleanup on it — the caller
+                is responsible for the reporter's lifecycle.
         """
         from sleap_rtc.protocol import (
             MSG_JOB_PROGRESS,
@@ -598,14 +642,22 @@ class JobExecutor:
 
         # Start ZMQ progress reporter for train jobs so sleap-nn's native
         # ZMQ messages are forwarded over the RTC data channel.
-        progress_reporter = None
-        if job_type == "train" and zmq_ports:
+        # Stored on self so the worker message handler can forward
+        # control commands (e.g., stop) to sleap-nn via ZMQ.
+        #
+        # If an external reporter is passed in (multi-model pipeline), use it
+        # directly without creating or owning a new one.  The caller is
+        # responsible for cleanup.
+        _owned_reporter = False
+        if progress_reporter is None and job_type == "train" and zmq_ports:
             progress_reporter = ProgressReporter(
                 control_address=f"tcp://127.0.0.1:{zmq_ports.get('controller', 9000)}",
                 progress_address=f"tcp://127.0.0.1:{zmq_ports.get('publish', 9001)}",
             )
             progress_reporter.start_control_socket()
             progress_reporter.start_progress_listener_task(channel)
+            _owned_reporter = True
+        self._progress_reporter = progress_reporter
 
         try:
             # Start the process
@@ -615,10 +667,29 @@ class JobExecutor:
                 stderr=asyncio.subprocess.STDOUT,
                 cwd=working_dir,
                 env={**os.environ, "PYTHONUNBUFFERED": "1"},
+                start_new_session=True,
             )
             self._running_process = process
 
             logging.info(f"[JOB {job_id}] Process started with PID: {process.pid}")
+
+            # Watchdog: log subprocess liveness every 30 s so we can see in
+            # the worker output whether the process is stuck or already gone.
+            async def _subprocess_watchdog():
+                while True:
+                    await asyncio.sleep(30)
+                    rc = process.returncode
+                    if rc is None:
+                        logging.info(
+                            f"[JOB {job_id}] Watchdog: PID {process.pid} still running"
+                        )
+                    else:
+                        logging.info(
+                            f"[JOB {job_id}] Watchdog: PID {process.pid} has exited (rc={rc})"
+                        )
+                        break
+
+            watchdog_task = asyncio.create_task(_subprocess_watchdog())
 
             # Stream logs with progress extraction
             async def stream_logs_with_progress():
@@ -638,7 +709,11 @@ class JobExecutor:
                     while True:
                         chunk = await process.stdout.read(512)
                         if not chunk:
-                            # Process ended; flush remaining text
+                            # EOF — subprocess closed its stdout (process is done or pipe broke)
+                            logging.info(
+                                f"[JOB {job_id}] EOF on stdout from PID {process.pid} — "
+                                f"subprocess has closed stdout (returncode={process.returncode!r})"
+                            )
                             if buf:
                                 line = buf.decode(errors="replace")
                                 logging.info(f"[JOB {job_id}] {line}")
@@ -711,16 +786,28 @@ class JobExecutor:
                         channel.send(f"[log-stream error] {e}\n")
 
             await stream_logs_with_progress()
+            watchdog_task.cancel()
+            logging.info(
+                f"[JOB {job_id}] Stdout stream ended — waiting for PID {process.pid} to exit"
+            )
             await process.wait()
             self._running_process = None
 
             duration_seconds = int(time.time() - start_time)
             logging.info(
-                f"[JOB {job_id}] Process completed with return code: {process.returncode}"
+                f"[JOB {job_id}] Process PID {process.pid} exited "
+                f"(return code: {process.returncode})"
             )
 
-            # SIGINT (-2) means graceful stop via "Stop Early" — treat as success
-            stopped_early = process.returncode == -signal.SIGINT
+            # Treat as stopped-early if:
+            # - killed by SIGINT (-2): process group killed by OS signal, OR
+            # - exited with code 1 after a stop was requested: PyTorch Lightning
+            #   caught SIGINT, ran graceful shutdown, then called sys.exit(1)
+            cancelled = process.returncode == -signal.SIGTERM
+            stopped_early = (
+                process.returncode == -signal.SIGINT
+                or (self._stop_requested and not cancelled and process.returncode != 0)
+            )
 
             if process.returncode == 0 or stopped_early:
                 # Job completed successfully (or stopped early with checkpoint)
@@ -741,7 +828,6 @@ class JobExecutor:
             else:
                 # Job failed or was cancelled
                 import json
-                cancelled = process.returncode == -signal.SIGTERM
                 error_data = {
                     "job_id": job_id,
                     "job_type": job_type,
@@ -773,5 +859,9 @@ class JobExecutor:
                 channel.send(f"{MSG_JOB_FAILED}{MSG_SEPARATOR}{json.dumps(error_data)}")
 
         finally:
-            if progress_reporter is not None:
-                progress_reporter.cleanup()
+            self._stop_requested = False  # reset so next job starts clean
+            if _owned_reporter and progress_reporter is not None:
+                await progress_reporter.async_cleanup()
+                self._progress_reporter = None
+            # External reporters are left running; self._progress_reporter stays
+            # set so stop commands continue to work during the between-model gap.

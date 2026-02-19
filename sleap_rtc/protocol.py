@@ -445,6 +445,12 @@ MSG_JOB_FAILED = "JOB_FAILED"
 MSG_JOB_STOP = "JOB_STOP"      # Graceful stop (SIGINT, saves checkpoint)
 MSG_JOB_CANCEL = "JOB_CANCEL"  # Hard cancel (SIGTERM, immediate termination)
 
+# ZMQ control message forwarding (client → worker)
+# Carries raw ZMQ control messages from LossViewer through the RTC bridge
+# so sleap-nn's TrainingControllerZMQ callback receives them identically
+# to local training. Symmetric with PROGRESS_REPORT:: (worker → client).
+MSG_CONTROL_COMMAND = "CONTROL_COMMAND"
+
 # Message separators
 MSG_SEPARATOR = "::"
 

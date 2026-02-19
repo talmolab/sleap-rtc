@@ -237,12 +237,20 @@ class RemoteProgressBridge:
     def _poll_commands(self):
         """Background thread: poll ZMQ SUB for stop/cancel from LossViewer.
 
-        Reads messages from the controller SUB socket and forwards them
-        as ``MSG_JOB_STOP`` / ``MSG_JOB_CANCEL`` over the RTC data channel.
+        Routes control messages based on command type:
+        - ``"stop"`` → forwarded as raw ZMQ via ``CONTROL_COMMAND::`` so
+          sleap-nn's ``TrainingControllerZMQ`` receives it identically to
+          local training (transparent ZMQ bridge).
+        - ``"cancel"`` → sent as ``MSG_JOB_CANCEL`` for process-level
+          SIGTERM (no ZMQ equivalent in sleap-nn).
         """
         import zmq
 
-        from sleap_rtc.protocol import MSG_JOB_CANCEL, MSG_JOB_STOP
+        from sleap_rtc.protocol import (
+            MSG_CONTROL_COMMAND,
+            MSG_JOB_CANCEL,
+            MSG_SEPARATOR,
+        )
 
         while not self._stop_event.is_set():
             try:
@@ -263,22 +271,31 @@ class RemoteProgressBridge:
                         continue
 
                     command = msg.get("command") if isinstance(msg, dict) else None
-                    if command in ("stop", "cancel"):
-                        logger.info(f"LossViewer sent command: {command}")
-                        rtc_msg = (
-                            MSG_JOB_STOP if command == "stop" else MSG_JOB_CANCEL
+                    if command is None:
+                        continue
+
+                    send_fn = self._send_fn
+                    if send_fn is None:
+                        logger.warning(
+                            f"Received {command} but no send_fn available"
                         )
-                        send_fn = self._send_fn
-                        if send_fn is not None:
-                            try:
-                                send_fn(rtc_msg)
-                                logger.debug(f"Forwarded {rtc_msg} to worker")
-                            except Exception as e:
-                                logger.error(f"Failed to send {rtc_msg}: {e}")
+                        continue
+
+                    try:
+                        if command == "cancel":
+                            # Cancel = process-level kill (SIGTERM)
+                            logger.info("LossViewer sent cancel — sending MSG_JOB_CANCEL")
+                            send_fn(MSG_JOB_CANCEL)
                         else:
-                            logger.warning(
-                                f"Received {command} but no send_fn available"
+                            # All other commands (including stop) = transparent
+                            # ZMQ forwarding to sleap-nn's TrainingControllerZMQ
+                            logger.info(
+                                f"LossViewer sent command: {command} — "
+                                f"forwarding via {MSG_CONTROL_COMMAND}"
                             )
+                            send_fn(f"{MSG_CONTROL_COMMAND}{MSG_SEPARATOR}{raw}")
+                    except Exception as e:
+                        logger.error(f"Failed to forward command {command}: {e}")
             except Exception as e:
                 if not self._stop_event.is_set():
                     logger.error(f"Error in command poll: {e}")
@@ -449,8 +466,15 @@ def run_remote_training(
         if on_progress:
             on_progress(event)
 
-    # Default on_model_type updates the bridge so LossViewer switches
-    model_type_fn = on_model_type if on_model_type is not None else bridge.set_model_type
+    # Always update the bridge model type so on_raw_zmq_message sets the
+    # correct 'what' field on ZMQ messages. Also call any user callback so
+    # the LossViewer can reset its display for the new model.
+    def _combined_model_type_fn(new_model_type: str) -> None:
+        bridge.set_model_type(new_model_type)
+        if on_model_type is not None:
+            on_model_type(new_model_type)
+
+    model_type_fn = _combined_model_type_fn
 
     # Run training with progress forwarding
     kwargs = dict(

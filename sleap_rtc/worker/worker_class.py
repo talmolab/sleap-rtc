@@ -71,6 +71,7 @@ from sleap_rtc.protocol import (
     # Job control
     MSG_JOB_STOP,
     MSG_JOB_CANCEL,
+    MSG_CONTROL_COMMAND,
 )
 from sleap_rtc.jobs import (
     TrainJobSpec,
@@ -237,7 +238,7 @@ class RTCWorkerClient:
 
         logging.info("Cleaning up ZMQ sockets...")
         if self.progress_reporter:
-            self.progress_reporter.cleanup()
+            await self.progress_reporter.async_cleanup()
 
         if self.peer_id_for_cleanup and self.state_manager:
             self.state_manager.request_peer_room_deletion(self.peer_id_for_cleanup)
@@ -2078,21 +2079,49 @@ class RTCWorkerClient:
                     commands = builder.build_train_commands(spec)
                     total_configs = len(commands)
 
-                    for i, cmd in enumerate(commands):
-                        config_name = Path(spec.config_paths[i]).stem
-                        if total_configs > 1:
-                            logging.info(f"Training model {i+1}/{total_configs}: {config_name}")
-                            channel.send(f"Training model {i+1}/{total_configs}: {config_name}\n")
+                    # Create one ProgressReporter for the entire pipeline so ZMQ
+                    # ports stay bound between models — no context.term() between
+                    # models, mirroring local SLEAP's persistent-socket design.
+                    pipeline_reporter = ProgressReporter(
+                        control_address=f"tcp://127.0.0.1:{DEFAULT_ZMQ_PORTS['controller']}",
+                        progress_address=f"tcp://127.0.0.1:{DEFAULT_ZMQ_PORTS['publish']}",
+                    )
+                    pipeline_reporter.start_control_socket()
+                    pipeline_reporter.start_progress_listener_task(channel)
+                    try:
+                        for i, cmd in enumerate(commands):
+                            config_name = Path(spec.config_paths[i]).stem
+                            if total_configs > 1:
+                                logging.info(f"Training model {i+1}/{total_configs}: {config_name}")
+                                channel.send(f"Training model {i+1}/{total_configs}: {config_name}\n")
 
-                        # Send MODEL_TYPE:: so the client can switch LossViewer
-                        # Skip i=0: client already initialized with first model type
-                        if i > 0 and getattr(spec, "model_types", None) and i < len(spec.model_types):
-                            channel.send(f"MODEL_TYPE::{spec.model_types[i]}")
+                            # Send MODEL_TYPE:: so the client can switch LossViewer
+                            # Skip i=0: client already initialized with first model type
+                            if i > 0 and getattr(spec, "model_types", None) and i < len(spec.model_types):
+                                channel.send(f"MODEL_TYPE::{spec.model_types[i]}")
 
-                        await self.job_executor.execute_from_spec(
-                            channel, cmd, f"{job_id}_{i}" if total_configs > 1 else job_id, job_type="train",
-                            zmq_ports=DEFAULT_ZMQ_PORTS,
-                        )
+                            model_job_id = f"{job_id}_{i}" if total_configs > 1 else job_id
+                            logging.info(
+                                f"[PIPELINE] Starting model {i+1}/{total_configs} "
+                                f"(job_id={model_job_id}, config={config_name!r})"
+                            )
+                            await self.job_executor.execute_from_spec(
+                                channel, cmd, model_job_id, job_type="train",
+                                zmq_ports=DEFAULT_ZMQ_PORTS,
+                                progress_reporter=pipeline_reporter,
+                            )
+                            logging.info(
+                                f"[PIPELINE] Model {i+1}/{total_configs} execute_from_spec returned"
+                            )
+                            # Flush buffered ZMQ messages from the finished model
+                            # before switching model type on the client. This prevents
+                            # stale messages from appearing in the next model's LossViewer.
+                            if i < total_configs - 1:
+                                await pipeline_reporter.restart_progress_listener(channel)
+                    finally:
+                        logging.info("[PIPELINE] All models finished — running pipeline_reporter.async_cleanup()")
+                        await pipeline_reporter.async_cleanup()
+                        self.job_executor._progress_reporter = None
                 elif isinstance(spec, TrackJobSpec):
                     cmd = builder.build_track_command(spec)
                     await self.job_executor.execute_from_spec(
@@ -2326,7 +2355,27 @@ class RTCWorkerClient:
                     await self.handle_job_submit(channel, message)
                     return
 
+                # Handle ZMQ control message forwarding (transparent bridge)
+                # CONTROL_COMMAND:: carries raw ZMQ from LossViewer → sleap-nn
+                if message.startswith(f"{MSG_CONTROL_COMMAND}{MSG_SEPARATOR}"):
+                    # split(1) intentional: raw ZMQ payload may contain "::"
+                    raw_zmq = message.split(MSG_SEPARATOR, 1)[1]
+                    reporter = self.job_executor._progress_reporter
+                    reporter_state = (
+                        f"active (control={reporter.control_address!r}, "
+                        f"socket={'bound' if reporter.ctrl_socket is not None else 'NOT bound'})"
+                        if reporter is not None
+                        else "NONE — stop command will be dropped!"
+                    )
+                    logging.info(
+                        f"Received CONTROL_COMMAND — reporter={reporter_state} "
+                        f"— payload={raw_zmq!r}"
+                    )
+                    self.job_executor.send_control_message(raw_zmq)
+                    return
+
                 # Handle job stop/cancel commands
+                # MSG_JOB_STOP kept as fallback (SIGINT) for older clients
                 if message == MSG_JOB_STOP:
                     logging.info("Received JOB_STOP — sending SIGINT to process")
                     self.job_executor.stop_running_job()

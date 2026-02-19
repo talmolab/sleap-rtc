@@ -632,6 +632,52 @@ class TestRunRemoteTraining:
         assert callback_events[0].event_type == "train_begin"
 
     @patch("sleap_rtc.api.run_training")
+    def test_on_model_type_updates_bridge_and_calls_user_callback(
+        self, mock_run_training, mock_zmq
+    ):
+        """Bridge model type must update even when a custom on_model_type is provided.
+
+        Regression test: previously, providing on_model_type caused bridge.set_model_type
+        to be skipped. This meant model 2's ZMQ messages had the wrong 'what' field and
+        were filtered out by the LossViewer in multi-model pipelines.
+        """
+        import jsonpickle
+
+        mock_socket = _setup_zmq_mocks(mock_zmq)
+        user_callback_calls = []
+
+        def simulate_training(*args, **kwargs):
+            on_model_type = kwargs.get("on_model_type")
+            on_raw = kwargs.get("on_raw_progress")
+            # Simulate worker switching to model 2
+            if on_model_type:
+                on_model_type("centered_instance")
+            # Simulate model 2's ZMQ progress (no 'what' field — sleap-nn doesn't set it)
+            if on_raw:
+                on_raw(jsonpickle.encode({"event": "epoch_end", "logs": {}}))
+            return MagicMock()
+
+        mock_run_training.side_effect = simulate_training
+
+        run_remote_training(
+            config_path="/path/to/config.json",
+            room_id="test-room",
+            model_type="centroid",
+            on_model_type=lambda mt: user_callback_calls.append(mt),
+        )
+
+        # User callback must have been called
+        assert user_callback_calls == ["centered_instance"]
+
+        # The ZMQ message forwarded to LossViewer must use the updated model type
+        messages = _decode_all_zmq_messages(mock_socket)
+        assert len(messages) == 1
+        assert messages[0]["what"] == "centered_instance", (
+            "bridge._model_type was not updated — model 2 messages would be "
+            "filtered out by LossViewer"
+        )
+
+    @patch("sleap_rtc.api.run_training")
     def test_model_type_passed_to_run_training(self, mock_run_training, mock_zmq):
         """Should pass model_type through to run_training API call."""
         mock_socket = _setup_zmq_mocks(mock_zmq)
@@ -771,10 +817,10 @@ class TestStopCancelCommands:
         assert bridge._send_fn is send_fn
 
     def test_poll_commands_stop(self, mock_zmq):
-        """Should forward 'stop' command as MSG_JOB_STOP via send_fn."""
+        """Should forward 'stop' as CONTROL_COMMAND::{raw} via send_fn."""
         import jsonpickle
 
-        from sleap_rtc.protocol import MSG_JOB_STOP
+        from sleap_rtc.protocol import MSG_CONTROL_COMMAND, MSG_SEPARATOR
 
         mock_socket = _setup_zmq_mocks(mock_zmq)
         mock_context = mock_zmq.Context.return_value
@@ -799,7 +845,8 @@ class TestStopCancelCommands:
         bridge.start()
         sub_sock = sub_sockets[0]
         sub_sock.poll.side_effect = [1, 0, 0, 0, 0]  # Message available once
-        sub_sock.recv_string.return_value = jsonpickle.encode({"command": "stop"})
+        raw = jsonpickle.encode({"command": "stop"})
+        sub_sock.recv_string.return_value = raw
 
         # Give the poll thread time to process
         import time
@@ -807,7 +854,7 @@ class TestStopCancelCommands:
         time.sleep(0.3)
         bridge.stop()
 
-        send_fn.assert_called_with(MSG_JOB_STOP)
+        send_fn.assert_called_with(f"{MSG_CONTROL_COMMAND}{MSG_SEPARATOR}{raw}")
 
     def test_poll_commands_cancel(self, mock_zmq):
         """Should forward 'cancel' command as MSG_JOB_CANCEL via send_fn."""
@@ -892,32 +939,40 @@ class TestJobExecutorStopCancel:
     """Tests for JobExecutor stop/cancel methods."""
 
     def test_stop_running_job_sends_sigint(self):
-        """stop_running_job should send SIGINT to the process."""
+        """stop_running_job should send SIGINT to the process group."""
+        import signal
+        from unittest.mock import patch
         from sleap_rtc.worker.job_executor import JobExecutor
 
         executor = JobExecutor(worker=MagicMock(), capabilities=MagicMock())
         mock_process = MagicMock()
+        mock_process.pid = 12345
         mock_process.returncode = None  # Still running
         executor._running_process = mock_process
 
-        executor.stop_running_job()
+        with patch("os.killpg") as mock_killpg, \
+             patch("os.getpgid", return_value=99999):
+            executor.stop_running_job()
 
-        import signal
-
-        mock_process.send_signal.assert_called_once_with(signal.SIGINT)
+        mock_killpg.assert_called_once_with(99999, signal.SIGINT)
 
     def test_cancel_running_job_sends_sigterm(self):
-        """cancel_running_job should call terminate() on the process."""
+        """cancel_running_job should send SIGTERM to the process group."""
+        import signal
+        from unittest.mock import patch
         from sleap_rtc.worker.job_executor import JobExecutor
 
         executor = JobExecutor(worker=MagicMock(), capabilities=MagicMock())
         mock_process = MagicMock()
+        mock_process.pid = 12345
         mock_process.returncode = None
         executor._running_process = mock_process
 
-        executor.cancel_running_job()
+        with patch("os.killpg") as mock_killpg, \
+             patch("os.getpgid", return_value=99999):
+            executor.cancel_running_job()
 
-        mock_process.terminate.assert_called_once()
+        mock_killpg.assert_called_once_with(99999, signal.SIGTERM)
 
     def test_stop_no_running_process(self):
         """stop_running_job should not crash when no process is running."""
