@@ -2196,6 +2196,20 @@ class RTCWorkerClient:
                         logging.info("[PIPELINE] All models finished — running pipeline_reporter.async_cleanup()")
                         await pipeline_reporter.async_cleanup()
                         self.job_executor._progress_reporter = None
+
+                    # Post-training inference — mirrors SLEAP GUI's run_gui_inference().
+                    # Runs after ZMQ cleanup so ports are free; uses shared filesystem
+                    # so no file transfer is needed.
+                    await self._run_post_training_inference(
+                        channel=channel,
+                        spec=spec,
+                        worker_labels_path=worker_labels_path,
+                        trained_model_paths=trained_model_paths,
+                        pipeline_cancelled=pipeline_cancelled,
+                        pipeline_failed=pipeline_failed,
+                        builder=builder,
+                    )
+
                 elif isinstance(spec, TrackJobSpec):
                     cmd = builder.build_track_command(spec)
                     await self.job_executor.execute_from_spec(
@@ -2225,6 +2239,100 @@ class RTCWorkerClient:
             }]})
             if channel.readyState == "open":
                 channel.send(f"{MSG_JOB_REJECTED}{MSG_SEPARATOR}{client_job_id}{MSG_SEPARATOR}{error_response}")
+
+    async def _run_post_training_inference(
+        self,
+        channel,
+        spec: "TrainJobSpec",
+        worker_labels_path: Optional[str],
+        trained_model_paths: list,
+        pipeline_cancelled: bool,
+        pipeline_failed: bool,
+        builder: "CommandBuilder",
+    ):
+        """Run inference automatically after all pipeline models finish training.
+
+        Mirrors SLEAP GUI's ``run_gui_inference()`` behaviour: one inference
+        pass using all trained checkpoints on the same labels file, targeting
+        suggested frames (with fallback to all frames).  The predictions file
+        is written to the shared filesystem next to the labels file so the
+        client can load it without an RTC file transfer.
+
+        Args:
+            channel: RTC data channel for sending messages to the client.
+            spec: The original TrainJobSpec (for labels_path, model_types, etc.).
+            worker_labels_path: Already-resolved worker-side path to the labels
+                file used for training.
+            trained_model_paths: List of checkpoint directories, one per trained
+                model, in pipeline order.
+            pipeline_cancelled: True if training was cancelled by the user
+                (no checkpoint saved; inference should be skipped).
+            pipeline_failed: True if any model failed to train (incomplete
+                model set; inference should be skipped).
+            builder: CommandBuilder instance for constructing the track command.
+        """
+        # --- Skip conditions ---
+        if pipeline_cancelled:
+            logging.info("[INFERENCE] Skipping — training was cancelled")
+            if channel.readyState == "open":
+                channel.send('INFERENCE_SKIPPED::{"reason": "cancelled"}')
+            return
+
+        if pipeline_failed:
+            logging.info("[INFERENCE] Skipping — one or more models failed to train")
+            if channel.readyState == "open":
+                channel.send('INFERENCE_SKIPPED::{"reason": "training_failed"}')
+            return
+
+        if not worker_labels_path:
+            logging.info("[INFERENCE] Skipping — labels_path not available")
+            if channel.readyState == "open":
+                channel.send('INFERENCE_SKIPPED::{"reason": "no_labels_path"}')
+            return
+
+        if not trained_model_paths:
+            logging.info("[INFERENCE] Skipping — no checkpoint paths found")
+            if channel.readyState == "open":
+                channel.send('INFERENCE_SKIPPED::{"reason": "no_checkpoint"}')
+            return
+
+        # Derive predictions output path adjacent to the labels file.
+        # Strip known SLEAP suffixes so labels.pkg.slp → labels.predictions.slp.
+        labels_path = Path(worker_labels_path)
+        name = labels_path.name
+        for ext in (".pkg.slp", ".slp"):
+            if name.endswith(ext):
+                stem = name[: -len(ext)]
+                break
+        else:
+            stem = labels_path.stem
+        predictions_path = labels_path.parent / f"{stem}.predictions.slp"
+
+        logging.info(
+            f"[INFERENCE] Starting post-training inference: "
+            f"labels={worker_labels_path}, models={trained_model_paths}, "
+            f"output={predictions_path}"
+        )
+
+        # Build the track command.
+        track_spec = TrackJobSpec(
+            data_path=str(labels_path),
+            model_paths=trained_model_paths,
+            output_path=str(predictions_path),
+            only_suggested_frames=True,
+        )
+        track_cmd = builder.build_track_command(track_spec)
+
+        # Notify client that inference is starting.
+        if channel.readyState == "open":
+            channel.send("INFERENCE_BEGIN::{}")
+
+        # Run inference subprocess, forwarding progress to client.
+        await self.job_executor.run_inference(
+            channel=channel,
+            cmd=track_cmd,
+            predictions_path=str(predictions_path),
+        )
 
     async def _process_worker_input_path(self, channel):
         """Process a job from a worker input path (no file transfer).
