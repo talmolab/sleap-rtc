@@ -16,6 +16,7 @@ import zmq
 import socket
 import platform
 import time
+from datetime import datetime
 from typing import Optional
 
 from aiortc import RTCPeerConnection, RTCSessionDescription, RTCDataChannel, RTCConfiguration, RTCIceServer
@@ -2117,8 +2118,31 @@ class RTCWorkerClient:
                 # Build and execute commands using CommandBuilder
                 builder = CommandBuilder()
                 if isinstance(spec, TrainJobSpec):
-                    # Build commands for all configs (supports multi-model training)
-                    commands = builder.build_train_commands(spec)
+                    # Generate per-model run_names with a shared timestamp so
+                    # each training session produces a unique, human-readable
+                    # checkpoint directory (e.g. "centroid_20240115_123456").
+                    # A single timestamp is used for all models in the pipeline
+                    # so they sort together when browsing the models directory.
+                    _ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    _model_types = getattr(spec, "model_types", []) or []
+                    per_model_run_names = [
+                        spec.run_name or (
+                            f"{_model_types[i]}_{_ts}"
+                            if i < len(_model_types)
+                            else f"model_{i}_{_ts}"
+                        )
+                        for i in range(len(spec.config_paths))
+                    ]
+
+                    # Build one command per config, injecting the pre-generated
+                    # run_name so the checkpoint path is predictable.
+                    commands = [
+                        builder.build_train_command(
+                            spec, config_index=i,
+                            run_name_override=per_model_run_names[i],
+                        )
+                        for i in range(len(spec.config_paths))
+                    ]
                     total_configs = len(commands)
 
                     # Capture the already-resolved worker-side labels path so the
@@ -2174,16 +2198,11 @@ class RTCWorkerClient:
                                 pipeline_failed = True
                                 break
 
-                            # Derive checkpoint directory from the written config.
-                            # Use the same run_name precedence as build_train_command:
-                            # spec.run_name → model_types[i] → None (unknown).
-                            model_types = getattr(spec, "model_types", []) or []
-                            per_model_run_name = spec.run_name or (
-                                model_types[i] if i < len(model_types) else None
-                            )
+                            # Derive checkpoint directory using the run_name
+                            # that was injected into the training command.
                             ckpt_dir = _get_checkpoint_dir(
                                 spec.config_paths[i],
-                                run_name_override=per_model_run_name,
+                                run_name_override=per_model_run_names[i],
                             )
                             if ckpt_dir:
                                 trained_model_paths.append(ckpt_dir)

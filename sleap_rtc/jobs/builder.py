@@ -30,6 +30,7 @@ class CommandBuilder:
         spec: TrainJobSpec,
         zmq_ports: Optional[Dict[str, int]] = None,
         config_index: int = 0,
+        run_name_override: Optional[str] = None,
     ) -> List[str]:
         """Build sleap-nn train command from job spec.
 
@@ -77,10 +78,10 @@ class CommandBuilder:
         if spec.learning_rate is not None:
             cmd.append(f"trainer_config.optimizer.lr={spec.learning_rate}")
 
-        # Determine run_name: explicit spec.run_name takes priority, then
-        # per-model model_types entry (e.g. "centroid"), so the checkpoint
-        # directory is always predictable for post-training inference.
-        effective_run_name = spec.run_name or (
+        # Determine run_name: caller-supplied override takes top priority (used
+        # by the worker pipeline to inject a timestamped name), then
+        # spec.run_name, then the per-model model_types entry as a last resort.
+        effective_run_name = run_name_override or spec.run_name or (
             spec.model_types[config_index]
             if spec.model_types and config_index < len(spec.model_types)
             else None
