@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Callable
 
 from loguru import logger
 from qtpy.QtCore import QObject, Signal
+from qtpy.QtWidgets import QApplication
 
 if TYPE_CHECKING:
     from sleap_rtc.api import ProgressEvent, TrainingResult
@@ -67,6 +68,16 @@ class RemoteProgressBridge(QObject):
                 filter messages when training multiple models sequentially.
         """
         super().__init__()
+        # SLEAP typically creates this object inside a background thread
+        # (to keep the GUI responsive during training).  Without explicit
+        # thread affinity, Qt's AutoConnection treats signal emissions from
+        # that same thread as same-thread → DirectConnection → slot runs on
+        # the background thread → NSWindow crash on macOS.
+        # moveToThread pins affinity to the main Qt thread so AutoConnection
+        # always queues slots there, regardless of where this object is created.
+        app = QApplication.instance()
+        if app is not None:
+            self.moveToThread(app.thread())
         self._sig_inference_msg.connect(self._dispatch_inference_msg)
         self._publish_port = publish_port
         self._controller_port = controller_port
