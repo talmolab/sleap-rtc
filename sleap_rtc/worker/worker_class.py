@@ -2321,6 +2321,26 @@ class RTCWorkerClient:
                 channel.send('INFERENCE_SKIPPED::{"reason": "no_checkpoint"}')
             return
 
+        # Verify each checkpoint directory exists on disk before starting
+        # inference.  A missing directory means the path derivation was wrong
+        # (e.g. sleap-nn wrote to a different cwd, or training failed silently).
+        # Filter to only existing directories and skip entirely if none survive.
+        valid_model_paths = [p for p in trained_model_paths if Path(p).is_dir()]
+        missing = [p for p in trained_model_paths if not Path(p).is_dir()]
+        for p in missing:
+            logging.warning(f"[INFERENCE] Checkpoint directory not found: {p}")
+        if not valid_model_paths:
+            logging.info("[INFERENCE] Skipping — no checkpoint directories found on disk")
+            if channel.readyState == "open":
+                channel.send('INFERENCE_SKIPPED::{"reason": "checkpoint_dir_missing"}')
+            return
+        if missing:
+            logging.warning(
+                f"[INFERENCE] Proceeding with {len(valid_model_paths)}/{len(trained_model_paths)} "
+                "checkpoint directories (some missing — inference may be incomplete)"
+            )
+        trained_model_paths = valid_model_paths
+
         # Derive predictions output path adjacent to the labels file.
         # Strip known SLEAP suffixes so labels.pkg.slp → labels.predictions.slp.
         labels_path = Path(worker_labels_path)
