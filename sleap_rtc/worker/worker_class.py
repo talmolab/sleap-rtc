@@ -2113,6 +2113,11 @@ class RTCWorkerClient:
                             logging.info(
                                 f"[PIPELINE] Model {i+1}/{total_configs} execute_from_spec returned"
                             )
+                            # Flush buffered ZMQ messages from the finished model
+                            # before switching model type on the client. This prevents
+                            # stale messages from appearing in the next model's LossViewer.
+                            if i < total_configs - 1:
+                                await pipeline_reporter.restart_progress_listener(channel)
                     finally:
                         logging.info("[PIPELINE] All models finished — running pipeline_reporter.async_cleanup()")
                         await pipeline_reporter.async_cleanup()

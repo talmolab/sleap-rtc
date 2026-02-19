@@ -187,6 +187,39 @@ class ProgressReporter:
             self.context = None
             logging.info("ZMQ context terminated")
 
+    async def restart_progress_listener(self, channel: RTCDataChannel) -> None:
+        """Stop listener, discard buffered messages, and start fresh.
+
+        Call this between pipeline models to prevent stale ZMQ messages
+        from the previous model leaking into the next model's LossViewer.
+        The ZMQ sockets themselves stay open so ports remain bound.
+        """
+        # Stop the current listener task and wait for it (and its
+        # run_in_executor thread) to finish accessing the socket.
+        if self.listener_task and not self.listener_task.done():
+            self.running = False
+            self.listener_task.cancel()
+            await asyncio.wait({self.listener_task}, timeout=2.0)
+        # Brief yield so the executor thread has time to return from recv_msg.
+        await asyncio.sleep(0.1)
+
+        # Drain and discard all messages still buffered in the ZMQ socket.
+        if self.progress_socket is not None:
+            discarded = 0
+            while True:
+                try:
+                    self.progress_socket.recv_string(flags=zmq.NOBLOCK)
+                    discarded += 1
+                except zmq.Again:
+                    break
+            if discarded:
+                logging.info(
+                    f"[ZMQ] Flushed {discarded} buffered progress messages between models"
+                )
+
+        # Start a fresh listener for the next model.
+        self.start_progress_listener_task(channel)
+
     async def async_cleanup(self) -> None:
         """Clean up ZMQ sockets and context (async).
 
