@@ -2154,6 +2154,8 @@ class RTCWorkerClient:
                     trained_model_paths: list[str] = []
                     pipeline_cancelled = False
                     pipeline_failed = False
+                    # Per-model outcomes for the end-of-pipeline summary.
+                    model_outcomes: list[tuple[str, dict]] = []
 
                     # Create one ProgressReporter for the entire pipeline so ZMQ
                     # ports stay bound between models — no context.term() between
@@ -2186,9 +2188,7 @@ class RTCWorkerClient:
                                 zmq_ports=DEFAULT_ZMQ_PORTS,
                                 progress_reporter=pipeline_reporter,
                             )
-                            logging.info(
-                                f"[PIPELINE] Model {i+1}/{total_configs} execute_from_spec returned: {result}"
-                            )
+                            model_outcomes.append((per_model_run_names[i], result or {}))
 
                             # Track per-model result for inference decision.
                             if result and result.get("cancelled"):
@@ -2225,7 +2225,7 @@ class RTCWorkerClient:
                     # Post-training inference — mirrors SLEAP GUI's run_gui_inference().
                     # Runs after ZMQ cleanup so ports are free; uses shared filesystem
                     # so no file transfer is needed.
-                    await self._run_post_training_inference(
+                    inference_status = await self._run_post_training_inference(
                         channel=channel,
                         spec=spec,
                         worker_labels_path=worker_labels_path,
@@ -2234,6 +2234,27 @@ class RTCWorkerClient:
                         pipeline_failed=pipeline_failed,
                         builder=builder,
                     )
+
+                    # Print a summary banner after all ZMQ progress noise has
+                    # passed so the key outcomes are easy to find in the logs.
+                    sep = "─" * 56
+                    logging.info(f"[PIPELINE SUMMARY] {sep}")
+                    for idx, (run_name, res) in enumerate(model_outcomes):
+                        if res.get("cancelled"):
+                            status = "cancelled"
+                        elif res.get("stopped_early"):
+                            status = "stopped early (checkpoint saved)"
+                        elif res.get("success"):
+                            status = "success"
+                        else:
+                            exit_code = res.get("exit_code", "?")
+                            status = f"FAILED (exit {exit_code})"
+                        logging.info(
+                            f"[PIPELINE SUMMARY]   Model {idx+1}/{total_configs}"
+                            f" {run_name}: {status}"
+                        )
+                    logging.info(f"[PIPELINE SUMMARY]   Inference: {inference_status}")
+                    logging.info(f"[PIPELINE SUMMARY] {sep}")
 
                 elif isinstance(spec, TrackJobSpec):
                     cmd = builder.build_track_command(spec)
@@ -2301,25 +2322,25 @@ class RTCWorkerClient:
             logging.info("[INFERENCE] Skipping — training was cancelled")
             if channel.readyState == "open":
                 channel.send('INFERENCE_SKIPPED::{"reason": "cancelled"}')
-            return
+            return "skipped (training cancelled)"
 
         if pipeline_failed:
             logging.info("[INFERENCE] Skipping — one or more models failed to train")
             if channel.readyState == "open":
                 channel.send('INFERENCE_SKIPPED::{"reason": "training_failed"}')
-            return
+            return "skipped (training failed)"
 
         if not worker_labels_path:
             logging.info("[INFERENCE] Skipping — labels_path not available")
             if channel.readyState == "open":
                 channel.send('INFERENCE_SKIPPED::{"reason": "no_labels_path"}')
-            return
+            return "skipped (no labels path)"
 
         if not trained_model_paths:
             logging.info("[INFERENCE] Skipping — no checkpoint paths found")
             if channel.readyState == "open":
                 channel.send('INFERENCE_SKIPPED::{"reason": "no_checkpoint"}')
-            return
+            return "skipped (no checkpoint paths)"
 
         # Verify each checkpoint directory exists on disk before starting
         # inference.  A missing directory means the path derivation was wrong
@@ -2333,7 +2354,7 @@ class RTCWorkerClient:
             logging.info("[INFERENCE] Skipping — no checkpoint directories found on disk")
             if channel.readyState == "open":
                 channel.send('INFERENCE_SKIPPED::{"reason": "checkpoint_dir_missing"}')
-            return
+            return "skipped (checkpoint dirs missing on disk)"
         if missing:
             logging.warning(
                 f"[INFERENCE] Proceeding with {len(valid_model_paths)}/{len(trained_model_paths)} "
@@ -2378,6 +2399,7 @@ class RTCWorkerClient:
             cmd=track_cmd,
             predictions_path=str(predictions_path),
         )
+        return "ran"
 
     async def _process_worker_input_path(self, channel):
         """Process a job from a worker input path (no file transfer).
