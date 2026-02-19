@@ -25,6 +25,7 @@ from qtpy.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QTextEdit,
+    QPlainTextEdit,
     QApplication,
     QTableWidget,
     QTableWidgetItem,
@@ -37,6 +38,7 @@ from qtpy.QtWidgets import (
     QScrollArea,
     QSplitter,
     QSizePolicy,
+    QProgressBar,
 )
 
 if TYPE_CHECKING:
@@ -2494,3 +2496,180 @@ class RemoteTrainingWidget(QGroupBox):
     def refresh_rooms(self):
         """Refresh the room list."""
         self._load_rooms()
+
+
+class InferenceProgressDialog(QDialog):
+    """Dialog shown during post-training inference.
+
+    Displays a progress bar, status label, and scrolling log area while
+    ``sleap track`` runs on the worker.  Matches SLEAP's local post-training
+    inference window.
+    """
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setWindowTitle("Running Inference")
+        self.setMinimumWidth(600)
+        self.setMinimumHeight(500)
+        self._setup_ui()
+
+    # ------------------------------------------------------------------
+    # UI construction
+    # ------------------------------------------------------------------
+
+    def _setup_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setSpacing(10)
+
+        # Status label — centered, word-wrapped; bold on completion
+        self._status_label = QLabel("Running inference…")
+        self._status_label.setWordWrap(True)
+        self._status_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self._status_label)
+
+        # Progress bar — taller for visibility
+        self._progress_bar = QProgressBar()
+        self._progress_bar.setRange(0, 100)
+        self._progress_bar.setValue(0)
+        self._progress_bar.setMinimumHeight(25)
+        self._progress_bar.setTextVisible(True)
+        layout.addWidget(self._progress_bar)
+
+        # "Log output:" label
+        log_label = QLabel("Log output:")
+        layout.addWidget(log_label)
+
+        # Scrolling log area — dark monospace, matches SLEAP's local dialog
+        self._log_text = QPlainTextEdit()
+        self._log_text.setReadOnly(True)
+        self._log_text.setMinimumHeight(250)
+        self._log_text.setStyleSheet(
+            "QPlainTextEdit { background-color: #1e1e1e; color: #a0a0a0; }"
+        )
+        font = self._log_text.font()
+        font.setFamily("Consolas, Monaco, monospace")
+        font.setPointSize(8)
+        self._log_text.setFont(font)
+        layout.addWidget(self._log_text, 1)
+
+        # OK / Cancel buttons — Cancel is enabled during inference, OK after
+        self._button_box = QDialogButtonBox(
+            QDialogButtonBox.Ok | QDialogButtonBox.Cancel
+        )
+        self._button_box.button(QDialogButtonBox.Ok).setEnabled(False)
+        self._button_box.accepted.connect(self.accept)
+        self._button_box.rejected.connect(self.reject)
+        layout.addWidget(self._button_box)
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def update(self, data: dict):
+        """Update the dialog with a progress payload from INFERENCE_PROGRESS.
+
+        Expected keys: ``n_processed``, ``n_total``, ``rate``, ``eta``.
+        """
+        n_processed = data.get("n_processed", 0)
+        n_total = data.get("n_total", 0)
+        rate = data.get("rate", 0.0)
+        eta = data.get("eta", 0)
+
+        self.set_progress(n_processed, n_total, rate, eta)
+
+        # Append a log line
+        self._log_text.appendPlainText(
+            f"Frame {n_processed}/{n_total} — {rate:.1f} fps"
+        )
+
+    def set_progress(self, n_processed: int, n_total: int, rate: float, eta: int):
+        """Update the progress bar and status label without appending to the log.
+
+        Used when progress is parsed from raw ``INFERENCE_LOG`` lines rather
+        than structured ``INFERENCE_PROGRESS`` JSON.
+        """
+        if n_total:
+            pct = int(100 * n_processed / n_total)
+            self._progress_bar.setValue(pct)
+            eta_str = self._format_eta(eta)
+            self._status_label.setText(
+                f"Predicted: {n_processed}/{n_total}  "
+                f"FPS: {rate:.1f}  "
+                f"ETA: {eta_str}"
+            )
+        else:
+            self._status_label.setText(f"Predicted: {n_processed}  FPS: {rate:.1f}")
+
+    def append_log(self, text: str):
+        """Append a raw log line to the scrolling log area.
+
+        Handles ``\\r``-terminated rich progress bar output by taking the last
+        segment so only the final state of an overwriting progress line is shown.
+        """
+        # Rich uses \r to overwrite progress lines; take the last non-empty part
+        parts = text.split("\r")
+        clean = parts[-1].strip()
+        if clean:
+            self._log_text.appendPlainText(clean)
+            scrollbar = self._log_text.verticalScrollBar()
+            scrollbar.setValue(scrollbar.maximum())
+
+    def finish(
+        self,
+        n_frames: int | None,
+        n_with_instances: int | None,
+        n_empty: int | None,
+    ):
+        """Show the completion summary and enable OK."""
+        self._progress_bar.setValue(100)
+        if n_frames is not None:
+            no_instances = (
+                max(0, n_frames - n_with_instances)
+                if n_with_instances is not None
+                else None
+            )
+            if n_with_instances is not None:
+                self._status_label.setText(
+                    f"<b>Inference complete!</b><br><br>"
+                    f"Inference ran on {n_frames:,} frames.<br>"
+                    f"Instances were predicted on {n_with_instances:,} frames "
+                    f"({no_instances:,} frame{'s' if no_instances != 1 else ''} "
+                    f"with no instances found)."
+                )
+            else:
+                self._status_label.setText(
+                    f"<b>Inference complete!</b><br><br>"
+                    f"Inference ran on {n_frames:,} frames."
+                )
+        else:
+            self._status_label.setText("<b>Inference complete!</b>")
+        self._log_text.appendPlainText("")
+        self._log_text.appendPlainText("Predictions saved.")
+        self._button_box.button(QDialogButtonBox.Ok).setEnabled(True)
+        self._button_box.button(QDialogButtonBox.Cancel).setEnabled(False)
+
+    def show_error(self, msg: str):
+        """Display an error message and enable OK so the user can dismiss."""
+        self._status_label.setText("<b>Inference failed.</b>")
+        self._log_text.appendPlainText(f"\nError: {msg}")
+        self._button_box.button(QDialogButtonBox.Ok).setEnabled(True)
+        self._button_box.button(QDialogButtonBox.Cancel).setEnabled(False)
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _format_eta(seconds: float) -> str:
+        """Format seconds into a human-readable ETA string."""
+        try:
+            secs = int(seconds)
+        except (TypeError, ValueError):
+            return "?"
+        if secs < 60:
+            return f"{secs}s"
+        m, s = divmod(secs, 60)
+        if m < 60:
+            return f"{m}m {s:02d}s"
+        h, m = divmod(m, 60)
+        return f"{h}h {m:02d}m"

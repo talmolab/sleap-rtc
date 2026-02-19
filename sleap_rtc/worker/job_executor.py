@@ -625,13 +625,15 @@ class JobExecutor:
                 if not line:
                     continue
                 logging.info(f"[INFERENCE] {line}")
-                # Forward JSON progress lines; log non-JSON lines only.
+                # Forward JSON progress lines as INFERENCE_PROGRESS;
+                # forward all other lines as INFERENCE_LOG so the client
+                # can display them in the InferenceProgressDialog.
                 if line.startswith("{"):
                     if channel.readyState == "open":
                         channel.send(f"INFERENCE_PROGRESS::{line}")
                 else:
                     if channel.readyState == "open":
-                        channel.send(f"{line}\n")
+                        channel.send(f"INFERENCE_LOG::{line}")
 
             await process.wait()
             self._running_process = None

@@ -1112,3 +1112,52 @@ class TestHandleInferenceMessage:
             "INFERENCE_SKIPPED", {"reason": "training_failed"}
         )
         assert bridge._inference_dialog is None
+
+    def test_inference_log_appends_to_dialog(self, qapp):
+        """INFERENCE_LOG should append text to the dialog's log area."""
+        bridge = RemoteProgressBridge()
+        bridge._dispatch_inference_msg("INFERENCE_BEGIN", {})
+        bridge._dispatch_inference_msg(
+            "INFERENCE_LOG", {"text": "2026-01-01 | Started inference at: ..."}
+        )
+        log = bridge._inference_dialog._log_text.toPlainText()
+        assert "Started inference" in log
+        bridge._inference_dialog.close()
+
+    def test_inference_log_updates_progress_bar(self, qapp):
+        """INFERENCE_LOG with a rich progress line should advance the progress bar."""
+        bridge = RemoteProgressBridge()
+        bridge._dispatch_inference_msg("INFERENCE_BEGIN", {})
+        bridge._dispatch_inference_msg(
+            "INFERENCE_LOG",
+            {"text": "Predicting... 100% 35/35 ETA: 0:00:00 Elapsed: 0:00:01 47.8 FPS"},
+        )
+        assert bridge._inference_dialog._progress_bar.value() == 100
+        bridge._inference_dialog.close()
+
+    def test_inference_log_caches_n_frames(self, qapp):
+        """INFERENCE_LOG parsing should cache n_frames for INFERENCE_COMPLETE."""
+        bridge = RemoteProgressBridge()
+        bridge._dispatch_inference_msg("INFERENCE_BEGIN", {})
+        bridge._dispatch_inference_msg(
+            "INFERENCE_LOG",
+            {"text": "Predicting... 100% 35/35 ETA: 0:00:00 47.8 FPS"},
+        )
+        assert bridge._last_n_frames == 35
+        bridge._inference_dialog.close()
+
+    def test_inference_complete_uses_cached_n_frames(self, qapp):
+        """INFERENCE_COMPLETE should use cached n_frames when payload lacks it."""
+        bridge = RemoteProgressBridge()
+        bridge._dispatch_inference_msg("INFERENCE_BEGIN", {})
+        bridge._dispatch_inference_msg(
+            "INFERENCE_LOG",
+            {"text": "Predicting... 100% 35/35 ETA: 0:00:00 47.8 FPS"},
+        )
+        bridge._dispatch_inference_msg(
+            "INFERENCE_COMPLETE", {"predictions_path": "/tmp/out.slp"}
+        )
+        # Frame count appears in the status label (not the log)
+        label = bridge._inference_dialog._status_label.text()
+        assert "35" in label
+        bridge._inference_dialog.close()

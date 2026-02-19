@@ -1304,6 +1304,7 @@ def run_training(
     on_channel_ready: "Callable[[Callable[[str], None]], None] | None" = None,
     on_raw_progress: "Callable[[str], None] | None" = None,
     on_model_type: "Callable[[str], None] | None" = None,
+    on_inference_message: "Callable[[str, dict], None] | None" = None,
 ) -> TrainingResult:
     """Run training remotely on a worker.
 
@@ -1349,6 +1350,14 @@ def run_training(
         on_model_type: Optional callback invoked when the worker sends a
             ``MODEL_TYPE::`` message indicating a switch between models
             in multi-model pipeline training.
+        on_inference_message: Optional callback invoked with ``(msg_type,
+            data)`` for post-training inference messages sent by the worker
+            after training completes.  ``msg_type`` is one of
+            ``"INFERENCE_BEGIN"``, ``"INFERENCE_PROGRESS"``,
+            ``"INFERENCE_COMPLETE"``, ``"INFERENCE_FAILED"``,
+            ``"INFERENCE_SKIPPED"``.  When provided, the data channel stays
+            open after the last ``JOB_COMPLETE`` until a terminal inference
+            message is received.
 
     Returns:
         TrainingResult with job outcome and model paths.
@@ -1383,6 +1392,7 @@ def run_training(
             on_channel_ready=on_channel_ready,
             on_raw_progress=on_raw_progress,
             on_model_type=on_model_type,
+            on_inference_message=on_inference_message,
         )
     )
 
@@ -1408,6 +1418,7 @@ async def _run_training_async(
     on_channel_ready: "Callable[[Callable[[str], None]], None] | None" = None,
     on_raw_progress: "Callable[[str], None] | None" = None,
     on_model_type: "Callable[[str], None] | None" = None,
+    on_inference_message: "Callable[[str, dict], None] | None" = None,
 ) -> TrainingResult:
     """Async implementation of run_training."""
     import json
@@ -1708,7 +1719,12 @@ async def _run_training_async(
                                     model_type=model_type or None,
                                 )
                             )
-                        break
+                        if on_inference_message is not None:
+                            # Keep loop alive to receive post-training inference
+                            # messages from the worker.
+                            pass
+                        else:
+                            break
 
                 elif response.startswith(MSG_JOB_FAILED):
                     parts = response.split(MSG_SEPARATOR, 2)
@@ -1742,13 +1758,66 @@ async def _run_training_async(
                         final_val_loss=final_val_loss,
                         error_message=error_msg,
                     )
-                    break
+                    if on_inference_message is not None:
+                        # Keep loop alive — worker will send INFERENCE_SKIPPED
+                        # even after a training failure.
+                        pass
+                    else:
+                        break
 
                 elif response.startswith("MODEL_TYPE::"):
                     new_model_type = response.split("::", 1)[1]
                     model_type = new_model_type
                     if on_model_type:
                         on_model_type(new_model_type)
+
+                elif response.startswith("INFERENCE_BEGIN::"):
+                    if on_inference_message is not None:
+                        try:
+                            data = json.loads(response.split("::", 1)[1] or "{}")
+                        except json.JSONDecodeError:
+                            data = {}
+                        on_inference_message("INFERENCE_BEGIN", data)
+
+                elif response.startswith("INFERENCE_LOG::"):
+                    if on_inference_message is not None:
+                        text = response.split("::", 1)[1]
+                        on_inference_message("INFERENCE_LOG", {"text": text})
+
+                elif response.startswith("INFERENCE_PROGRESS::"):
+                    if on_inference_message is not None:
+                        try:
+                            data = json.loads(response.split("::", 1)[1])
+                        except json.JSONDecodeError:
+                            data = {}
+                        on_inference_message("INFERENCE_PROGRESS", data)
+
+                elif response.startswith("INFERENCE_COMPLETE::"):
+                    if on_inference_message is not None:
+                        try:
+                            data = json.loads(response.split("::", 1)[1])
+                        except json.JSONDecodeError:
+                            data = {}
+                        on_inference_message("INFERENCE_COMPLETE", data)
+                    break  # Terminal inference message — close channel
+
+                elif response.startswith("INFERENCE_FAILED::"):
+                    if on_inference_message is not None:
+                        try:
+                            data = json.loads(response.split("::", 1)[1])
+                        except json.JSONDecodeError:
+                            data = {}
+                        on_inference_message("INFERENCE_FAILED", data)
+                    break  # Terminal inference message — close channel
+
+                elif response.startswith("INFERENCE_SKIPPED::"):
+                    if on_inference_message is not None:
+                        try:
+                            data = json.loads(response.split("::", 1)[1])
+                        except json.JSONDecodeError:
+                            data = {}
+                        on_inference_message("INFERENCE_SKIPPED", data)
+                    break  # Terminal inference message — close channel
 
                 else:
                     # Unrecognized message — raw training log line from worker

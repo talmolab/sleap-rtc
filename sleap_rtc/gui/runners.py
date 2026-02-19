@@ -9,6 +9,7 @@ The flow is:
 
 from __future__ import annotations
 
+import re
 import threading
 from typing import TYPE_CHECKING, Callable
 
@@ -93,6 +94,7 @@ class RemoteProgressBridge(QObject):
         self._last_epoch: int | None = None
         self._inference_dialog = None  # InferenceProgressDialog, created on demand
         self._on_predictions_ready: Callable[[str], None] | None = None
+        self._last_n_frames: int | None = None  # parsed from INFERENCE_LOG progress lines
 
     def set_model_type(self, model_type: str):
         """Update the model type for subsequent messages.
@@ -437,8 +439,29 @@ class RemoteProgressBridge(QObject):
 
         if msg_type == "INFERENCE_BEGIN":
             logger.info("Inference started — opening InferenceProgressDialog")
+            self._last_n_frames = None
             self._inference_dialog = InferenceProgressDialog()
             self._inference_dialog.show()
+
+        elif msg_type == "INFERENCE_LOG":
+            text = data.get("text", "")
+            if self._inference_dialog is not None:
+                self._inference_dialog.append_log(text)
+                # Parse progress from rich progress bar lines, e.g.:
+                #   "Predicting... 100% 35/35 ETA: 0:00:00 Elapsed: 0:00:01 47.8 FPS"
+                m = re.search(r"(\d+)/(\d+)", text)
+                fps_m = re.search(r"([\d.]+)\s*FPS", text, re.IGNORECASE)
+                if m:
+                    n_processed = int(m.group(1))
+                    n_total = int(m.group(2))
+                    rate = float(fps_m.group(1)) if fps_m else 0.0
+                    eta_m = re.search(r"ETA:\s*(\d+):(\d+):(\d+)", text)
+                    eta = 0
+                    if eta_m:
+                        h, mn, s = int(eta_m.group(1)), int(eta_m.group(2)), int(eta_m.group(3))
+                        eta = h * 3600 + mn * 60 + s
+                    self._inference_dialog.set_progress(n_processed, n_total, rate, eta)
+                    self._last_n_frames = n_total
 
         elif msg_type == "INFERENCE_PROGRESS":
             if self._inference_dialog is not None:
@@ -446,9 +469,12 @@ class RemoteProgressBridge(QObject):
 
         elif msg_type == "INFERENCE_COMPLETE":
             predictions_path = data.get("predictions_path", "")
-            n_frames = data.get("n_frames", 0)
-            n_with_instances = data.get("n_with_instances", 0)
-            n_empty = data.get("n_empty", 0)
+            # Use frame count from payload if present, else fall back to value
+            # parsed from the rich progress line (sleap-nn track doesn't report
+            # per-frame instance stats, so n_with_instances/n_empty stay None).
+            n_frames = data.get("n_frames") or self._last_n_frames
+            n_with_instances = data.get("n_with_instances")
+            n_empty = data.get("n_empty")
             logger.info(
                 f"Inference complete — predictions at {predictions_path}"
             )
