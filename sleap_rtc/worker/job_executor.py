@@ -586,6 +586,96 @@ class JobExecutor:
                 await self.worker.update_status("available")
                 self.worker.current_job = None
 
+    async def run_inference(
+        self,
+        channel,
+        cmd: list,
+        predictions_path: str,
+    ):
+        """Run a post-training inference subprocess and forward progress to client.
+
+        Spawns ``sleap track`` (or equivalent command), forwards JSON progress
+        lines from stdout as ``INFERENCE_PROGRESS::`` messages, and sends
+        ``INFERENCE_COMPLETE::`` or ``INFERENCE_FAILED::`` when the subprocess
+        exits.
+
+        Args:
+            channel: RTC data channel for sending messages to the client.
+            cmd: Full command list to execute (e.g. ``["sleap-nn", "track", ...]``).
+            predictions_path: Expected output path for the predictions ``.slp``
+                file.  Used to confirm the file exists before sending
+                ``INFERENCE_COMPLETE``.
+        """
+        logging.info(f"[INFERENCE] Running: {' '.join(cmd)}")
+
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                env={**os.environ, "PYTHONUNBUFFERED": "1"},
+                start_new_session=True,
+            )
+            self._running_process = process
+            logging.info(f"[INFERENCE] Process started with PID: {process.pid}")
+
+            assert process.stdout is not None
+            async for raw_line in process.stdout:
+                line = raw_line.decode(errors="replace").rstrip()
+                if not line:
+                    continue
+                logging.info(f"[INFERENCE] {line}")
+                # Forward JSON progress lines as INFERENCE_PROGRESS;
+                # forward all other lines as INFERENCE_LOG so the client
+                # can display them in the InferenceProgressDialog.
+                if line.startswith("{"):
+                    if channel.readyState == "open":
+                        channel.send(f"INFERENCE_PROGRESS::{line}")
+                else:
+                    if channel.readyState == "open":
+                        channel.send(f"INFERENCE_LOG::{line}")
+
+            await process.wait()
+            self._running_process = None
+            logging.info(f"[INFERENCE] Process exited with code {process.returncode}")
+
+            cancelled = process.returncode == -signal.SIGTERM
+
+            if cancelled:
+                logging.info("[INFERENCE] Inference was cancelled by user")
+                if channel.readyState == "open":
+                    channel.send('INFERENCE_FAILED::{"error": "cancelled"}')
+                return
+
+            predictions_exist = Path(predictions_path).exists()
+            if process.returncode == 0 and predictions_exist:
+                logging.info(f"[INFERENCE] Complete — predictions at {predictions_path}")
+                if channel.readyState == "open":
+                    channel.send(
+                        f'INFERENCE_COMPLETE::{{"predictions_path": "{predictions_path}"}}'
+                    )
+            elif not predictions_exist:
+                logging.error(
+                    f"[INFERENCE] Subprocess exited 0 but predictions file not found: "
+                    f"{predictions_path}"
+                )
+                if channel.readyState == "open":
+                    channel.send('INFERENCE_FAILED::{"error": "no output file"}')
+            else:
+                logging.error(
+                    f"[INFERENCE] Subprocess exited with code {process.returncode}"
+                )
+                if channel.readyState == "open":
+                    channel.send(
+                        f'INFERENCE_FAILED::{{"error": "exit code {process.returncode}"}}'
+                    )
+
+        except Exception as e:
+            logging.exception(f"[INFERENCE] Unexpected error: {e}")
+            self._running_process = None
+            if channel.readyState == "open":
+                channel.send(f'INFERENCE_FAILED::{{"error": "{e}"}}')
+
     async def _send_peer_message(self, to_peer_id: str, payload: dict):
         """Send peer message via worker's websocket.
 
@@ -793,6 +883,26 @@ class JobExecutor:
             await process.wait()
             self._running_process = None
 
+            # Wait for the entire process group to exit before returning.
+            # With start_new_session=True, PGID == process.pid.  DDP rank 1
+            # is a child in this group and may outlive rank 0 by several
+            # seconds while NCCL / TCPStore cleanup runs.  If we start the
+            # next pipeline model before rank 1 vacates MASTER_PORT, the new
+            # DDP init will collide with the lingering connection → Broken pipe.
+            pgid = process.pid
+            deadline = asyncio.get_event_loop().time() + 30.0
+            while asyncio.get_event_loop().time() < deadline:
+                try:
+                    os.killpg(pgid, 0)  # signal 0: probe group existence
+                    await asyncio.sleep(0.5)
+                except (ProcessLookupError, PermissionError):
+                    break  # all ranks have exited
+            else:
+                logging.warning(
+                    f"[JOB {job_id}] Process group {pgid} still alive after "
+                    "30 s — proceeding anyway"
+                )
+
             duration_seconds = int(time.time() - start_time)
             logging.info(
                 f"[JOB {job_id}] Process PID {process.pid} exited "
@@ -825,6 +935,11 @@ class JobExecutor:
                     logging.info(f"[JOB {job_id}] Job stopped early (checkpoint saved)")
                 else:
                     logging.info(f"[JOB {job_id}] Job completed successfully")
+                return {
+                    "success": True,
+                    "stopped_early": stopped_early,
+                    "cancelled": False,
+                }
             else:
                 # Job failed or was cancelled
                 import json
@@ -845,6 +960,11 @@ class JobExecutor:
                     logging.info(f"[JOB {job_id}] Job cancelled by user")
                 else:
                     logging.error(f"[JOB {job_id}] Job failed with exit code {process.returncode}")
+                return {
+                    "success": False,
+                    "stopped_early": False,
+                    "cancelled": cancelled,
+                }
 
         except Exception as e:
             # Unexpected error
@@ -857,6 +977,11 @@ class JobExecutor:
             }
             if channel.readyState == "open":
                 channel.send(f"{MSG_JOB_FAILED}{MSG_SEPARATOR}{json.dumps(error_data)}")
+            return {
+                "success": False,
+                "stopped_early": False,
+                "cancelled": False,
+            }
 
         finally:
             self._stop_requested = False  # reset so next job starts clean

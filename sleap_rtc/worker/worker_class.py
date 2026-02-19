@@ -16,6 +16,7 @@ import zmq
 import socket
 import platform
 import time
+from datetime import datetime
 from typing import Optional
 
 from aiortc import RTCPeerConnection, RTCSessionDescription, RTCDataChannel, RTCConfiguration, RTCIceServer
@@ -103,6 +104,48 @@ logging.basicConfig(level=logging.INFO)
 
 # Set chunk separator
 SEP = re.compile(rb"[\r\n]")
+
+
+def _get_checkpoint_dir(config_path: str, run_name_override: Optional[str] = None) -> Optional[str]:
+    """Parse a sleap-nn training config YAML and return the checkpoint directory.
+
+    The checkpoint directory is ``{ckpt_dir}/{run_name}/``.  When ``ckpt_dir``
+    is a relative path it is resolved against the current working directory.
+
+    Args:
+        config_path: Path to the written YAML config file.
+        run_name_override: If provided (e.g. from ``TrainJobSpec.run_name``),
+            overrides the ``trainer_config.run_name`` in the file.
+
+    Returns:
+        Absolute path to the checkpoint directory, or ``None`` if it cannot be
+        determined (e.g. ``run_name`` is absent and not overridden).
+    """
+    import yaml
+
+    try:
+        with open(config_path) as f:
+            config = yaml.safe_load(f)
+    except Exception as e:
+        logging.warning(f"[CKPT] Could not parse config {config_path}: {e}")
+        return None
+
+    trainer_cfg = config.get("trainer_config", {}) if config else {}
+    ckpt_dir = trainer_cfg.get("ckpt_dir") or "."
+    run_name = run_name_override or trainer_cfg.get("run_name")
+
+    if not run_name:
+        logging.warning(
+            f"[CKPT] Could not determine run_name from {config_path} "
+            "— checkpoint path unknown; inference may fail"
+        )
+        return None
+
+    ckpt_path = Path(ckpt_dir) / run_name
+    if not ckpt_path.is_absolute():
+        ckpt_path = Path(os.getcwd()) / ckpt_path
+
+    return str(ckpt_path)
 
 
 class RTCWorkerClient:
@@ -2075,9 +2118,44 @@ class RTCWorkerClient:
                 # Build and execute commands using CommandBuilder
                 builder = CommandBuilder()
                 if isinstance(spec, TrainJobSpec):
-                    # Build commands for all configs (supports multi-model training)
-                    commands = builder.build_train_commands(spec)
+                    # Generate per-model run_names with a shared timestamp so
+                    # each training session produces a unique, human-readable
+                    # checkpoint directory (e.g. "centroid_20240115_123456").
+                    # A single timestamp is used for all models in the pipeline
+                    # so they sort together when browsing the models directory.
+                    _ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    _model_types = getattr(spec, "model_types", []) or []
+                    per_model_run_names = [
+                        spec.run_name or (
+                            f"{_model_types[i]}_{_ts}"
+                            if i < len(_model_types)
+                            else f"model_{i}_{_ts}"
+                        )
+                        for i in range(len(spec.config_paths))
+                    ]
+
+                    # Build one command per config, injecting the pre-generated
+                    # run_name so the checkpoint path is predictable.
+                    commands = [
+                        builder.build_train_command(
+                            spec, config_index=i,
+                            run_name_override=per_model_run_names[i],
+                        )
+                        for i in range(len(spec.config_paths))
+                    ]
                     total_configs = len(commands)
+
+                    # Capture the already-resolved worker-side labels path so the
+                    # post-training inference step can reuse it without re-applying
+                    # path_mappings.
+                    worker_labels_path: Optional[str] = spec.labels_path
+
+                    # Accumulate trained checkpoint directories for inference.
+                    trained_model_paths: list[str] = []
+                    pipeline_cancelled = False
+                    pipeline_failed = False
+                    # Per-model outcomes for the end-of-pipeline summary.
+                    model_outcomes: list[tuple[str, dict]] = []
 
                     # Create one ProgressReporter for the entire pipeline so ZMQ
                     # ports stay bound between models — no context.term() between
@@ -2105,14 +2183,35 @@ class RTCWorkerClient:
                                 f"[PIPELINE] Starting model {i+1}/{total_configs} "
                                 f"(job_id={model_job_id}, config={config_name!r})"
                             )
-                            await self.job_executor.execute_from_spec(
+                            result = await self.job_executor.execute_from_spec(
                                 channel, cmd, model_job_id, job_type="train",
                                 zmq_ports=DEFAULT_ZMQ_PORTS,
                                 progress_reporter=pipeline_reporter,
                             )
-                            logging.info(
-                                f"[PIPELINE] Model {i+1}/{total_configs} execute_from_spec returned"
+                            model_outcomes.append((per_model_run_names[i], result or {}))
+
+                            # Track per-model result for inference decision.
+                            if result and result.get("cancelled"):
+                                pipeline_cancelled = True
+                                break
+                            if result and not result.get("success"):
+                                pipeline_failed = True
+                                break
+
+                            # Derive checkpoint directory using the run_name
+                            # that was injected into the training command.
+                            ckpt_dir = _get_checkpoint_dir(
+                                spec.config_paths[i],
+                                run_name_override=per_model_run_names[i],
                             )
+                            if ckpt_dir:
+                                trained_model_paths.append(ckpt_dir)
+                                logging.info(f"[PIPELINE] Checkpoint dir: {ckpt_dir}")
+                            else:
+                                logging.warning(
+                                    f"[PIPELINE] Could not determine checkpoint dir for model {i+1}"
+                                )
+
                             # Flush buffered ZMQ messages from the finished model
                             # before switching model type on the client. This prevents
                             # stale messages from appearing in the next model's LossViewer.
@@ -2122,6 +2221,41 @@ class RTCWorkerClient:
                         logging.info("[PIPELINE] All models finished — running pipeline_reporter.async_cleanup()")
                         await pipeline_reporter.async_cleanup()
                         self.job_executor._progress_reporter = None
+
+                    # Post-training inference — mirrors SLEAP GUI's run_gui_inference().
+                    # Runs after ZMQ cleanup so ports are free; uses shared filesystem
+                    # so no file transfer is needed.
+                    inference_status = await self._run_post_training_inference(
+                        channel=channel,
+                        spec=spec,
+                        worker_labels_path=worker_labels_path,
+                        trained_model_paths=trained_model_paths,
+                        pipeline_cancelled=pipeline_cancelled,
+                        pipeline_failed=pipeline_failed,
+                        builder=builder,
+                    )
+
+                    # Print a summary banner after all ZMQ progress noise has
+                    # passed so the key outcomes are easy to find in the logs.
+                    sep = "─" * 56
+                    logging.info(f"[PIPELINE SUMMARY] {sep}")
+                    for idx, (run_name, res) in enumerate(model_outcomes):
+                        if res.get("cancelled"):
+                            status = "cancelled"
+                        elif res.get("stopped_early"):
+                            status = "stopped early (checkpoint saved)"
+                        elif res.get("success"):
+                            status = "success"
+                        else:
+                            exit_code = res.get("exit_code", "?")
+                            status = f"FAILED (exit {exit_code})"
+                        logging.info(
+                            f"[PIPELINE SUMMARY]   Model {idx+1}/{total_configs}"
+                            f" {run_name}: {status}"
+                        )
+                    logging.info(f"[PIPELINE SUMMARY]   Inference: {inference_status}")
+                    logging.info(f"[PIPELINE SUMMARY] {sep}")
+
                 elif isinstance(spec, TrackJobSpec):
                     cmd = builder.build_track_command(spec)
                     await self.job_executor.execute_from_spec(
@@ -2151,6 +2285,121 @@ class RTCWorkerClient:
             }]})
             if channel.readyState == "open":
                 channel.send(f"{MSG_JOB_REJECTED}{MSG_SEPARATOR}{client_job_id}{MSG_SEPARATOR}{error_response}")
+
+    async def _run_post_training_inference(
+        self,
+        channel,
+        spec: "TrainJobSpec",
+        worker_labels_path: Optional[str],
+        trained_model_paths: list,
+        pipeline_cancelled: bool,
+        pipeline_failed: bool,
+        builder: "CommandBuilder",
+    ):
+        """Run inference automatically after all pipeline models finish training.
+
+        Mirrors SLEAP GUI's ``run_gui_inference()`` behaviour: one inference
+        pass using all trained checkpoints on the same labels file, targeting
+        suggested frames (with fallback to all frames).  The predictions file
+        is written to the shared filesystem next to the labels file so the
+        client can load it without an RTC file transfer.
+
+        Args:
+            channel: RTC data channel for sending messages to the client.
+            spec: The original TrainJobSpec (for labels_path, model_types, etc.).
+            worker_labels_path: Already-resolved worker-side path to the labels
+                file used for training.
+            trained_model_paths: List of checkpoint directories, one per trained
+                model, in pipeline order.
+            pipeline_cancelled: True if training was cancelled by the user
+                (no checkpoint saved; inference should be skipped).
+            pipeline_failed: True if any model failed to train (incomplete
+                model set; inference should be skipped).
+            builder: CommandBuilder instance for constructing the track command.
+        """
+        # --- Skip conditions ---
+        if pipeline_cancelled:
+            logging.info("[INFERENCE] Skipping — training was cancelled")
+            if channel.readyState == "open":
+                channel.send('INFERENCE_SKIPPED::{"reason": "cancelled"}')
+            return "skipped (training cancelled)"
+
+        if pipeline_failed:
+            logging.info("[INFERENCE] Skipping — one or more models failed to train")
+            if channel.readyState == "open":
+                channel.send('INFERENCE_SKIPPED::{"reason": "training_failed"}')
+            return "skipped (training failed)"
+
+        if not worker_labels_path:
+            logging.info("[INFERENCE] Skipping — labels_path not available")
+            if channel.readyState == "open":
+                channel.send('INFERENCE_SKIPPED::{"reason": "no_labels_path"}')
+            return "skipped (no labels path)"
+
+        if not trained_model_paths:
+            logging.info("[INFERENCE] Skipping — no checkpoint paths found")
+            if channel.readyState == "open":
+                channel.send('INFERENCE_SKIPPED::{"reason": "no_checkpoint"}')
+            return "skipped (no checkpoint paths)"
+
+        # Verify each checkpoint directory exists on disk before starting
+        # inference.  A missing directory means the path derivation was wrong
+        # (e.g. sleap-nn wrote to a different cwd, or training failed silently).
+        # Filter to only existing directories and skip entirely if none survive.
+        valid_model_paths = [p for p in trained_model_paths if Path(p).is_dir()]
+        missing = [p for p in trained_model_paths if not Path(p).is_dir()]
+        for p in missing:
+            logging.warning(f"[INFERENCE] Checkpoint directory not found: {p}")
+        if not valid_model_paths:
+            logging.info("[INFERENCE] Skipping — no checkpoint directories found on disk")
+            if channel.readyState == "open":
+                channel.send('INFERENCE_SKIPPED::{"reason": "checkpoint_dir_missing"}')
+            return "skipped (checkpoint dirs missing on disk)"
+        if missing:
+            logging.warning(
+                f"[INFERENCE] Proceeding with {len(valid_model_paths)}/{len(trained_model_paths)} "
+                "checkpoint directories (some missing — inference may be incomplete)"
+            )
+        trained_model_paths = valid_model_paths
+
+        # Derive predictions output path adjacent to the labels file.
+        # Strip known SLEAP suffixes so labels.pkg.slp → labels.predictions.slp.
+        labels_path = Path(worker_labels_path)
+        name = labels_path.name
+        for ext in (".pkg.slp", ".slp"):
+            if name.endswith(ext):
+                stem = name[: -len(ext)]
+                break
+        else:
+            stem = labels_path.stem
+        predictions_path = labels_path.parent / f"{stem}.predictions.slp"
+
+        logging.info(
+            f"[INFERENCE] Starting post-training inference: "
+            f"labels={worker_labels_path}, models={trained_model_paths}, "
+            f"output={predictions_path}"
+        )
+
+        # Build the track command.
+        track_spec = TrackJobSpec(
+            data_path=str(labels_path),
+            model_paths=trained_model_paths,
+            output_path=str(predictions_path),
+            only_suggested_frames=True,
+        )
+        track_cmd = builder.build_track_command(track_spec)
+
+        # Notify client that inference is starting.
+        if channel.readyState == "open":
+            channel.send("INFERENCE_BEGIN::{}")
+
+        # Run inference subprocess, forwarding progress to client.
+        await self.job_executor.run_inference(
+            channel=channel,
+            cmd=track_cmd,
+            predictions_path=str(predictions_path),
+        )
+        return "ran"
 
     async def _process_worker_input_path(self, channel):
         """Process a job from a worker input path (no file transfer).

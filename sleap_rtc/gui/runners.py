@@ -9,17 +9,20 @@ The flow is:
 
 from __future__ import annotations
 
+import re
 import threading
 from typing import TYPE_CHECKING, Callable
 
 from loguru import logger
+from qtpy.QtCore import QObject, Signal
+from qtpy.QtWidgets import QApplication
 
 if TYPE_CHECKING:
     from sleap_rtc.api import ProgressEvent, TrainingResult
     from sleap_rtc.jobs.spec import TrainJobSpec
 
 
-class RemoteProgressBridge:
+class RemoteProgressBridge(QObject):
     """Bridge WebRTC progress messages to ZMQ for LossViewer compatibility.
 
     This class receives ProgressEvent objects from the sleap-rtc training API
@@ -42,6 +45,12 @@ class RemoteProgressBridge:
       RTC data channel via ``send_fn``.
     """
 
+    # Signal used to marshal inference messages from the WebRTC background
+    # thread to the main Qt thread.  Qt guarantees the connected slot runs
+    # on the thread the QObject was created on (the main thread) even when
+    # the signal is emitted from a different thread.
+    _sig_inference_msg: Signal = Signal(str, object)
+
     def __init__(
         self,
         publish_port: int = 9001,
@@ -59,6 +68,18 @@ class RemoteProgressBridge:
                 "centroid", "centered_instance"). LossViewer uses this to
                 filter messages when training multiple models sequentially.
         """
+        super().__init__()
+        # SLEAP typically creates this object inside a background thread
+        # (to keep the GUI responsive during training).  Without explicit
+        # thread affinity, Qt's AutoConnection treats signal emissions from
+        # that same thread as same-thread → DirectConnection → slot runs on
+        # the background thread → NSWindow crash on macOS.
+        # moveToThread pins affinity to the main Qt thread so AutoConnection
+        # always queues slots there, regardless of where this object is created.
+        app = QApplication.instance()
+        if app is not None:
+            self.moveToThread(app.thread())
+        self._sig_inference_msg.connect(self._dispatch_inference_msg)
         self._publish_port = publish_port
         self._controller_port = controller_port
         self._model_type = model_type
@@ -71,6 +92,9 @@ class RemoteProgressBridge:
         self._poll_thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._last_epoch: int | None = None
+        self._inference_dialog = None  # InferenceProgressDialog, created on demand
+        self._on_predictions_ready: Callable[[str], None] | None = None
+        self._last_n_frames: int | None = None  # parsed from INFERENCE_LOG progress lines
 
     def set_model_type(self, model_type: str):
         """Update the model type for subsequent messages.
@@ -369,6 +393,115 @@ class RemoteProgressBridge:
         except Exception as e:
             logger.error(f"Failed to publish progress: {e}")
 
+    # ------------------------------------------------------------------
+    # Post-training inference message handling
+    # ------------------------------------------------------------------
+
+    def set_predictions_ready_callback(
+        self, callback: "Callable[[str], None] | None"
+    ):
+        """Register a callback to be invoked when inference completes.
+
+        The callback receives the ``predictions_path`` string from the worker's
+        ``INFERENCE_COMPLETE`` message so the caller can load and merge the
+        predictions into the open labels project.
+
+        Args:
+            callback: Callable taking a single ``predictions_path`` str argument,
+                or ``None`` to clear the callback.
+        """
+        self._on_predictions_ready = callback
+
+    def handle_inference_message(self, msg_type: str, data: dict):
+        """Thread-safe entry point for post-training inference messages.
+
+        This method is intended to be passed as the ``on_inference_message``
+        callback to :func:`run_remote_training`.  It is called from the
+        WebRTC background thread and marshals the message to the main Qt
+        thread via a queued signal, where :meth:`_dispatch_inference_msg`
+        creates and updates the :class:`InferenceProgressDialog`.
+
+        Args:
+            msg_type: One of ``"INFERENCE_BEGIN"``, ``"INFERENCE_PROGRESS"``,
+                ``"INFERENCE_COMPLETE"``, ``"INFERENCE_FAILED"``,
+                ``"INFERENCE_SKIPPED"``.
+            data: Parsed JSON payload dict from the worker message.
+        """
+        self._sig_inference_msg.emit(msg_type, data)
+
+    def _dispatch_inference_msg(self, msg_type: str, data: dict):
+        """Handle an inference message on the main Qt thread.
+
+        Called via the ``_sig_inference_msg`` signal so it always runs on
+        the main thread regardless of which thread emitted the signal.
+        """
+        from sleap_rtc.gui.widgets import InferenceProgressDialog
+
+        if msg_type == "INFERENCE_BEGIN":
+            logger.info("Inference started — opening InferenceProgressDialog")
+            self._last_n_frames = None
+            self._inference_dialog = InferenceProgressDialog()
+            self._inference_dialog.show()
+
+        elif msg_type == "INFERENCE_LOG":
+            text = data.get("text", "")
+            if self._inference_dialog is not None:
+                self._inference_dialog.append_log(text)
+                # Parse progress from rich progress bar lines, e.g.:
+                #   "Predicting... 100% 35/35 ETA: 0:00:00 Elapsed: 0:00:01 47.8 FPS"
+                m = re.search(r"(\d+)/(\d+)", text)
+                fps_m = re.search(r"([\d.]+)\s*FPS", text, re.IGNORECASE)
+                if m:
+                    n_processed = int(m.group(1))
+                    n_total = int(m.group(2))
+                    rate = float(fps_m.group(1)) if fps_m else 0.0
+                    eta_m = re.search(r"ETA:\s*(\d+):(\d+):(\d+)", text)
+                    eta = 0
+                    if eta_m:
+                        h, mn, s = int(eta_m.group(1)), int(eta_m.group(2)), int(eta_m.group(3))
+                        eta = h * 3600 + mn * 60 + s
+                    self._inference_dialog.set_progress(n_processed, n_total, rate, eta)
+                    self._last_n_frames = n_total
+
+        elif msg_type == "INFERENCE_PROGRESS":
+            if self._inference_dialog is not None:
+                self._inference_dialog.update(data)
+
+        elif msg_type == "INFERENCE_COMPLETE":
+            predictions_path = data.get("predictions_path", "")
+            # Use frame count from payload if present, else fall back to value
+            # parsed from the rich progress line (sleap-nn track doesn't report
+            # per-frame instance stats, so n_with_instances/n_empty stay None).
+            n_frames = data.get("n_frames") or self._last_n_frames
+            n_with_instances = data.get("n_with_instances")
+            n_empty = data.get("n_empty")
+            logger.info(
+                f"Inference complete — predictions at {predictions_path}"
+            )
+            if self._inference_dialog is not None:
+                self._inference_dialog.finish(n_frames, n_with_instances, n_empty)
+            if self._on_predictions_ready and predictions_path:
+                try:
+                    self._on_predictions_ready(predictions_path)
+                except Exception as e:
+                    logger.error(f"on_predictions_ready callback failed: {e}")
+
+        elif msg_type == "INFERENCE_FAILED":
+            error = data.get("error", "Unknown inference error")
+            logger.error(f"Inference failed: {error}")
+            if self._inference_dialog is not None:
+                self._inference_dialog.show_error(error)
+            else:
+                # No dialog open yet (e.g., BEGIN was missed) — show one now
+                self._inference_dialog = InferenceProgressDialog()
+                self._inference_dialog.show()
+                self._inference_dialog.show_error(error)
+
+        elif msg_type == "INFERENCE_SKIPPED":
+            reason = data.get("reason", "unknown")
+            logger.info(f"Inference skipped: {reason}")
+            # No dialog shown for skipped inference.
+
 
 def run_remote_training(
     config_path: str | None = None,
@@ -384,6 +517,7 @@ def run_remote_training(
     model_type: str = "",
     on_log: Callable[[str], None] | None = None,
     on_model_type: "Callable[[str], None] | None" = None,
+    on_inference_message: "Callable[[str, dict], None] | None" = None,
 ) -> "TrainingResult":
     """Run remote training with progress forwarding to ZMQ.
 
@@ -417,6 +551,11 @@ def run_remote_training(
         on_model_type: Optional callback invoked when the worker switches
             model type during multi-model training. When not provided,
             defaults to calling ``bridge.set_model_type()``.
+        on_inference_message: Optional callback invoked with ``(msg_type,
+            data)`` for post-training inference messages.  When provided the
+            data channel stays open after training completes until a terminal
+            inference message is received.  Defaults to
+            ``bridge.handle_inference_message``.
 
     Returns:
         TrainingResult with model paths and final status.
@@ -476,6 +615,13 @@ def run_remote_training(
 
     model_type_fn = _combined_model_type_fn
 
+    # Default inference handler: bridge manages InferenceProgressDialog.
+    inference_fn = (
+        on_inference_message
+        if on_inference_message is not None
+        else bridge.handle_inference_message
+    )
+
     # Run training with progress forwarding
     kwargs = dict(
         config_path=config_path,
@@ -490,6 +636,7 @@ def run_remote_training(
         on_channel_ready=bridge.set_send_fn,
         on_raw_progress=bridge.on_raw_zmq_message,
         on_model_type=model_type_fn,
+        on_inference_message=inference_fn,
     )
     if timeout is not None:
         kwargs["timeout"] = timeout
