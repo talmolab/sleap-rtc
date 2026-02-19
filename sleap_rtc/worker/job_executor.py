@@ -881,6 +881,26 @@ class JobExecutor:
             await process.wait()
             self._running_process = None
 
+            # Wait for the entire process group to exit before returning.
+            # With start_new_session=True, PGID == process.pid.  DDP rank 1
+            # is a child in this group and may outlive rank 0 by several
+            # seconds while NCCL / TCPStore cleanup runs.  If we start the
+            # next pipeline model before rank 1 vacates MASTER_PORT, the new
+            # DDP init will collide with the lingering connection → Broken pipe.
+            pgid = process.pid
+            deadline = asyncio.get_event_loop().time() + 30.0
+            while asyncio.get_event_loop().time() < deadline:
+                try:
+                    os.killpg(pgid, 0)  # signal 0: probe group existence
+                    await asyncio.sleep(0.5)
+                except (ProcessLookupError, PermissionError):
+                    break  # all ranks have exited
+            else:
+                logging.warning(
+                    f"[JOB {job_id}] Process group {pgid} still alive after "
+                    "30 s — proceeding anyway"
+                )
+
             duration_seconds = int(time.time() - start_time)
             logging.info(
                 f"[JOB {job_id}] Process PID {process.pid} exited "
