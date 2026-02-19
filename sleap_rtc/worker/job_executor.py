@@ -825,6 +825,11 @@ class JobExecutor:
                     logging.info(f"[JOB {job_id}] Job stopped early (checkpoint saved)")
                 else:
                     logging.info(f"[JOB {job_id}] Job completed successfully")
+                return {
+                    "success": True,
+                    "stopped_early": stopped_early,
+                    "cancelled": False,
+                }
             else:
                 # Job failed or was cancelled
                 import json
@@ -845,6 +850,11 @@ class JobExecutor:
                     logging.info(f"[JOB {job_id}] Job cancelled by user")
                 else:
                     logging.error(f"[JOB {job_id}] Job failed with exit code {process.returncode}")
+                return {
+                    "success": False,
+                    "stopped_early": False,
+                    "cancelled": cancelled,
+                }
 
         except Exception as e:
             # Unexpected error
@@ -857,6 +867,11 @@ class JobExecutor:
             }
             if channel.readyState == "open":
                 channel.send(f"{MSG_JOB_FAILED}{MSG_SEPARATOR}{json.dumps(error_data)}")
+            return {
+                "success": False,
+                "stopped_early": False,
+                "cancelled": False,
+            }
 
         finally:
             self._stop_requested = False  # reset so next job starts clean

@@ -105,6 +105,48 @@ logging.basicConfig(level=logging.INFO)
 SEP = re.compile(rb"[\r\n]")
 
 
+def _get_checkpoint_dir(config_path: str, run_name_override: Optional[str] = None) -> Optional[str]:
+    """Parse a sleap-nn training config YAML and return the checkpoint directory.
+
+    The checkpoint directory is ``{ckpt_dir}/{run_name}/``.  When ``ckpt_dir``
+    is a relative path it is resolved against the current working directory.
+
+    Args:
+        config_path: Path to the written YAML config file.
+        run_name_override: If provided (e.g. from ``TrainJobSpec.run_name``),
+            overrides the ``trainer_config.run_name`` in the file.
+
+    Returns:
+        Absolute path to the checkpoint directory, or ``None`` if it cannot be
+        determined (e.g. ``run_name`` is absent and not overridden).
+    """
+    import yaml
+
+    try:
+        with open(config_path) as f:
+            config = yaml.safe_load(f)
+    except Exception as e:
+        logging.warning(f"[CKPT] Could not parse config {config_path}: {e}")
+        return None
+
+    trainer_cfg = config.get("trainer_config", {}) if config else {}
+    ckpt_dir = trainer_cfg.get("ckpt_dir") or "."
+    run_name = run_name_override or trainer_cfg.get("run_name")
+
+    if not run_name:
+        logging.warning(
+            f"[CKPT] Could not determine run_name from {config_path} "
+            "— checkpoint path unknown; inference may fail"
+        )
+        return None
+
+    ckpt_path = Path(ckpt_dir) / run_name
+    if not ckpt_path.is_absolute():
+        ckpt_path = Path(os.getcwd()) / ckpt_path
+
+    return str(ckpt_path)
+
+
 class RTCWorkerClient:
     def __init__(
         self,
@@ -2079,6 +2121,16 @@ class RTCWorkerClient:
                     commands = builder.build_train_commands(spec)
                     total_configs = len(commands)
 
+                    # Capture the already-resolved worker-side labels path so the
+                    # post-training inference step can reuse it without re-applying
+                    # path_mappings.
+                    worker_labels_path: Optional[str] = spec.labels_path
+
+                    # Accumulate trained checkpoint directories for inference.
+                    trained_model_paths: list[str] = []
+                    pipeline_cancelled = False
+                    pipeline_failed = False
+
                     # Create one ProgressReporter for the entire pipeline so ZMQ
                     # ports stay bound between models — no context.term() between
                     # models, mirroring local SLEAP's persistent-socket design.
@@ -2105,14 +2157,36 @@ class RTCWorkerClient:
                                 f"[PIPELINE] Starting model {i+1}/{total_configs} "
                                 f"(job_id={model_job_id}, config={config_name!r})"
                             )
-                            await self.job_executor.execute_from_spec(
+                            result = await self.job_executor.execute_from_spec(
                                 channel, cmd, model_job_id, job_type="train",
                                 zmq_ports=DEFAULT_ZMQ_PORTS,
                                 progress_reporter=pipeline_reporter,
                             )
                             logging.info(
-                                f"[PIPELINE] Model {i+1}/{total_configs} execute_from_spec returned"
+                                f"[PIPELINE] Model {i+1}/{total_configs} execute_from_spec returned: {result}"
                             )
+
+                            # Track per-model result for inference decision.
+                            if result and result.get("cancelled"):
+                                pipeline_cancelled = True
+                                break
+                            if result and not result.get("success"):
+                                pipeline_failed = True
+                                break
+
+                            # Derive checkpoint directory from the written config.
+                            ckpt_dir = _get_checkpoint_dir(
+                                spec.config_paths[i],
+                                run_name_override=spec.run_name,
+                            )
+                            if ckpt_dir:
+                                trained_model_paths.append(ckpt_dir)
+                                logging.info(f"[PIPELINE] Checkpoint dir: {ckpt_dir}")
+                            else:
+                                logging.warning(
+                                    f"[PIPELINE] Could not determine checkpoint dir for model {i+1}"
+                                )
+
                             # Flush buffered ZMQ messages from the finished model
                             # before switching model type on the client. This prevents
                             # stale messages from appearing in the next model's LossViewer.
