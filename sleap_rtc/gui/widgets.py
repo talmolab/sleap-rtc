@@ -926,26 +926,29 @@ class UploadDestDialog(QDialog):
             "Click any folder to select it as the destination."
         )
         info.setWordWrap(True)
+        info.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(info)
 
-        self._browser = RemoteFileBrowser(send_fn=send_fn, file_filter="")
+        self._browser = RemoteFileBrowser(
+            send_fn=send_fn, file_filter="", directory_mode=True
+        )
         self._browser.directory_entered.connect(self._on_directory_entered)
         self._browser.setMinimumHeight(300)
         layout.addWidget(self._browser)
 
         # Selected destination path
         dest_form = QFormLayout()
-        self._dir_label = QLabel("<i>No directory selected yet</i>")
+        self._dir_label = QLabel("<i style='color: gray;'>No directory selected</i>")
         self._dir_label.setWordWrap(True)
         dest_form.addRow("Destination:", self._dir_label)
         layout.addLayout(dest_form)
 
         # Subfolder option
         self._subdir_check = QCheckBox(
-            "Create sleap-rtc-downloads/ subfolder inside the selected directory"
+            "Create `sleap_rtc_downloads` subfolder inside the selected directory"
         )
         self._subdir_check.setToolTip(
-            "When checked, a 'sleap-rtc-downloads' folder will be created inside "
+            "When checked, a 'sleap_rtc_downloads' folder will be created inside "
             "the selected directory and the file will be saved there."
         )
         layout.addWidget(self._subdir_check)
@@ -971,7 +974,7 @@ class UploadDestDialog(QDialog):
 
     def _on_directory_entered(self, path: str):
         self._dest_dir = path
-        self._dir_label.setText(f"<b>{path}</b>")
+        self._dir_label.setText(f"<b style='color: green;'>{path}</b>")
         self._ok_btn.setEnabled(True)
 
     def get_dest_dir(self) -> str | None:
@@ -1943,11 +1946,13 @@ class RemoteFileBrowser(QWidget):
         self,
         send_fn: "Callable[[str], None]",
         file_filter: str = "",
+        directory_mode: bool = False,
         parent: QWidget | None = None,
     ):
         super().__init__(parent)
         self._send_fn = send_fn
         self._file_filter = file_filter
+        self._directory_mode = directory_mode
         self._allowed_extensions: set[str] = set()
         if file_filter:
             for pattern in file_filter.split(","):
@@ -2022,7 +2027,8 @@ class RemoteFileBrowser(QWidget):
         # Bottom bar: path + select button
         bottom = QHBoxLayout()
         self._path_bar = QLineEdit()
-        self._path_bar.setPlaceholderText("No file selected")
+        placeholder = "No directory selected" if self._directory_mode else "No file selected"
+        self._path_bar.setPlaceholderText(placeholder)
         self._path_bar.setReadOnly(True)
         self._select_button = QPushButton("Select")
         self._select_button.setEnabled(False)
@@ -2267,11 +2273,16 @@ class RemoteFileBrowser(QWidget):
             self._send_fn(
                 f"FS_LIST_DIR{self._SEPARATOR}{path}{self._SEPARATOR}0"
             )
-            self._selected_path = ""
-            self._path_bar.clear()
-            self._select_button.setEnabled(False)
             self._clear_preview()
             self.directory_entered.emit(path)
+            if self._directory_mode:
+                self._selected_path = path
+                self._path_bar.setText(path)
+                self._select_button.setEnabled(True)
+            else:
+                self._selected_path = ""
+                self._path_bar.clear()
+                self._select_button.setEnabled(False)
 
         elif item_type == "directory":
             # Directory click: remove deeper columns, request listing
@@ -2280,14 +2291,23 @@ class RemoteFileBrowser(QWidget):
             self._send_fn(
                 f"FS_LIST_DIR{self._SEPARATOR}{path}{self._SEPARATOR}0"
             )
-            self._selected_path = ""
-            self._path_bar.clear()
-            self._select_button.setEnabled(False)
             self._clear_preview()
             self.directory_entered.emit(path)
+            if self._directory_mode:
+                # In directory-pick mode, selecting a directory IS the action
+                self._selected_path = path
+                self._path_bar.setText(path)
+                self._select_button.setEnabled(True)
+            else:
+                self._selected_path = ""
+                self._path_bar.clear()
+                self._select_button.setEnabled(False)
 
         elif item_type == "file":
             # File click: highlight, show preview, update path bar
+            if self._directory_mode:
+                # In directory-pick mode, file clicks don't constitute a selection
+                return
             if col_idx >= 0:
                 self._remove_columns_after(col_idx)
             self._selected_path = path
