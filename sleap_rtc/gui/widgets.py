@@ -951,6 +951,7 @@ class UploadDestDialog(QDialog):
             "When checked, a 'sleap_rtc_downloads' folder will be created inside "
             "the selected directory and the file will be saved there."
         )
+        self._subdir_check.stateChanged.connect(self._update_dest_label)
         layout.addWidget(self._subdir_check)
 
         separator = QFrame()
@@ -972,10 +973,21 @@ class UploadDestDialog(QDialog):
 
         layout.addLayout(btn_layout)
 
+    _SUBDIR_NAME = "sleap-rtc-downloads"
+
     def _on_directory_entered(self, path: str):
         self._dest_dir = path
-        self._dir_label.setText(f"<b style='color: green;'>{path}</b>")
+        self._update_dest_label()
         self._ok_btn.setEnabled(True)
+
+    def _update_dest_label(self):
+        if self._dest_dir is None:
+            return
+        display = self._dest_dir
+        if self._subdir_check.isChecked():
+            sep = "" if self._dest_dir.endswith("/") else "/"
+            display = f"{self._dest_dir}{sep}{self._SUBDIR_NAME}"
+        self._dir_label.setText(f"<b style='color: green;'>{display}</b>")
 
     def get_dest_dir(self) -> str | None:
         """Return the selected destination directory path."""
