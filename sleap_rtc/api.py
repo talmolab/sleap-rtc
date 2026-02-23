@@ -609,6 +609,7 @@ def check_video_paths(
     on_path_rejected: "Callable[[str, str, Callable], str | None] | None" = None,
     on_fs_response: "Callable[[str], None] | None" = None,
     on_videos_missing: "Callable[[list, Callable], dict[str, str] | None] | None" = None,
+    on_upload_response: "Callable[[str], None] | None" = None,
 ) -> PathCheckResult:
     """Check if video paths in an SLP file are accessible on a worker.
 
@@ -658,6 +659,7 @@ def check_video_paths(
         _check_video_paths_async(
             slp_path, room_id, worker_id, timeout,
             on_path_rejected, on_fs_response, on_videos_missing,
+            on_upload_response,
         )
     )
 
@@ -746,6 +748,7 @@ async def _check_video_paths_async(
     on_path_rejected: "Callable[[str, str, Callable], str | None] | None" = None,
     on_fs_response: "Callable[[str], None] | None" = None,
     on_videos_missing: "Callable[[list, Callable], dict[str, str] | None] | None" = None,
+    on_upload_response: "Callable[[str], None] | None" = None,
 ) -> PathCheckResult:
     """Async implementation of video path checking."""
     import json
@@ -863,6 +866,11 @@ async def _check_video_paths_async(
                         message.startswith(p) for p in _BROWSER_FS_PREFIXES
                     ):
                         on_fs_response(message)
+                    # Route FILE_UPLOAD_* responses to the upload dialog
+                    elif on_upload_response is not None and message.startswith(
+                        "FILE_UPLOAD_"
+                    ):
+                        on_upload_response(message)
                     else:
                         await response_queue.put(message)
 

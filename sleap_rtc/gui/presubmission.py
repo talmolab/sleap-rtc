@@ -305,6 +305,8 @@ def check_video_paths(
 
     # Active RemoteFileBrowser for FS_* response routing (set by main thread)
     browser_ref: list = [None]
+    # Active SlpPathDialog for FILE_UPLOAD_* response routing
+    upload_dialog_ref: list = [None]
 
     def _on_fs_response(message: str):
         """Route FS_* data channel responses to the active browser widget.
@@ -314,6 +316,19 @@ def check_video_paths(
         """
         if browser_ref[0] is not None:
             browser_ref[0].on_response(message)
+
+    def _on_upload_response(message: str):
+        """Route FILE_UPLOAD_* responses to the active upload dialog.
+
+        Called from the asyncio thread. ``SlpPathDialog.on_upload_response()``
+        is thread-safe (emits a ``QueuedConnection`` Qt signal).
+        """
+        if upload_dialog_ref[0] is not None:
+            upload_dialog_ref[0].on_upload_response(message)
+
+    def _set_browser(b):
+        """Switch which RemoteFileBrowser receives FS_* responses."""
+        browser_ref[0] = b
 
     def _on_path_rejected(
         attempted_path: str, error_msg: str, send_fn_dc: Callable
@@ -356,6 +371,7 @@ def check_video_paths(
                 worker_id=worker_id,
                 on_path_rejected=_on_path_rejected,
                 on_fs_response=_on_fs_response,
+                on_upload_response=_on_upload_response,
                 on_videos_missing=(
                     _on_videos_missing if parent_widget is not None else None
                 ),
@@ -393,8 +409,10 @@ def check_video_paths(
                     local_path=attempted_path,
                     error_message=error_msg,
                     send_fn=send_fn_dc,
+                    on_browser_changed=_set_browser,
                     parent=parent_widget,
                 )
+                upload_dialog_ref[0] = dialog
                 if dialog._browser is not None:
                     browser_ref[0] = dialog._browser
 
@@ -406,6 +424,7 @@ def check_video_paths(
                     logger.info("User cancelled SLP path resolution")
                     dialog_response_q.put(None)
 
+                upload_dialog_ref[0] = None
                 browser_ref[0] = None
 
             elif request_type == _VIDEOS_MISSING_REQUEST:
