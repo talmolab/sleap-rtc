@@ -951,7 +951,7 @@ class UploadDestDialog(QDialog):
             "When checked, a 'sleap_rtc_downloads' folder will be created inside "
             "the selected directory and the file will be saved there."
         )
-        self._subdir_check.stateChanged.connect(self._update_dest_label)
+        self._subdir_check.toggled.connect(lambda _: self._update_dest_label())
         layout.addWidget(self._subdir_check)
 
         separator = QFrame()
@@ -1263,24 +1263,49 @@ class SlpPathDialog(QDialog):
         if create_subdir:
             dest_display = dest_dir.rstrip("/") + "/sleap_rtc_downloads/"
 
-        msg_box_text = (
-            f"Upload <b>{Path(self._local_path).name}</b> ({size_str}) "
-            f"to worker?<br><br>"
-            f"Destination: <tt>{dest_display}</tt><br>"
-            f"Estimated time: {time_str}"
+        from qtpy.QtWidgets import (
+            QDialog, QDialogButtonBox, QLabel, QTextEdit, QVBoxLayout,
         )
+        from qtpy.QtGui import QFont
 
-        from qtpy.QtWidgets import QMessageBox
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Confirm Upload")
+        dlg.setMinimumWidth(480)
+        layout = QVBoxLayout(dlg)
+        layout.setSpacing(8)
 
-        box = QMessageBox(self)
-        box.setWindowTitle("Confirm Upload")
-        box.setText(msg_box_text)
-        box.setTextFormat(Qt.TextFormat.RichText)
-        box.setStandardButtons(
-            QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel
+        header = QLabel(
+            f"Upload <b>{Path(self._local_path).name}</b> ({size_str}) to worker?"
         )
-        box.setDefaultButton(QMessageBox.StandardButton.Cancel)
-        return box.exec() == QMessageBox.StandardButton.Ok
+        header.setTextFormat(Qt.TextFormat.RichText)
+        layout.addWidget(header)
+
+        dest_label = QLabel("<b>Destination:</b>")
+        dest_label.setTextFormat(Qt.TextFormat.RichText)
+        layout.addWidget(dest_label)
+
+        path_box = QTextEdit()
+        path_box.setReadOnly(True)
+        path_box.setPlainText(dest_display)
+        mono = QFont("Courier")
+        mono.setStyleHint(QFont.StyleHint.Monospace)
+        path_box.setFont(mono)
+        path_box.setFixedHeight(60)
+        layout.addWidget(path_box)
+
+        time_label = QLabel(f"<b>Estimated time:</b> {time_str}")
+        time_label.setTextFormat(Qt.TextFormat.RichText)
+        layout.addWidget(time_label)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok
+            | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.rejected.connect(dlg.reject)
+        buttons.accepted.connect(dlg.accept)
+        layout.addWidget(buttons)
+
+        return dlg.exec() == QDialog.DialogCode.Accepted
 
     def _start_upload(self, dest_dir: str, create_subdir: str) -> None:
         """Create and start the upload thread."""
