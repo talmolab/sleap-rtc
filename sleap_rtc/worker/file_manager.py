@@ -6,14 +6,24 @@ and filesystem browsing for SLEAP-RTC workers.
 
 import asyncio
 import fnmatch
+import hashlib
 import logging
 import os
 import shutil
 import time
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from aiortc import RTCDataChannel
+
+from sleap_rtc.protocol import (
+    MSG_FILE_UPLOAD_CACHE_HIT,
+    MSG_FILE_UPLOAD_COMPLETE,
+    MSG_FILE_UPLOAD_ERROR,
+    MSG_FILE_UPLOAD_PROGRESS,
+    MSG_FILE_UPLOAD_READY,
+    MSG_SEPARATOR,
+)
 
 # Import sleap_io for SLP file operations (lazy import to avoid startup cost)
 try:
@@ -67,6 +77,12 @@ class FileManager:
         self.output_dir = ""
         self.mounts: list = mounts or []
         self.working_dir: str = working_dir
+
+        # Client-to-worker upload state
+        # Maps sha256 hex → absolute path for files received this session.
+        self._upload_cache: Dict[str, str] = {}
+        # Holds state for an in-progress upload (one at a time).
+        self._upload_session: Optional[dict] = None
 
     async def send_file(self, channel: RTCDataChannel, file_path: str, output_dir: str = ""):
         """Send a file to client via RTC data channel.
@@ -156,6 +172,179 @@ class FileManager:
         except Exception as e:
             logging.error(f"Error unzipping results: {e}")
             return None
+
+    # =========================================================================
+    # Client-to-Worker Upload Methods
+    # =========================================================================
+
+    def check_upload_cache(self, sha256: str, filename: str) -> Optional[str]:
+        """Check whether a previously-uploaded file is still on disk.
+
+        Args:
+            sha256: SHA-256 hex digest of the file to look up.
+            filename: Filename (unused; reserved for future logging/hints).
+
+        Returns:
+            Absolute path string if a matching cached file exists on disk,
+            or None if no cache entry exists or the cached file was deleted.
+        """
+        cached = self._upload_cache.get(sha256)
+        if cached and Path(cached).exists():
+            return cached
+        # Remove stale entry so subsequent uploads repopulate it.
+        if sha256 in self._upload_cache:
+            del self._upload_cache[sha256]
+        return None
+
+    async def start_upload_session(
+        self,
+        channel: RTCDataChannel,
+        filename: str,
+        total_bytes: int,
+        dest_dir: str,
+        create_subdir: str,
+    ) -> None:
+        """Validate destination, open write handle, and signal readiness.
+
+        Sends FILE_UPLOAD_READY on success or FILE_UPLOAD_ERROR on failure.
+
+        Args:
+            channel: RTC data channel to send responses on.
+            filename: Base filename of the incoming file.
+            total_bytes: Expected total file size in bytes.
+            dest_dir: Absolute destination directory path on the worker.
+            create_subdir: "1" to create a sleap-rtc-downloads/ subfolder,
+                "0" to write directly into dest_dir.
+        """
+        dest_path = Path(dest_dir)
+
+        # Security: destination must resolve within a configured mount.
+        if not self._is_path_allowed(dest_path):
+            channel.send(
+                f"{MSG_FILE_UPLOAD_ERROR}{MSG_SEPARATOR}"
+                "Destination outside configured mounts"
+            )
+            return
+
+        if create_subdir == "1":
+            dest_path = dest_path / "sleap-rtc-downloads"
+            try:
+                dest_path.mkdir(parents=True, exist_ok=True)
+            except OSError as e:
+                channel.send(
+                    f"{MSG_FILE_UPLOAD_ERROR}{MSG_SEPARATOR}"
+                    f"Cannot create sleap-rtc-downloads/: {e}"
+                )
+                return
+
+        file_path = dest_path / filename
+
+        try:
+            file_handle = open(file_path, "wb")  # noqa: WPS515
+        except OSError as e:
+            channel.send(
+                f"{MSG_FILE_UPLOAD_ERROR}{MSG_SEPARATOR}Cannot open file for writing: {e}"
+            )
+            return
+
+        self._upload_session = {
+            "filename": filename,
+            "total_bytes": total_bytes,
+            "file_path": file_path,
+            "file_handle": file_handle,
+            "bytes_received": 0,
+            "channel": channel,
+            "last_progress_time": 0.0,
+            "sha256_ctx": hashlib.sha256(),
+        }
+
+        channel.send(MSG_FILE_UPLOAD_READY)
+        logging.info(
+            f"Upload session started: {filename} ({total_bytes} bytes) → {file_path}"
+        )
+
+    def receive_upload_chunk(self, chunk: bytes) -> None:
+        """Append an incoming binary chunk to the active upload session.
+
+        Sends FILE_UPLOAD_PROGRESS at most every 500 ms.
+        Sends FILE_UPLOAD_ERROR and cleans up on I/O failure.
+
+        Args:
+            chunk: Raw bytes received from the client.
+        """
+        if self._upload_session is None:
+            logging.warning("Received upload chunk with no active upload session; ignoring.")
+            return
+
+        session = self._upload_session
+        try:
+            session["file_handle"].write(chunk)
+            session["sha256_ctx"].update(chunk)
+            session["bytes_received"] += len(chunk)
+        except OSError as e:
+            logging.error(f"Upload write error: {e}")
+            session["file_handle"].close()
+            try:
+                session["file_path"].unlink(missing_ok=True)
+            except OSError:
+                pass
+            session["channel"].send(
+                f"{MSG_FILE_UPLOAD_ERROR}{MSG_SEPARATOR}Write error: {e}"
+            )
+            self._upload_session = None
+            return
+
+        # Progress at most every 500 ms.
+        now = time.time()
+        if now - session["last_progress_time"] >= 0.5:
+            session["channel"].send(
+                f"{MSG_FILE_UPLOAD_PROGRESS}{MSG_SEPARATOR}"
+                f"{session['bytes_received']}{MSG_SEPARATOR}{session['total_bytes']}"
+            )
+            session["last_progress_time"] = now
+
+    async def finish_upload_session(self, channel: RTCDataChannel) -> None:
+        """Finalise the active upload: close file, verify size, update cache.
+
+        Sends FILE_UPLOAD_COMPLETE::{absolute_path} on success or
+        FILE_UPLOAD_ERROR::{reason} on failure.
+
+        Args:
+            channel: RTC data channel to send the result on.
+        """
+        if self._upload_session is None:
+            logging.warning("Received FILE_UPLOAD_END with no active session; ignoring.")
+            return
+
+        session = self._upload_session
+        self._upload_session = None
+
+        try:
+            session["file_handle"].close()
+        except OSError as e:
+            channel.send(
+                f"{MSG_FILE_UPLOAD_ERROR}{MSG_SEPARATOR}Failed to close file: {e}"
+            )
+            return
+
+        # Verify written size matches declared total.
+        actual_size = session["file_path"].stat().st_size
+        if actual_size != session["total_bytes"]:
+            channel.send(
+                f"{MSG_FILE_UPLOAD_ERROR}{MSG_SEPARATOR}"
+                f"Size mismatch: expected {session['total_bytes']}, got {actual_size}"
+            )
+            session["file_path"].unlink(missing_ok=True)
+            return
+
+        # Cache by content hash so future uploads of the same file are instant.
+        sha256 = session["sha256_ctx"].hexdigest()
+        self._upload_cache[sha256] = str(session["file_path"])
+
+        channel.send(
+            f"{MSG_FILE_UPLOAD_COMPLETE}{MSG_SEPARATOR}{session['file_path']}"
+        )
+        logging.info(f"Upload complete: {session['file_path']} (sha256={sha256[:12]}…)")
 
     # =========================================================================
     # Filesystem Browser Methods
