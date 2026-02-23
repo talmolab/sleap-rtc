@@ -133,6 +133,8 @@ class PathCheckResult:
         total_videos: Total number of videos in the SLP file.
         found_count: Number of videos found on the worker.
         missing_count: Number of videos not found on the worker.
+        embedded_count: Number of videos with frames embedded in the SLP file
+            (no external video file required).
         videos: List of VideoPathStatus for each video.
         slp_path: The SLP path that was checked.
         path_mappings: User-resolved path mappings from interactive dialogs
@@ -146,6 +148,7 @@ class PathCheckResult:
     missing_count: int
     videos: list[VideoPathStatus]
     slp_path: str
+    embedded_count: int = 0
     path_mappings: dict[str, str] = field(default_factory=dict)
 
 
@@ -1007,6 +1010,7 @@ async def _check_video_paths_async(
             total = video_data.get("total_videos", len(videos))
             found_count = len(video_data.get("found", []))
             missing_count = len(video_data.get("missing", []))
+            embedded_count = video_data.get("embedded", 0)
 
             # If videos are missing and we have a callback, let the caller
             # resolve them interactively while the data channel is alive.
@@ -1029,6 +1033,7 @@ async def _check_video_paths_async(
                 total_videos=total,
                 found_count=found_count,
                 missing_count=missing_count,
+                embedded_count=embedded_count,
                 videos=videos,
                 slp_path=slp_path,
                 path_mappings=resolved_mappings,

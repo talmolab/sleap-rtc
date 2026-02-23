@@ -503,6 +503,18 @@ def check_video_paths(
     if path_result.path_mappings:
         mappings.update(path_result.path_mappings)
 
+    # Fully-embedded pkg.slp: all frames are stored inside the SLP file,
+    # no external video files needed — skip PathResolutionDialog entirely.
+    if path_result.missing_count == 0 and path_result.embedded_count > 0:
+        logger.debug(
+            f"All {path_result.embedded_count} video(s) are embedded in the "
+            "SLP file — skipping video path resolution"
+        )
+        return PresubmissionResult(
+            success=True,
+            path_mappings=mappings,
+        )
+
     if path_result.all_found or path_result.path_mappings:
         logger.debug(f"Video paths resolved: {len(mappings)} mappings")
         return PresubmissionResult(
