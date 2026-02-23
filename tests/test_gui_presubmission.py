@@ -388,6 +388,64 @@ class TestCheckVideoPaths:
         assert result.success is False
         assert result.cancelled is True
 
+    @patch("sleap_rtc.api.check_video_paths")
+    def test_fully_embedded_pkg_slp_skips_dialog(self, mock_check):
+        """Should succeed immediately for fully-embedded pkg.slp without showing
+        PathResolutionDialog (missing == 0 and embedded > 0)."""
+        mock_check.return_value = PathCheckResult(
+            all_found=True,
+            total_videos=3,
+            found_count=0,
+            missing_count=0,
+            embedded_count=3,
+            videos=[],
+            slp_path="/data/labels.pkg.slp",
+        )
+
+        parent = MagicMock()
+        result = check_video_paths(
+            "/data/labels.pkg.slp", "test-room", parent_widget=parent
+        )
+
+        assert result.success is True
+        # No video path mappings needed — all embedded
+        assert result.path_mappings == {}
+
+    @patch("sleap_rtc.api.check_video_paths")
+    def test_embedded_zero_falls_through_to_normal_path(self, mock_check):
+        """Should not trigger the embedded-skip path when embedded_count == 0."""
+        mock_check.return_value = PathCheckResult(
+            all_found=True,
+            total_videos=2,
+            found_count=2,
+            missing_count=0,
+            embedded_count=0,
+            videos=[
+                VideoPathStatus(
+                    filename="video1.mp4",
+                    original_path="/local/video1.mp4",
+                    worker_path="/data/video1.mp4",
+                    found=True,
+                ),
+                VideoPathStatus(
+                    filename="video2.mp4",
+                    original_path="/local/video2.mp4",
+                    worker_path="/data/video2.mp4",
+                    found=True,
+                ),
+            ],
+            slp_path="/data/labels.slp",
+        )
+
+        result = check_video_paths("/data/labels.slp", "test-room")
+
+        # Falls through to all_found path — still succeeds
+        assert result.success is True
+        assert result.path_mappings == {
+            "/local/video1.mp4": "/data/video1.mp4",
+            "/local/video2.mp4": "/data/video2.mp4",
+        }
+
 
 # =============================================================================
 # run_presubmission_checks Tests

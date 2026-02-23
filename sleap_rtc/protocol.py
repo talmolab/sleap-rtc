@@ -451,6 +451,64 @@ MSG_JOB_CANCEL = "JOB_CANCEL"  # Hard cancel (SIGTERM, immediate termination)
 # to local training. Symmetric with PROGRESS_REPORT:: (worker → client).
 MSG_CONTROL_COMMAND = "CONTROL_COMMAND"
 
+# =============================================================================
+# Client-to-Worker File Upload Messages (pkg.slp RTC Upload)
+# =============================================================================
+#
+# These messages implement direct client-to-worker file upload over the RTC
+# data channel. This is the reverse of the existing worker-to-client file
+# transfer and is used when a user's .pkg.slp file is not accessible on a
+# shared filesystem.
+#
+# Message Flow:
+#
+# 1. Content-hash pre-check (avoids re-uploading unchanged files):
+#    Client → Worker: FILE_UPLOAD_CHECK::{sha256}::{filename}
+#    Worker → Client: FILE_UPLOAD_CACHE_HIT::{absolute_path}  (file already on worker)
+#    or: Worker → Client: FILE_UPLOAD_READY                   (proceed with upload)
+#
+# 2. Upload:
+#    Client → Worker: FILE_UPLOAD_START::{filename}::{total_bytes}::{dest_dir}::{create_subdir}
+#      create_subdir: "1" to create sleap-rtc-downloads/ subfolder, "0" otherwise
+#    Worker → Client: FILE_UPLOAD_READY
+#    Client → Worker: <binary chunk> ... (repeated)
+#    Client → Worker: FILE_UPLOAD_END
+#
+# 3. Progress and completion:
+#    Worker → Client: FILE_UPLOAD_PROGRESS::{bytes_received}::{total_bytes}
+#    Worker → Client: FILE_UPLOAD_COMPLETE::{absolute_path}
+#    or: Worker → Client: FILE_UPLOAD_ERROR::{reason}
+#
+# Security:
+#   dest_dir is validated to resolve within a configured worker mount before
+#   any file is written. Uploads to paths outside configured mounts are
+#   rejected with FILE_UPLOAD_ERROR.
+#
+
+# Client → Worker: check if worker already has this file by content hash
+MSG_FILE_UPLOAD_CHECK = "FILE_UPLOAD_CHECK"
+
+# Client → Worker: begin an upload session
+MSG_FILE_UPLOAD_START = "FILE_UPLOAD_START"
+
+# Client → Worker: signals all chunks have been sent
+MSG_FILE_UPLOAD_END = "FILE_UPLOAD_END"
+
+# Worker → Client: worker is ready to receive (or begin) the upload
+MSG_FILE_UPLOAD_READY = "FILE_UPLOAD_READY"
+
+# Worker → Client: periodic progress during upload
+MSG_FILE_UPLOAD_PROGRESS = "FILE_UPLOAD_PROGRESS"
+
+# Worker → Client: upload finished successfully; carries absolute path on worker
+MSG_FILE_UPLOAD_COMPLETE = "FILE_UPLOAD_COMPLETE"
+
+# Worker → Client: worker already has a file matching the hash; carries its path
+MSG_FILE_UPLOAD_CACHE_HIT = "FILE_UPLOAD_CACHE_HIT"
+
+# Worker → Client: upload failed; carries human-readable reason
+MSG_FILE_UPLOAD_ERROR = "FILE_UPLOAD_ERROR"
+
 # Message separators
 MSG_SEPARATOR = "::"
 

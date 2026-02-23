@@ -129,6 +129,9 @@ class RTCClient:
         self.job_spec = None  # TrainJobSpec or TrackJobSpec instance
         self.job_response_queue = asyncio.Queue()  # Queue for job protocol responses
 
+        # File upload (client → worker)
+        self.upload_response_queue = asyncio.Queue()  # For FILE_UPLOAD_* responses
+
     def parse_session_string(self, session_string: str):
         prefix = "sleap-session:"
         if not session_string.startswith(prefix):
@@ -1158,6 +1161,11 @@ class RTCClient:
             # Handle structured job submission responses (JOB_*)
             if message.startswith("JOB_"):
                 await self.job_response_queue.put(message)
+                return
+
+            # Handle file upload responses (FILE_UPLOAD_*)
+            if message.startswith("FILE_UPLOAD_"):
+                await self.upload_response_queue.put(message)
                 return
 
             # Handle filesystem browser responses (FS_*)

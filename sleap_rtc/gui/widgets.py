@@ -6,6 +6,7 @@ Training Configuration dialog.
 
 from __future__ import annotations
 
+import queue as _queue_module
 from typing import TYPE_CHECKING
 
 from qtpy.QtCore import Qt, Signal, QThread
@@ -750,26 +751,289 @@ class RoomBrowserDialog(QDialog):
         return self._selected_room_id, self._selected_room_name
 
 
+class _UploadThread(QThread):
+    """Background thread that executes the client-to-worker upload protocol.
+
+    Sends FILE_UPLOAD_CHECK / FILE_UPLOAD_START / binary chunks /
+    FILE_UPLOAD_END via ``send_fn`` and reads worker responses from
+    ``response_queue`` (a ``queue.Queue`` fed by the main thread via
+    ``SlpPathDialog.on_upload_response()``).
+
+    Signals:
+        progress: Emitted with (bytes_sent, total_bytes) for each
+            FILE_UPLOAD_PROGRESS message from the worker.
+        complete: Emitted with the worker-side absolute path on success
+            (FILE_UPLOAD_COMPLETE or FILE_UPLOAD_CACHE_HIT).
+        error: Emitted with a human-readable reason on failure.
+    """
+
+    progress = Signal(int, int)
+    complete = Signal(str)
+    error = Signal(str)
+
+    _CHUNK_SIZE = 64 * 1024
+    _RESPONSE_TIMEOUT = 30.0
+    _END_TIMEOUT = 120.0  # wait longer for large-file writes on the worker
+
+    def __init__(
+        self,
+        send_fn: "Callable",
+        local_path: str,
+        dest_dir: str,
+        create_subdir: str,
+        response_queue: "_queue_module.Queue",
+        parent=None,
+    ):
+        super().__init__(parent)
+        self._send_fn = send_fn
+        self._local_path = local_path
+        self._dest_dir = dest_dir
+        self._create_subdir = create_subdir
+        self._response_queue = response_queue
+
+    def _wait_for(self, timeout: float | None = None) -> str:
+        t = timeout if timeout is not None else self._RESPONSE_TIMEOUT
+        try:
+            return self._response_queue.get(timeout=t)
+        except _queue_module.Empty:
+            raise RuntimeError(
+                f"Timed out waiting for worker response ({t:.0f} s)"
+            )
+
+    def run(self):
+        import hashlib
+        from pathlib import Path
+        from sleap_rtc.protocol import (
+            MSG_FILE_UPLOAD_CACHE_HIT,
+            MSG_FILE_UPLOAD_CHECK,
+            MSG_FILE_UPLOAD_COMPLETE,
+            MSG_FILE_UPLOAD_END,
+            MSG_FILE_UPLOAD_ERROR,
+            MSG_FILE_UPLOAD_PROGRESS,
+            MSG_FILE_UPLOAD_READY,
+            MSG_FILE_UPLOAD_START,
+            MSG_SEPARATOR,
+        )
+
+        try:
+            path = Path(self._local_path)
+            filename = path.name
+            total_bytes = path.stat().st_size
+
+            # Step 1: SHA-256 (streaming)
+            sha256_ctx = hashlib.sha256()
+            with open(self._local_path, "rb") as fh:
+                while chunk := fh.read(self._CHUNK_SIZE):
+                    sha256_ctx.update(chunk)
+            sha256 = sha256_ctx.hexdigest()
+
+            # Step 2: FILE_UPLOAD_CHECK
+            self._send_fn(
+                f"{MSG_FILE_UPLOAD_CHECK}{MSG_SEPARATOR}{sha256}{MSG_SEPARATOR}{filename}"
+            )
+            resp = self._wait_for()
+
+            if resp.startswith(MSG_FILE_UPLOAD_CACHE_HIT + MSG_SEPARATOR):
+                self.complete.emit(resp.split(MSG_SEPARATOR, 1)[1])
+                return
+
+            if resp.startswith(MSG_FILE_UPLOAD_ERROR + MSG_SEPARATOR):
+                self.error.emit(resp.split(MSG_SEPARATOR, 1)[1])
+                return
+
+            if resp != MSG_FILE_UPLOAD_READY:
+                self.error.emit(f"Unexpected response to CHECK: {resp[:80]}")
+                return
+
+            # Step 3: FILE_UPLOAD_START
+            self._send_fn(
+                f"{MSG_FILE_UPLOAD_START}{MSG_SEPARATOR}{filename}{MSG_SEPARATOR}"
+                f"{total_bytes}{MSG_SEPARATOR}{self._dest_dir}{MSG_SEPARATOR}"
+                f"{self._create_subdir}"
+            )
+            resp = self._wait_for()
+
+            if resp.startswith(MSG_FILE_UPLOAD_ERROR + MSG_SEPARATOR):
+                self.error.emit(resp.split(MSG_SEPARATOR, 1)[1])
+                return
+
+            if resp != MSG_FILE_UPLOAD_READY:
+                self.error.emit(f"Unexpected response to START: {resp[:80]}")
+                return
+
+            # Step 4: Send binary chunks
+            with open(self._local_path, "rb") as fh:
+                while chunk := fh.read(self._CHUNK_SIZE):
+                    self._send_fn(chunk)
+
+            # Step 5: FILE_UPLOAD_END; drain progress, await COMPLETE/ERROR
+            self._send_fn(MSG_FILE_UPLOAD_END)
+
+            while True:
+                resp = self._wait_for(timeout=self._END_TIMEOUT)
+
+                if resp.startswith(MSG_FILE_UPLOAD_PROGRESS + MSG_SEPARATOR):
+                    parts = resp.split(MSG_SEPARATOR)
+                    if len(parts) >= 3:
+                        try:
+                            self.progress.emit(int(parts[1]), int(parts[2]))
+                        except ValueError:
+                            pass
+                    continue
+
+                if resp.startswith(MSG_FILE_UPLOAD_COMPLETE + MSG_SEPARATOR):
+                    self.complete.emit(resp.split(MSG_SEPARATOR, 1)[1])
+                    return
+
+                if resp.startswith(MSG_FILE_UPLOAD_ERROR + MSG_SEPARATOR):
+                    self.error.emit(resp.split(MSG_SEPARATOR, 1)[1])
+                    return
+
+        except Exception as exc:
+            self.error.emit(str(exc))
+
+
+class UploadDestDialog(QDialog):
+    """Modal dialog for picking an upload destination directory on the worker.
+
+    Shows a ``RemoteFileBrowser`` for navigating the worker filesystem.
+    Navigating into any directory sets it as the destination. A checkbox
+    lets the user opt in to a ``sleap-rtc-downloads/`` subfolder.
+
+    Args:
+        send_fn: Callable that sends FS_* messages to the worker.
+        parent: Optional parent widget.
+    """
+
+    def __init__(
+        self,
+        send_fn: "Callable[[str], None]",
+        parent: QWidget | None = None,
+    ):
+        super().__init__(parent)
+        self.setWindowTitle("Choose Upload Destination")
+        self.setMinimumSize(720, 520)
+        self._dest_dir: str | None = None
+        self._browser: RemoteFileBrowser | None = None
+        self._setup_ui(send_fn)
+
+    def _setup_ui(self, send_fn):
+        layout = QVBoxLayout(self)
+        layout.setSpacing(10)
+
+        info = QLabel(
+            "Navigate to the directory where the file should be uploaded.\n"
+            "Click any folder to select it as the destination."
+        )
+        info.setWordWrap(True)
+        info.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(info)
+
+        self._browser = RemoteFileBrowser(
+            send_fn=send_fn, file_filter="", directory_mode=True
+        )
+        self._browser.directory_entered.connect(self._on_directory_entered)
+        self._browser.setMinimumHeight(300)
+        layout.addWidget(self._browser)
+
+        # Selected destination path
+        layout.addWidget(QLabel("Destination:"))
+        self._dir_label = QLineEdit()
+        self._dir_label.setReadOnly(True)
+        self._dir_label.setPlaceholderText("No directory selected")
+        self._dir_label.setStyleSheet("color: gray;")
+        layout.addWidget(self._dir_label)
+
+        # Subfolder option
+        self._subdir_check = QCheckBox(
+            "Create `sleap_rtc_downloads` subfolder inside the selected directory"
+        )
+        self._subdir_check.setToolTip(
+            "When checked, a 'sleap_rtc_downloads' folder will be created inside "
+            "the selected directory and the file will be saved there."
+        )
+        self._subdir_check.toggled.connect(lambda _: self._update_dest_label())
+        layout.addWidget(self._subdir_check)
+
+        separator = QFrame()
+        separator.setFrameShape(QFrame.HLine)
+        separator.setFrameShadow(QFrame.Sunken)
+        layout.addWidget(separator)
+
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        btn_layout.addWidget(cancel_btn)
+
+        self._ok_btn = QPushButton("Use This Directory")
+        self._ok_btn.setEnabled(False)
+        self._ok_btn.clicked.connect(self.accept)
+        btn_layout.addWidget(self._ok_btn)
+
+        layout.addLayout(btn_layout)
+
+    _SUBDIR_NAME = "sleap_rtc_downloads"
+
+    def _on_directory_entered(self, path: str):
+        self._dest_dir = path
+        self._update_dest_label()
+        self._ok_btn.setEnabled(True)
+
+    def _update_dest_label(self, _=None):
+        if self._dest_dir is None:
+            return
+        display = self._dest_dir
+        if self._subdir_check.isChecked():
+            sep = "" if self._dest_dir.endswith("/") else "/"
+            display = f"{self._dest_dir}{sep}{self._SUBDIR_NAME}"
+        self._dir_label.setText(display)
+        self._dir_label.setStyleSheet("color: green; font-weight: bold;")
+        self._dir_label.setCursorPosition(len(display))
+
+    def get_dest_dir(self) -> str | None:
+        """Return the selected destination directory path."""
+        return self._dest_dir
+
+    def get_create_subdir(self) -> bool:
+        """Return whether the user wants a sleap-rtc-downloads/ subfolder."""
+        return self._subdir_check.isChecked()
+
+
 class SlpPathDialog(QDialog):
     """Dialog for resolving the SLP file path on the worker.
 
     Shown when the local SLP path doesn't exist on the remote worker,
     prompting the user to provide the correct worker-side path.
 
+    For ``.pkg.slp`` files an additional "Upload file to worker..." button
+    is shown, letting the user transfer the file directly over the data
+    channel.
+
     Args:
         local_path: The local SLP path that was rejected by the worker.
         error_message: Error message from the worker explaining the rejection.
-        send_fn: Optional callable to send FS_* messages to the worker.
-            When provided, a collapsible remote file browser panel is shown
-            allowing the user to browse the worker's filesystem.
+        send_fn: Optional callable to send messages to the worker.
+            When provided, a remote file browser panel and upload button
+            are shown.
+        on_browser_changed: Optional callback invoked with the currently
+            active ``RemoteFileBrowser`` (or ``None``) whenever the active
+            browser changes (e.g. when the upload dest dialog opens/closes).
+            Used by ``presubmission.py`` to keep FS_* response routing
+            pointed at the right widget.
         parent: Optional parent widget.
     """
+
+    # Thread-safe signal for routing FILE_UPLOAD_* messages from asyncio thread
+    _upload_response_signal = Signal(str)
 
     def __init__(
         self,
         local_path: str,
         error_message: str,
         send_fn: "Callable[[str], None] | None" = None,
+        on_browser_changed: "Callable[[RemoteFileBrowser | None], None] | None" = None,
         parent: QWidget | None = None,
     ):
         super().__init__(parent)
@@ -779,6 +1043,20 @@ class SlpPathDialog(QDialog):
         self._send_fn = send_fn
         self._browser: RemoteFileBrowser | None = None
         self._error_message = error_message
+        self._local_path = local_path
+        self._on_browser_changed = on_browser_changed
+
+        # Upload state
+        self._upload_queue: _queue_module.Queue = _queue_module.Queue()
+        self._upload_thread: _UploadThread | None = None
+        self._upload_btn: QPushButton | None = None
+        self._progress_bar: QProgressBar | None = None
+
+        self._upload_response_signal.connect(
+            self._on_upload_response_received,
+            Qt.ConnectionType.QueuedConnection,
+        )
+
         self._setup_ui(local_path, error_message)
 
     def _setup_ui(self, local_path: str, error_message: str):
@@ -820,6 +1098,23 @@ class SlpPathDialog(QDialog):
         form.addRow("Worker path:", worker_layout)
 
         layout.addLayout(form)
+
+        # Upload button — only for .pkg.slp with an active connection
+        is_pkg_slp = local_path.lower().endswith(".pkg.slp")
+        if is_pkg_slp and self._send_fn is not None:
+            self._upload_btn = QPushButton("Upload file to worker...")
+            self._upload_btn.setToolTip(
+                "Transfer this .pkg.slp file directly to the worker over the "
+                "data channel."
+            )
+            self._upload_btn.clicked.connect(self._on_upload_clicked)
+            layout.addWidget(self._upload_btn)
+
+            self._progress_bar = QProgressBar()
+            self._progress_bar.setVisible(False)
+            self._progress_bar.setMinimum(0)
+            self._progress_bar.setMaximum(100)
+            layout.addWidget(self._progress_bar)
 
         # Collapsible file browser panel (only when send_fn is provided)
         if self._send_fn is not None:
@@ -889,6 +1184,194 @@ class SlpPathDialog(QDialog):
     def get_worker_path(self) -> str | None:
         """Get the worker-side SLP path entered by the user."""
         return self._worker_path
+
+    # ------------------------------------------------------------------
+    # Upload — thread-safe response routing
+    # ------------------------------------------------------------------
+
+    def on_upload_response(self, message: str) -> None:
+        """Route a FILE_UPLOAD_* response from any thread.
+
+        May be called from the asyncio/WebRTC thread.  Emits a Qt signal
+        so the actual handling runs on the Qt main thread.
+        """
+        self._upload_response_signal.emit(message)
+
+    def _on_upload_response_received(self, message: str) -> None:
+        """Qt slot: feed the response into the upload thread's queue."""
+        self._upload_queue.put(message)
+
+    # ------------------------------------------------------------------
+    # Upload — UI actions
+    # ------------------------------------------------------------------
+
+    def _on_upload_clicked(self) -> None:
+        """Open the destination-picker and, if confirmed, start the upload."""
+        dest_dialog = UploadDestDialog(send_fn=self._send_fn, parent=self)
+
+        # Redirect FS_* routing to the dest dialog's browser while it's open
+        if self._on_browser_changed is not None:
+            self._on_browser_changed(dest_dialog._browser)
+
+        dest_dialog._browser.load_mounts()
+        accepted = dest_dialog.exec()
+
+        # Restore FS_* routing to the main browser (or None)
+        if self._on_browser_changed is not None:
+            self._on_browser_changed(self._browser)
+
+        if not accepted or dest_dialog.get_dest_dir() is None:
+            return
+
+        dest_dir = dest_dialog.get_dest_dir()
+        create_subdir = dest_dialog.get_create_subdir()
+
+        # Show tiered time-estimate warning before starting
+        if not self._confirm_upload(dest_dir, create_subdir):
+            return
+
+        self._start_upload(dest_dir, "1" if create_subdir else "0")
+
+    def _confirm_upload(self, dest_dir: str, create_subdir: bool) -> bool:
+        """Compute estimated transfer time, show a tiered warning, and ask
+        the user to confirm or cancel before the upload starts.
+
+        Returns:
+            True if the user confirmed, False if they cancelled.
+        """
+        from pathlib import Path
+
+        try:
+            file_size = Path(self._local_path).stat().st_size
+        except OSError:
+            file_size = 0
+
+        # Estimate at 10 Mbps (1.25 MB/s)
+        est_sec = file_size / (10_000_000 / 8) if file_size else 0
+        est_min = max(1, round(est_sec / 60))
+
+        mb = file_size / (1024 * 1024)
+        size_str = f"{mb:.0f} MB" if mb < 1024 else f"{mb / 1024:.1f} GB"
+
+        if file_size < 500 * 1024 * 1024:
+            suffix = ""
+        elif file_size < 2 * 1024 * 1024 * 1024:
+            suffix = " — this may take a while"
+        else:
+            suffix = " — consider using a shared filesystem if available"
+
+        time_str = f"~{est_min} min{suffix}"
+
+        dest_display = dest_dir
+        if create_subdir:
+            dest_display = dest_dir.rstrip("/") + "/sleap_rtc_downloads/"
+
+        from qtpy.QtWidgets import (
+            QDialog, QDialogButtonBox, QLabel, QTextEdit, QVBoxLayout,
+        )
+        from qtpy.QtGui import QFont
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Confirm Upload")
+        dlg.setMinimumWidth(480)
+        layout = QVBoxLayout(dlg)
+        layout.setSpacing(8)
+
+        header = QLabel(
+            f"Upload <b>{Path(self._local_path).name}</b> ({size_str}) to worker?"
+        )
+        header.setTextFormat(Qt.TextFormat.RichText)
+        layout.addWidget(header)
+
+        dest_label = QLabel("<b>Destination:</b>")
+        dest_label.setTextFormat(Qt.TextFormat.RichText)
+        layout.addWidget(dest_label)
+
+        path_box = QTextEdit()
+        path_box.setReadOnly(True)
+        path_box.setPlainText(dest_display)
+        mono = QFont("Courier")
+        mono.setStyleHint(QFont.StyleHint.Monospace)
+        path_box.setFont(mono)
+        path_box.setFixedHeight(60)
+        layout.addWidget(path_box)
+
+        time_label = QLabel(f"<b>Estimated time:</b> {time_str}")
+        time_label.setTextFormat(Qt.TextFormat.RichText)
+        layout.addWidget(time_label)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok
+            | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.rejected.connect(dlg.reject)
+        buttons.accepted.connect(dlg.accept)
+        layout.addWidget(buttons)
+
+        return dlg.exec() == QDialog.DialogCode.Accepted
+
+    def _start_upload(self, dest_dir: str, create_subdir: str) -> None:
+        """Create and start the upload thread."""
+        # Disable button and show progress bar
+        if self._upload_btn is not None:
+            self._upload_btn.setEnabled(False)
+        if self._progress_bar is not None:
+            self._progress_bar.setValue(0)
+            self._progress_bar.setVisible(True)
+
+        self._error_label.setText("<b>Status:</b> Uploading…")
+        self._error_label.setStyleSheet("color: #2980b9;")
+
+        # Drain any stale messages from a previous attempt
+        while not self._upload_queue.empty():
+            try:
+                self._upload_queue.get_nowait()
+            except _queue_module.Empty:
+                break
+
+        self._upload_thread = _UploadThread(
+            send_fn=self._send_fn,
+            local_path=self._local_path,
+            dest_dir=dest_dir,
+            create_subdir=create_subdir,
+            response_queue=self._upload_queue,
+            parent=self,
+        )
+        self._upload_thread.progress.connect(self._on_upload_progress)
+        self._upload_thread.complete.connect(self._on_upload_complete)
+        self._upload_thread.error.connect(self._on_upload_error)
+        self._upload_thread.start()
+
+    def _on_upload_progress(self, bytes_sent: int, total: int) -> None:
+        """Update the progress bar."""
+        if self._progress_bar is not None and total > 0:
+            pct = min(100, int(bytes_sent * 100 / total))
+            self._progress_bar.setValue(pct)
+
+    def _on_upload_complete(self, worker_path: str) -> None:
+        """Auto-fill the worker path field and enable Continue."""
+        if self._progress_bar is not None:
+            self._progress_bar.setValue(100)
+            self._progress_bar.setVisible(False)
+
+        self._path_edit.setText(worker_path)
+        self._error_label.setText("<b>Status:</b> Upload complete")
+        self._error_label.setStyleSheet("color: green;")
+
+        # Upload button stays disabled — path is filled, Continue is enabled
+        if self._upload_btn is not None:
+            self._upload_btn.setEnabled(False)
+
+    def _on_upload_error(self, reason: str) -> None:
+        """Show error message and re-enable the Upload button for retry."""
+        if self._progress_bar is not None:
+            self._progress_bar.setVisible(False)
+
+        self._error_label.setText(f"<b>Upload error:</b> {reason}")
+        self._error_label.setStyleSheet("color: #c0392b;")
+
+        if self._upload_btn is not None:
+            self._upload_btn.setEnabled(True)
 
 
 class PathResolutionDialog(QDialog):
@@ -1493,6 +1976,7 @@ class RemoteFileBrowser(QWidget):
 
     file_selected = Signal(str)
     response_received = Signal(str)
+    directory_entered = Signal(str)  # emitted when user navigates into a directory
 
     _SEPARATOR = "::"
     _COLUMN_WIDTH = 200
@@ -1502,11 +1986,13 @@ class RemoteFileBrowser(QWidget):
         self,
         send_fn: "Callable[[str], None]",
         file_filter: str = "",
+        directory_mode: bool = False,
         parent: QWidget | None = None,
     ):
         super().__init__(parent)
         self._send_fn = send_fn
         self._file_filter = file_filter
+        self._directory_mode = directory_mode
         self._allowed_extensions: set[str] = set()
         if file_filter:
             for pattern in file_filter.split(","):
@@ -1581,7 +2067,8 @@ class RemoteFileBrowser(QWidget):
         # Bottom bar: path + select button
         bottom = QHBoxLayout()
         self._path_bar = QLineEdit()
-        self._path_bar.setPlaceholderText("No file selected")
+        placeholder = "No directory selected" if self._directory_mode else "No file selected"
+        self._path_bar.setPlaceholderText(placeholder)
         self._path_bar.setReadOnly(True)
         self._select_button = QPushButton("Select")
         self._select_button.setEnabled(False)
@@ -1826,10 +2313,16 @@ class RemoteFileBrowser(QWidget):
             self._send_fn(
                 f"FS_LIST_DIR{self._SEPARATOR}{path}{self._SEPARATOR}0"
             )
-            self._selected_path = ""
-            self._path_bar.clear()
-            self._select_button.setEnabled(False)
             self._clear_preview()
+            self.directory_entered.emit(path)
+            if self._directory_mode:
+                self._selected_path = path
+                self._path_bar.setText(path)
+                self._select_button.setEnabled(True)
+            else:
+                self._selected_path = ""
+                self._path_bar.clear()
+                self._select_button.setEnabled(False)
 
         elif item_type == "directory":
             # Directory click: remove deeper columns, request listing
@@ -1838,13 +2331,23 @@ class RemoteFileBrowser(QWidget):
             self._send_fn(
                 f"FS_LIST_DIR{self._SEPARATOR}{path}{self._SEPARATOR}0"
             )
-            self._selected_path = ""
-            self._path_bar.clear()
-            self._select_button.setEnabled(False)
             self._clear_preview()
+            self.directory_entered.emit(path)
+            if self._directory_mode:
+                # In directory-pick mode, selecting a directory IS the action
+                self._selected_path = path
+                self._path_bar.setText(path)
+                self._select_button.setEnabled(True)
+            else:
+                self._selected_path = ""
+                self._path_bar.clear()
+                self._select_button.setEnabled(False)
 
         elif item_type == "file":
             # File click: highlight, show preview, update path bar
+            if self._directory_mode:
+                # In directory-pick mode, file clicks don't constitute a selection
+                return
             if col_idx >= 0:
                 self._remove_columns_after(col_idx)
             self._selected_path = path

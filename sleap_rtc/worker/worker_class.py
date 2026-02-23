@@ -73,6 +73,13 @@ from sleap_rtc.protocol import (
     MSG_JOB_STOP,
     MSG_JOB_CANCEL,
     MSG_CONTROL_COMMAND,
+    # Client-to-worker file upload
+    MSG_FILE_UPLOAD_CHECK,
+    MSG_FILE_UPLOAD_START,
+    MSG_FILE_UPLOAD_END,
+    MSG_FILE_UPLOAD_CACHE_HIT,
+    MSG_FILE_UPLOAD_READY,
+    MSG_FILE_UPLOAD_ERROR,
 )
 from sleap_rtc.jobs import (
     TrainJobSpec,
@@ -2644,6 +2651,33 @@ class RTCWorkerClient:
                     logging.info("Received train package (training mode)")
                     return
 
+                # ── Client-to-worker pkg.slp upload ──────────────────────
+                if message.startswith(MSG_FILE_UPLOAD_CHECK + MSG_SEPARATOR):
+                    parts = message.split(MSG_SEPARATOR)
+                    sha256, filename = parts[1], parts[2]
+                    cached = self.file_manager.check_upload_cache(sha256, filename)
+                    if cached:
+                        channel.send(
+                            f"{MSG_FILE_UPLOAD_CACHE_HIT}{MSG_SEPARATOR}{cached}"
+                        )
+                        logging.info(f"Upload cache hit for {filename}: {cached}")
+                    else:
+                        channel.send(MSG_FILE_UPLOAD_READY)
+                    return
+
+                if message.startswith(MSG_FILE_UPLOAD_START + MSG_SEPARATOR):
+                    parts = message.split(MSG_SEPARATOR)
+                    # FILE_UPLOAD_START::{filename}::{total_bytes}::{dest_dir}::{create_subdir}
+                    _, filename, total_bytes_str, dest_dir, create_subdir = parts[:5]
+                    await self.file_manager.start_upload_session(
+                        channel, filename, int(total_bytes_str), dest_dir, create_subdir
+                    )
+                    return
+
+                if message == MSG_FILE_UPLOAD_END:
+                    await self.file_manager.finish_upload_session(channel)
+                    return
+
                 if message == "END_OF_FILE":
                     logging.info("End of file transfer received.")
 
@@ -2802,6 +2836,12 @@ class RTCWorkerClient:
             elif isinstance(message, bytes):
                 if message == b"KEEP_ALIVE":
                     logging.info("Keep alive message received.")
+                    return
+
+                # Route binary data to the upload session when one is active;
+                # otherwise fall through to the legacy FILE_META accumulator.
+                if self.file_manager._upload_session is not None:
+                    self.file_manager.receive_upload_chunk(message)
                     return
 
                 file_name = list(self.received_files.keys())[0]
