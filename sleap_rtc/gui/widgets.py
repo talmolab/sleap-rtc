@@ -937,13 +937,12 @@ class UploadDestDialog(QDialog):
         layout.addWidget(self._browser)
 
         # Selected destination path
-        dest_form = QFormLayout()
+        layout.addWidget(QLabel("Destination:"))
         self._dir_label = QLineEdit()
         self._dir_label.setReadOnly(True)
         self._dir_label.setPlaceholderText("No directory selected")
         self._dir_label.setStyleSheet("color: gray;")
-        dest_form.addRow("Destination:", self._dir_label)
-        layout.addLayout(dest_form)
+        layout.addWidget(self._dir_label)
 
         # Subfolder option
         self._subdir_check = QCheckBox(
