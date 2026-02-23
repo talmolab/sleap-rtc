@@ -938,8 +938,10 @@ class UploadDestDialog(QDialog):
 
         # Selected destination path
         dest_form = QFormLayout()
-        self._dir_label = QLabel("<i style='color: gray;'>No directory selected</i>")
-        self._dir_label.setWordWrap(True)
+        self._dir_label = QLineEdit()
+        self._dir_label.setReadOnly(True)
+        self._dir_label.setPlaceholderText("No directory selected")
+        self._dir_label.setStyleSheet("color: gray;")
         dest_form.addRow("Destination:", self._dir_label)
         layout.addLayout(dest_form)
 
@@ -987,7 +989,9 @@ class UploadDestDialog(QDialog):
         if self._subdir_check.isChecked():
             sep = "" if self._dest_dir.endswith("/") else "/"
             display = f"{self._dest_dir}{sep}{self._SUBDIR_NAME}"
-        self._dir_label.setText(f"<b style='color: green;'>{display}</b>")
+        self._dir_label.setText(display)
+        self._dir_label.setStyleSheet("color: green; font-weight: bold;")
+        self._dir_label.setCursorPosition(len(display))
 
     def get_dest_dir(self) -> str | None:
         """Return the selected destination directory path."""
