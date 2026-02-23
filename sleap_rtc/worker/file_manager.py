@@ -213,7 +213,7 @@ class FileManager:
             filename: Base filename of the incoming file.
             total_bytes: Expected total file size in bytes.
             dest_dir: Absolute destination directory path on the worker.
-            create_subdir: "1" to create a sleap-rtc-downloads/ subfolder,
+            create_subdir: "1" to create a sleap_rtc_downloads/ subfolder,
                 "0" to write directly into dest_dir.
         """
         dest_path = Path(dest_dir)
@@ -227,13 +227,13 @@ class FileManager:
             return
 
         if create_subdir == "1":
-            dest_path = dest_path / "sleap-rtc-downloads"
+            dest_path = dest_path / "sleap_rtc_downloads"
             try:
                 dest_path.mkdir(parents=True, exist_ok=True)
             except OSError as e:
                 channel.send(
                     f"{MSG_FILE_UPLOAD_ERROR}{MSG_SEPARATOR}"
-                    f"Cannot create sleap-rtc-downloads/: {e}"
+                    f"Cannot create sleap_rtc_downloads/: {e}"
                 )
                 return
 

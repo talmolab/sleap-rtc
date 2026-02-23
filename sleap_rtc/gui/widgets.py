@@ -973,14 +973,14 @@ class UploadDestDialog(QDialog):
 
         layout.addLayout(btn_layout)
 
-    _SUBDIR_NAME = "sleap-rtc-downloads"
+    _SUBDIR_NAME = "sleap_rtc_downloads"
 
     def _on_directory_entered(self, path: str):
         self._dest_dir = path
         self._update_dest_label()
         self._ok_btn.setEnabled(True)
 
-    def _update_dest_label(self):
+    def _update_dest_label(self, _=None):
         if self._dest_dir is None:
             return
         display = self._dest_dir
@@ -1261,7 +1261,7 @@ class SlpPathDialog(QDialog):
 
         dest_display = dest_dir
         if create_subdir:
-            dest_display = dest_dir.rstrip("/") + "/sleap-rtc-downloads/"
+            dest_display = dest_dir.rstrip("/") + "/sleap_rtc_downloads/"
 
         msg_box_text = (
             f"Upload <b>{Path(self._local_path).name}</b> ({size_str}) "
