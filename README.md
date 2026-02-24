@@ -52,8 +52,8 @@ signaling_websocket = "ws://staging-server.example.com:8080"
 signaling_http = "http://staging-server.example.com:8001"
 
 [environments.production]
-signaling_websocket = "ws://ec2-54-176-92-10.us-west-1.compute.amazonaws.com:8080"
-signaling_http = "http://ec2-54-176-92-10.us-west-1.compute.amazonaws.com:8001"
+signaling_websocket = "wss://signaling.sleap.ai"
+signaling_http = "https://signaling.sleap.ai"
 ```
 
 ### Environment Variable Overrides
