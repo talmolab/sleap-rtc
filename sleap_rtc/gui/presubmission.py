@@ -48,6 +48,7 @@ def run_presubmission_checks(
     parent_widget=None,
     on_login_required: Callable[[], bool] | None = None,
     send_fn: "Callable[[str], None] | None" = None,
+    convert_fn: "Callable[[str], None] | None" = None,
 ) -> PresubmissionResult:
     """Run the complete pre-submission validation sequence.
 
@@ -109,7 +110,8 @@ def run_presubmission_checks(
 
     # Step 3: Check video paths
     path_result = check_video_paths(
-        slp_path, room_id, worker_id, parent_widget, send_fn=send_fn
+        slp_path, room_id, worker_id, parent_widget, send_fn=send_fn,
+        convert_fn=convert_fn,
     )
     if not path_result.success:
         return path_result
@@ -256,6 +258,7 @@ def check_video_paths(
     worker_id: str | None = None,
     parent_widget=None,
     send_fn: "Callable[[str], None] | None" = None,
+    convert_fn: "Callable[[str], None] | None" = None,
 ) -> PresubmissionResult:
     """Check if video paths exist on the worker.
 
@@ -285,6 +288,9 @@ def check_video_paths(
     Returns:
         PresubmissionResult with path mappings if successful.
     """
+    logger.debug(
+        f"check_video_paths: slp_path={slp_path!r} convert_fn={convert_fn}"
+    )
     import queue
     import threading
 
@@ -410,6 +416,7 @@ def check_video_paths(
                     error_message=error_msg,
                     send_fn=send_fn_dc,
                     on_browser_changed=_set_browser,
+                    convert_fn=convert_fn,
                     parent=parent_widget,
                 )
                 upload_dialog_ref[0] = dialog
