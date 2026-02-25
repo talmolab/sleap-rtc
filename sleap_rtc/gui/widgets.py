@@ -751,6 +751,66 @@ class RoomBrowserDialog(QDialog):
         return self._selected_room_id, self._selected_room_name
 
 
+def show_save_mapping_prompt(
+    local_dir: str,
+    worker_dir: str,
+    config,
+    parent_widget=None,
+) -> None:
+    """Show a Save / Skip prompt to persist a directory prefix mapping.
+
+    Silently returns without showing the dialog when the mapping already
+    exists in *config*.
+
+    Args:
+        local_dir: Local directory prefix (e.g. ``/Users/alice/data``).
+        worker_dir: Corresponding worker directory prefix.
+        config: ``Config`` instance used to check/save mappings.
+        parent_widget: Optional Qt parent for the dialog.
+    """
+    for m in config.get_path_mappings():
+        if m.local == local_dir and m.worker == worker_dir:
+            return
+
+    from qtpy.QtWidgets import QDialog, QDialogButtonBox, QLabel, QVBoxLayout, QLineEdit
+    from qtpy.QtGui import QFont
+
+    dlg = QDialog(parent_widget)
+    dlg.setWindowTitle("Save path mapping?")
+    dlg.setMinimumWidth(500)
+    layout = QVBoxLayout(dlg)
+    layout.setSpacing(6)
+
+    layout.addWidget(QLabel("Save path mapping for future use?"))
+
+    mono = QFont("Courier")
+    mono.setStyleHint(QFont.StyleHint.Monospace)
+
+    def _code_block(text: str) -> QLineEdit:
+        box = QLineEdit(text)
+        box.setReadOnly(True)
+        box.setFont(mono)
+        return box
+
+    layout.addWidget(_code_block(local_dir))
+
+    arrow = QLabel("↓")
+    arrow.setAlignment(Qt.AlignCenter)
+    layout.addWidget(arrow)
+
+    layout.addWidget(_code_block(worker_dir))
+
+    buttons = QDialogButtonBox()
+    buttons.addButton("Save", QDialogButtonBox.ButtonRole.AcceptRole)
+    buttons.addButton("Skip", QDialogButtonBox.ButtonRole.RejectRole)
+    buttons.accepted.connect(dlg.accept)
+    buttons.rejected.connect(dlg.reject)
+    layout.addWidget(buttons)
+
+    if dlg.exec() == QDialog.DialogCode.Accepted:
+        config.save_path_mapping(local_dir, worker_dir)
+
+
 class _ExportThread(QThread):
     """Background thread that exports a Labels object to a temp .pkg.slp file.
 
@@ -1067,6 +1127,7 @@ class SlpPathDialog(QDialog):
         send_fn: "Callable[[str], None] | None" = None,
         on_browser_changed: "Callable[[RemoteFileBrowser | None], None] | None" = None,
         convert_fn: "Callable[[str], None] | None" = None,
+        save_fn: "Callable[[str], None] | None" = None,
         parent: QWidget | None = None,
     ):
         super().__init__(parent)
@@ -1075,6 +1136,7 @@ class SlpPathDialog(QDialog):
         self._worker_path: str | None = None
         self._send_fn = send_fn
         self._convert_fn = convert_fn
+        self._save_fn = save_fn
         self._browser: RemoteFileBrowser | None = None
         self._error_message = error_message
         self._local_path = local_path
@@ -1098,6 +1160,12 @@ class SlpPathDialog(QDialog):
         )
 
         self._setup_ui(local_path, error_message)
+
+        # Auto-fill worker path from saved path mappings (if any match)
+        from sleap_rtc.config import get_config
+        translated = get_config().translate_path(local_path)
+        if translated:
+            self._path_edit.setText(translated)
 
     def _setup_ui(self, local_path: str, error_message: str):
         """Build the dialog UI."""
@@ -1139,16 +1207,40 @@ class SlpPathDialog(QDialog):
 
         layout.addLayout(form)
 
+        # ------------------------------------------------------------------
+        # Save-to-folder section (shown above upload/browse when callables
+        # are provided so the user can copy to a shared filesystem first)
+        # ------------------------------------------------------------------
+        self._save_status_label: QLabel | None = None
+        _any_save_btn = self._save_fn is not None or self._convert_fn is not None
+        if _any_save_btn:
+            save_row = QHBoxLayout()
+            save_row.addWidget(QLabel("Save to mounted filesystem:"))
+
+            if self._save_fn is not None:
+                self._save_slp_btn = QPushButton("Save as .slp")
+                self._save_slp_btn.clicked.connect(self._on_save_slp_clicked)
+                save_row.addWidget(self._save_slp_btn)
+
+            if self._convert_fn is not None:
+                self._save_pkg_slp_btn = QPushButton("Save as .pkg.slp")
+                self._save_pkg_slp_btn.clicked.connect(self._on_save_pkg_slp_clicked)
+                save_row.addWidget(self._save_pkg_slp_btn)
+
+            save_row.addStretch()
+
+            layout.addLayout(save_row)
+
+            self._save_status_label = QLabel("")
+            self._save_status_label.setWordWrap(True)
+            self._save_status_label.setAlignment(Qt.AlignCenter)
+            self._save_status_label.setVisible(False)
+            layout.addWidget(self._save_status_label)
+
         # Upload button — only for .pkg.slp with an active connection
         is_pkg_slp = local_path.lower().endswith(".pkg.slp")
         is_plain_slp = (
             not is_pkg_slp and local_path.lower().endswith(".slp")
-        )
-        from loguru import logger as _logger
-        _logger.debug(
-            f"SlpPathDialog._setup_ui: local_path={local_path!r} "
-            f"is_pkg_slp={is_pkg_slp} is_plain_slp={is_plain_slp} "
-            f"send_fn={self._send_fn} convert_fn={self._convert_fn}"
         )
         if is_pkg_slp and self._send_fn is not None:
             self._upload_btn = QPushButton("Upload file to worker...")
@@ -1250,11 +1342,96 @@ class SlpPathDialog(QDialog):
     def _on_accept(self):
         """Accept the dialog with the entered path."""
         self._worker_path = self._path_edit.text().strip()
+        self._prompt_save_mapping(self._local_path, self._worker_path)
         self.accept()
+
+    def _prompt_save_mapping(self, local_path: str, worker_path: str) -> None:
+        """Offer to save a directory prefix mapping after the user hits Continue.
+
+        Shows a small dialog only when the local and worker directories differ
+        and no existing mapping already covers this exact prefix pair.
+        """
+        from pathlib import Path
+        from sleap_rtc.config import get_config
+
+        local_dir = str(Path(local_path).parent)
+        worker_dir = str(Path(worker_path).parent)
+        if local_dir == worker_dir:
+            return
+        show_save_mapping_prompt(local_dir, worker_dir, get_config(), self)
 
     def get_worker_path(self) -> str | None:
         """Get the worker-side SLP path entered by the user."""
         return self._worker_path
+
+    # ------------------------------------------------------------------
+    # Save-to-folder handlers
+    # ------------------------------------------------------------------
+
+    def _on_save_slp_clicked(self) -> None:
+        """Save the labels as a plain .slp to a user-chosen folder."""
+        from pathlib import Path
+        from qtpy.QtWidgets import QFileDialog
+
+        chosen_dir = QFileDialog.getExistingDirectory(
+            self, "Choose save folder", ""
+        )
+        if not chosen_dir:
+            return
+
+        stem = Path(self._local_path).stem
+        output_path = str(Path(chosen_dir) / f"{stem}.slp")
+
+        if hasattr(self, "_save_slp_btn"):
+            self._save_slp_btn.setEnabled(False)
+        try:
+            self._save_fn(output_path)
+            self._show_save_status(
+                f"Saved to {output_path}. "
+                "Now use Browse worker filesystem to locate this file on the worker.",
+                error=False,
+            )
+        except Exception as exc:
+            self._show_save_status(f"Save error: {exc}", error=True)
+            if hasattr(self, "_save_slp_btn"):
+                self._save_slp_btn.setEnabled(True)
+
+    def _on_save_pkg_slp_clicked(self) -> None:
+        """Export labels as a .pkg.slp (embedded frames) to a user-chosen folder."""
+        from pathlib import Path
+        from qtpy.QtWidgets import QFileDialog
+
+        chosen_dir = QFileDialog.getExistingDirectory(
+            self, "Choose save folder", ""
+        )
+        if not chosen_dir:
+            return
+
+        stem = Path(self._local_path).stem
+        output_path = str(Path(chosen_dir) / f"{stem}.pkg.slp")
+
+        if hasattr(self, "_save_pkg_slp_btn"):
+            self._save_pkg_slp_btn.setEnabled(False)
+        try:
+            self._convert_fn(output_path)
+            self._show_save_status(
+                f"Saved to {output_path}. "
+                "Now use Browse worker filesystem to locate this file on the worker.",
+                error=False,
+            )
+        except Exception as exc:
+            self._show_save_status(f"Save error: {exc}", error=True)
+            if hasattr(self, "_save_pkg_slp_btn"):
+                self._save_pkg_slp_btn.setEnabled(True)
+
+    def _show_save_status(self, message: str, error: bool = False) -> None:
+        """Update the save status label below the save buttons."""
+        if self._save_status_label is None:
+            return
+        self._save_status_label.setText(message)
+        color = "#c0392b" if error else "#27ae60"
+        self._save_status_label.setStyleSheet(f"color: {color};")
+        self._save_status_label.setVisible(True)
 
     # ------------------------------------------------------------------
     # Upload — thread-safe response routing

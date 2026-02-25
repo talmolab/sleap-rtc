@@ -20,7 +20,21 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
 
+
 from loguru import logger
+
+
+@dataclass
+class PathMapping:
+    """A local→worker directory prefix mapping.
+
+    Attributes:
+        local: Absolute path prefix on the local machine.
+        worker: Corresponding absolute path prefix on the worker.
+    """
+
+    local: str
+    worker: str
 
 
 @dataclass
@@ -246,6 +260,112 @@ class Config:
         worker_config = self._config_data.get("worker", {})
         io_config = worker_config.get("io", {})
         return WorkerIOConfig.from_dict(io_config)
+
+    # ------------------------------------------------------------------
+    # Path mapping persistence
+    # ------------------------------------------------------------------
+
+    def _home_config_path(self) -> Path:
+        """Return the canonical home config path."""
+        return Path.home() / ".sleap-rtc" / "config.toml"
+
+    def _read_home_toml(self) -> dict:
+        """Read the home config file as a raw dict (empty dict if missing)."""
+        path = self._home_config_path()
+        if not path.exists():
+            return {}
+        with open(path, "rb") as f:
+            return tomllib.load(f)
+
+    def _write_home_toml(self, data: dict) -> None:
+        """Write a raw dict to the home config file, creating it if needed."""
+        import tomli_w  # lazy import — only needed for write operations
+
+        path = self._home_config_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "wb") as f:
+            tomli_w.dump(data, f)
+
+    def get_path_mappings(self) -> List[PathMapping]:
+        """Return all saved local→worker directory prefix mappings.
+
+        Returns:
+            List of PathMapping objects read from ~/.sleap-rtc/config.toml.
+        """
+        data = self._read_home_toml()
+        mappings = []
+        for entry in data.get("path_mappings", []):
+            if "local" in entry and "worker" in entry:
+                mappings.append(PathMapping(local=entry["local"], worker=entry["worker"]))
+        return mappings
+
+    def save_path_mapping(self, local: str, worker: str) -> None:
+        """Append a local→worker mapping to ~/.sleap-rtc/config.toml.
+
+        Does nothing if the exact pair already exists.
+
+        Args:
+            local: Local directory prefix.
+            worker: Corresponding worker directory prefix.
+        """
+        data = self._read_home_toml()
+        mappings = data.get("path_mappings", [])
+        for m in mappings:
+            if m.get("local") == local and m.get("worker") == worker:
+                logger.debug(f"Path mapping already exists: {local} → {worker}")
+                return
+        mappings.append({"local": local, "worker": worker})
+        data["path_mappings"] = mappings
+        self._write_home_toml(data)
+        logger.info(f"Saved path mapping: {local} → {worker}")
+
+    def remove_path_mapping(self, local: str, worker: str) -> None:
+        """Remove a local→worker mapping from ~/.sleap-rtc/config.toml.
+
+        Logs a warning if no matching entry is found.
+
+        Args:
+            local: Local directory prefix.
+            worker: Corresponding worker directory prefix.
+        """
+        data = self._read_home_toml()
+        mappings = data.get("path_mappings", [])
+        new_mappings = [
+            m for m in mappings
+            if not (m.get("local") == local and m.get("worker") == worker)
+        ]
+        if len(new_mappings) == len(mappings):
+            logger.warning(f"No path mapping found to remove: {local} → {worker}")
+            return
+        data["path_mappings"] = new_mappings
+        self._write_home_toml(data)
+        logger.info(f"Removed path mapping: {local} → {worker}")
+
+    def translate_path(self, local_path: str) -> Optional[str]:
+        """Translate a local path to a worker path using saved prefix mappings.
+
+        When multiple prefixes match, the longest (most specific) one wins.
+
+        Args:
+            local_path: Absolute path on the local machine.
+
+        Returns:
+            Translated worker path, or None if no mapping matches.
+        """
+        local_p = Path(local_path)
+        best_worker_path: Optional[str] = None
+        best_prefix_len = -1
+        for mapping in self.get_path_mappings():
+            local_prefix = Path(mapping.local)
+            try:
+                rel = local_p.relative_to(local_prefix)
+            except ValueError:
+                continue
+            prefix_len = len(str(local_prefix))
+            if prefix_len > best_prefix_len:
+                best_prefix_len = prefix_len
+                best_worker_path = str(Path(mapping.worker) / rel)
+        return best_worker_path
 
     def _apply_env_overrides(self) -> None:
         """Apply environment variable overrides.

@@ -3166,6 +3166,74 @@ def config_init(use_global, force):
     click.echo("See 'sleap-rtc config show' to view current settings.")
 
 
+# Path Mapping subcommands
+
+
+@config_group.command(name="add-path-mapping")
+@click.option("--local", "local_path", required=True, help="Local directory prefix.")
+@click.option("--worker", "worker_path", required=True, help="Worker directory prefix.")
+def config_add_path_mapping(local_path, worker_path):
+    """Add a local→worker directory prefix mapping.
+
+    Saves a path mapping to ~/.sleap-rtc/config.toml so that the worker path
+    field is auto-filled in future job submissions.
+
+    Examples:
+        sleap-rtc config add-path-mapping --local /Users/alice/data --worker /root/vast/data
+    """
+    from sleap_rtc.config import get_config
+
+    config = get_config()
+    config.save_path_mapping(local_path, worker_path)
+    click.echo(f"Saved path mapping: {local_path} → {worker_path}")
+
+
+@config_group.command(name="remove-path-mapping")
+@click.option("--local", "local_path", required=True, help="Local directory prefix.")
+@click.option("--worker", "worker_path", required=True, help="Worker directory prefix.")
+def config_remove_path_mapping(local_path, worker_path):
+    """Remove a local→worker directory prefix mapping.
+
+    Removes a matching mapping from ~/.sleap-rtc/config.toml.
+
+    Examples:
+        sleap-rtc config remove-path-mapping --local /Users/alice/data --worker /root/vast/data
+    """
+    from sleap_rtc.config import get_config
+
+    config = get_config()
+    mappings_before = config.get_path_mappings()
+    config.remove_path_mapping(local_path, worker_path)
+    mappings_after = config.get_path_mappings()
+    if len(mappings_after) < len(mappings_before):
+        click.echo(f"Removed path mapping: {local_path} → {worker_path}")
+    else:
+        click.echo(
+            click.style("Warning: ", fg="yellow")
+            + f"No matching mapping found for {local_path} → {worker_path}"
+        )
+
+
+@config_group.command(name="list-path-mappings")
+def config_list_path_mappings():
+    """List all saved local→worker directory prefix mappings.
+
+    Reads mappings from ~/.sleap-rtc/config.toml and prints them.
+
+    Example:
+        sleap-rtc config list-path-mappings
+    """
+    from sleap_rtc.config import get_config
+
+    config = get_config()
+    mappings = config.get_path_mappings()
+    if not mappings:
+        click.echo("No path mappings configured.")
+        return
+    for m in mappings:
+        click.echo(f"{m.local} → {m.worker}")
+
+
 # =============================================================================
 # Deprecated Top-Level Aliases for Test Commands
 # =============================================================================
