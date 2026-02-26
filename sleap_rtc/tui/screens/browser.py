@@ -6,6 +6,7 @@ or tree view, and connects to workers via WebRTC.
 
 import asyncio
 import os
+import platform
 import subprocess
 from typing import Optional
 
@@ -1073,24 +1074,20 @@ class BrowserScreen(Screen):
             True if successful, False otherwise.
         """
         try:
-            # macOS
-            if os.uname().sysname == "Darwin":
-                subprocess.run(
-                    ["pbcopy"],
-                    input=text.encode(),
-                    check=True,
-                    capture_output=True,
-                )
-                return True
-            # Linux with xclip
+            _sys = platform.system()
+            if _sys == "Darwin":
+                _clip_cmd = ["pbcopy"]
+            elif _sys == "Windows":
+                _clip_cmd = ["clip"]
             else:
-                subprocess.run(
-                    ["xclip", "-selection", "clipboard"],
-                    input=text.encode(),
-                    check=True,
-                    capture_output=True,
-                )
-                return True
+                _clip_cmd = ["xclip", "-selection", "clipboard"]
+            subprocess.run(
+                _clip_cmd,
+                input=text.encode(),
+                check=True,
+                capture_output=True,
+            )
+            return True
         except (subprocess.CalledProcessError, FileNotFoundError, OSError):
             return False
 

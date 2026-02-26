@@ -6,6 +6,7 @@ and polling for JWT completion.
 
 import asyncio
 import os
+import platform
 import secrets
 from typing import Optional
 
@@ -165,12 +166,15 @@ class LoginScreen(Screen):
         try:
             import subprocess
 
+            _sys = platform.system()
+            if _sys == "Darwin":
+                _clip_cmd = ["pbcopy"]
+            elif _sys == "Windows":
+                _clip_cmd = ["clip"]
+            else:
+                _clip_cmd = ["xclip", "-selection", "clipboard"]
             subprocess.run(
-                (
-                    ["pbcopy"]
-                    if os.uname().sysname == "Darwin"
-                    else ["xclip", "-selection", "clipboard"]
-                ),
+                _clip_cmd,
                 input=self.login_url.encode(),
                 check=False,
                 capture_output=True,

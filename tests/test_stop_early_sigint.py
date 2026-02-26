@@ -11,6 +11,7 @@ so that os.killpg is safe to call without affecting the worker process itself.
 
 import json
 import signal
+import sys
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch, call
 
@@ -79,6 +80,7 @@ class TestStopRunningJob:
         executor._running_process = mock_process
         return executor
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="Unix process groups only")
     def test_stop_running_job_kills_process_group_with_sigint(self):
         """stop_running_job must send SIGINT to the process group, not just the PID."""
         executor = self._make_executor()
@@ -87,6 +89,7 @@ class TestStopRunningJob:
             executor.stop_running_job()
         mock_killpg.assert_called_once_with(99999, signal.SIGINT)
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="Unix process groups only")
     def test_cancel_running_job_kills_process_group_with_sigterm(self):
         """cancel_running_job must send SIGTERM to the process group, not just the PID."""
         executor = self._make_executor()

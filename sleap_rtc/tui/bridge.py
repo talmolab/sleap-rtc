@@ -8,6 +8,8 @@ HTTP/WebSocket bridge with direct async communication.
 import asyncio
 import json
 import logging
+import tempfile
+from pathlib import Path
 from typing import Optional, Callable, Any
 
 import websockets
@@ -248,10 +250,13 @@ class WebRTCBridge:
                 # Debug: dump discovery response to file for inspection
                 import json as _json
 
-                with open("/tmp/tui-discovery-debug.json", "w") as _f:
+                _debug_path = (
+                    Path(tempfile.gettempdir()) / "tui-discovery-debug.json"
+                )
+                with open(_debug_path, "w") as _f:
                     _json.dump(workers, _f, indent=2)
                     logging.info(
-                        "Wrote discovery response to /tmp/tui-discovery-debug.json"
+                        f"Wrote discovery response to {_debug_path}"
                     )
                 return workers
             else:
