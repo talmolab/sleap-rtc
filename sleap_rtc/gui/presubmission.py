@@ -48,6 +48,8 @@ def run_presubmission_checks(
     parent_widget=None,
     on_login_required: Callable[[], bool] | None = None,
     send_fn: "Callable[[str], None] | None" = None,
+    convert_fn: "Callable[[str], None] | None" = None,
+    save_fn: "Callable[[str], None] | None" = None,
 ) -> PresubmissionResult:
     """Run the complete pre-submission validation sequence.
 
@@ -109,7 +111,8 @@ def run_presubmission_checks(
 
     # Step 3: Check video paths
     path_result = check_video_paths(
-        slp_path, room_id, worker_id, parent_widget, send_fn=send_fn
+        slp_path, room_id, worker_id, parent_widget, send_fn=send_fn,
+        convert_fn=convert_fn, save_fn=save_fn,
     )
     if not path_result.success:
         return path_result
@@ -256,6 +259,8 @@ def check_video_paths(
     worker_id: str | None = None,
     parent_widget=None,
     send_fn: "Callable[[str], None] | None" = None,
+    convert_fn: "Callable[[str], None] | None" = None,
+    save_fn: "Callable[[str], None] | None" = None,
 ) -> PresubmissionResult:
     """Check if video paths exist on the worker.
 
@@ -410,6 +415,8 @@ def check_video_paths(
                     error_message=error_msg,
                     send_fn=send_fn_dc,
                     on_browser_changed=_set_browser,
+                    convert_fn=convert_fn,
+                    save_fn=save_fn,
                     parent=parent_widget,
                 )
                 upload_dialog_ref[0] = dialog
@@ -444,6 +451,18 @@ def check_video_paths(
                     logger.info(
                         f"User resolved {len(resolved_paths)} video paths"
                     )
+                    # Offer to save directory prefix mappings for each resolved pair
+                    from pathlib import Path
+                    from sleap_rtc.config import get_config
+                    from sleap_rtc.gui.widgets import show_save_mapping_prompt
+                    _cfg = get_config()
+                    for orig, worker in resolved_paths.items():
+                        local_dir = str(Path(orig).parent)
+                        worker_dir = str(Path(worker).parent)
+                        if local_dir != worker_dir:
+                            show_save_mapping_prompt(
+                                local_dir, worker_dir, _cfg, parent_widget
+                            )
                     dialog_response_q.put(resolved_paths)
                 else:
                     logger.info("User cancelled video path resolution")

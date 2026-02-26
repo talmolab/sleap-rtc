@@ -751,6 +751,98 @@ class RoomBrowserDialog(QDialog):
         return self._selected_room_id, self._selected_room_name
 
 
+def show_save_mapping_prompt(
+    local_dir: str,
+    worker_dir: str,
+    config,
+    parent_widget=None,
+) -> None:
+    """Show a Save / Skip prompt to persist a directory prefix mapping.
+
+    Silently returns without showing the dialog when the mapping already
+    exists in *config*.
+
+    Args:
+        local_dir: Local directory prefix (e.g. ``/Users/alice/data``).
+        worker_dir: Corresponding worker directory prefix.
+        config: ``Config`` instance used to check/save mappings.
+        parent_widget: Optional Qt parent for the dialog.
+    """
+    for m in config.get_path_mappings():
+        if m.local == local_dir and m.worker == worker_dir:
+            return
+
+    from qtpy.QtWidgets import QDialog, QDialogButtonBox, QLabel, QVBoxLayout, QLineEdit
+    from qtpy.QtGui import QFont
+
+    dlg = QDialog(parent_widget)
+    dlg.setWindowTitle("Save path mapping?")
+    dlg.setMinimumWidth(500)
+    layout = QVBoxLayout(dlg)
+    layout.setSpacing(6)
+
+    layout.addWidget(QLabel("Save path mapping for future use?"))
+
+    mono = QFont("Courier")
+    mono.setStyleHint(QFont.StyleHint.Monospace)
+
+    def _code_block(text: str) -> QLineEdit:
+        box = QLineEdit(text)
+        box.setReadOnly(True)
+        box.setFont(mono)
+        return box
+
+    layout.addWidget(_code_block(local_dir))
+
+    arrow = QLabel("↓")
+    arrow.setAlignment(Qt.AlignCenter)
+    layout.addWidget(arrow)
+
+    layout.addWidget(_code_block(worker_dir))
+
+    buttons = QDialogButtonBox()
+    buttons.addButton("Save", QDialogButtonBox.ButtonRole.AcceptRole)
+    buttons.addButton("Skip", QDialogButtonBox.ButtonRole.RejectRole)
+    buttons.accepted.connect(dlg.accept)
+    buttons.rejected.connect(dlg.reject)
+    layout.addWidget(buttons)
+
+    if dlg.exec() == QDialog.DialogCode.Accepted:
+        config.save_path_mapping(local_dir, worker_dir)
+
+
+class _ExportThread(QThread):
+    """Background thread that exports a Labels object to a temp .pkg.slp file.
+
+    Calls ``convert_fn(output_path)`` on a worker thread so the Qt main thread
+    stays responsive during what can be a slow embed-and-write operation.
+
+    Signals:
+        complete: Emitted with the path of the written temp file on success.
+        error: Emitted with a human-readable reason on failure.
+    """
+
+    complete = Signal(str)
+    error = Signal(str)
+
+    def __init__(
+        self,
+        convert_fn: "Callable[[str], None]",
+        temp_path: str,
+        parent=None,
+    ):
+        super().__init__(parent)
+        self._convert_fn = convert_fn
+        self._temp_path = temp_path
+
+    def run(self):
+        try:
+            self._convert_fn(self._temp_path)
+            self.complete.emit(self._temp_path)
+        except Exception as exc:
+            self.error.emit(str(exc))
+
+
 class _UploadThread(QThread):
     """Background thread that executes the client-to-worker upload protocol.
 
@@ -1034,6 +1126,8 @@ class SlpPathDialog(QDialog):
         error_message: str,
         send_fn: "Callable[[str], None] | None" = None,
         on_browser_changed: "Callable[[RemoteFileBrowser | None], None] | None" = None,
+        convert_fn: "Callable[[str], None] | None" = None,
+        save_fn: "Callable[[str], None] | None" = None,
         parent: QWidget | None = None,
     ):
         super().__init__(parent)
@@ -1041,6 +1135,8 @@ class SlpPathDialog(QDialog):
         self.setMinimumSize(700, 500)
         self._worker_path: str | None = None
         self._send_fn = send_fn
+        self._convert_fn = convert_fn
+        self._save_fn = save_fn
         self._browser: RemoteFileBrowser | None = None
         self._error_message = error_message
         self._local_path = local_path
@@ -1049,8 +1145,14 @@ class SlpPathDialog(QDialog):
         # Upload state
         self._upload_queue: _queue_module.Queue = _queue_module.Queue()
         self._upload_thread: _UploadThread | None = None
+        self._export_thread: _ExportThread | None = None
         self._upload_btn: QPushButton | None = None
+        self._export_btn: QPushButton | None = None
         self._progress_bar: QProgressBar | None = None
+        self._temp_pkg_path: str | None = None
+        # Saved from dest dialog for use after async export completes
+        self._pending_dest_dir: str | None = None
+        self._pending_create_subdir: str = "0"
 
         self._upload_response_signal.connect(
             self._on_upload_response_received,
@@ -1058,6 +1160,12 @@ class SlpPathDialog(QDialog):
         )
 
         self._setup_ui(local_path, error_message)
+
+        # Auto-fill worker path from saved path mappings (if any match)
+        from sleap_rtc.config import get_config
+        translated = get_config().translate_path(local_path)
+        if translated:
+            self._path_edit.setText(translated)
 
     def _setup_ui(self, local_path: str, error_message: str):
         """Build the dialog UI."""
@@ -1099,8 +1207,41 @@ class SlpPathDialog(QDialog):
 
         layout.addLayout(form)
 
+        # ------------------------------------------------------------------
+        # Save-to-folder section (shown above upload/browse when callables
+        # are provided so the user can copy to a shared filesystem first)
+        # ------------------------------------------------------------------
+        self._save_status_label: QLabel | None = None
+        _any_save_btn = self._save_fn is not None or self._convert_fn is not None
+        if _any_save_btn:
+            save_row = QHBoxLayout()
+            save_row.addWidget(QLabel("Save to mounted filesystem:"))
+
+            if self._save_fn is not None:
+                self._save_slp_btn = QPushButton("Save as .slp")
+                self._save_slp_btn.clicked.connect(self._on_save_slp_clicked)
+                save_row.addWidget(self._save_slp_btn)
+
+            if self._convert_fn is not None:
+                self._save_pkg_slp_btn = QPushButton("Save as .pkg.slp")
+                self._save_pkg_slp_btn.clicked.connect(self._on_save_pkg_slp_clicked)
+                save_row.addWidget(self._save_pkg_slp_btn)
+
+            save_row.addStretch()
+
+            layout.addLayout(save_row)
+
+            self._save_status_label = QLabel("")
+            self._save_status_label.setWordWrap(True)
+            self._save_status_label.setAlignment(Qt.AlignCenter)
+            self._save_status_label.setVisible(False)
+            layout.addWidget(self._save_status_label)
+
         # Upload button — only for .pkg.slp with an active connection
         is_pkg_slp = local_path.lower().endswith(".pkg.slp")
+        is_plain_slp = (
+            not is_pkg_slp and local_path.lower().endswith(".slp")
+        )
         if is_pkg_slp and self._send_fn is not None:
             self._upload_btn = QPushButton("Upload file to worker...")
             self._upload_btn.setToolTip(
@@ -1110,6 +1251,28 @@ class SlpPathDialog(QDialog):
             self._upload_btn.clicked.connect(self._on_upload_clicked)
             layout.addWidget(self._upload_btn)
 
+        # Export+upload button — for plain .slp when convert_fn is provided
+        if is_plain_slp and self._convert_fn is not None and self._send_fn is not None:
+            self._export_btn = QPushButton(
+                "Export as .pkg.slp and upload to worker..."
+            )
+            self._export_btn.setToolTip(
+                "Embed video frames locally and transfer the packaged file "
+                "directly to the worker over the data channel. "
+                "No shared filesystem required."
+            )
+            self._export_btn.clicked.connect(self._on_export_upload_clicked)
+            layout.addWidget(self._export_btn)
+
+        # Shared progress bar (used by both upload and export→upload flows)
+        if (
+            (is_pkg_slp and self._send_fn is not None)
+            or (
+                is_plain_slp
+                and self._convert_fn is not None
+                and self._send_fn is not None
+            )
+        ):
             self._progress_bar = QProgressBar()
             self._progress_bar.setVisible(False)
             self._progress_bar.setMinimum(0)
@@ -1179,11 +1342,96 @@ class SlpPathDialog(QDialog):
     def _on_accept(self):
         """Accept the dialog with the entered path."""
         self._worker_path = self._path_edit.text().strip()
+        self._prompt_save_mapping(self._local_path, self._worker_path)
         self.accept()
+
+    def _prompt_save_mapping(self, local_path: str, worker_path: str) -> None:
+        """Offer to save a directory prefix mapping after the user hits Continue.
+
+        Shows a small dialog only when the local and worker directories differ
+        and no existing mapping already covers this exact prefix pair.
+        """
+        from pathlib import Path
+        from sleap_rtc.config import get_config
+
+        local_dir = str(Path(local_path).parent)
+        worker_dir = str(Path(worker_path).parent)
+        if local_dir == worker_dir:
+            return
+        show_save_mapping_prompt(local_dir, worker_dir, get_config(), self)
 
     def get_worker_path(self) -> str | None:
         """Get the worker-side SLP path entered by the user."""
         return self._worker_path
+
+    # ------------------------------------------------------------------
+    # Save-to-folder handlers
+    # ------------------------------------------------------------------
+
+    def _on_save_slp_clicked(self) -> None:
+        """Save the labels as a plain .slp to a user-chosen folder."""
+        from pathlib import Path
+        from qtpy.QtWidgets import QFileDialog
+
+        chosen_dir = QFileDialog.getExistingDirectory(
+            self, "Choose save folder", ""
+        )
+        if not chosen_dir:
+            return
+
+        stem = Path(self._local_path).stem
+        output_path = str(Path(chosen_dir) / f"{stem}.slp")
+
+        if hasattr(self, "_save_slp_btn"):
+            self._save_slp_btn.setEnabled(False)
+        try:
+            self._save_fn(output_path)
+            self._show_save_status(
+                f"Saved to {output_path}. "
+                "Now use Browse worker filesystem to locate this file on the worker.",
+                error=False,
+            )
+        except Exception as exc:
+            self._show_save_status(f"Save error: {exc}", error=True)
+            if hasattr(self, "_save_slp_btn"):
+                self._save_slp_btn.setEnabled(True)
+
+    def _on_save_pkg_slp_clicked(self) -> None:
+        """Export labels as a .pkg.slp (embedded frames) to a user-chosen folder."""
+        from pathlib import Path
+        from qtpy.QtWidgets import QFileDialog
+
+        chosen_dir = QFileDialog.getExistingDirectory(
+            self, "Choose save folder", ""
+        )
+        if not chosen_dir:
+            return
+
+        stem = Path(self._local_path).stem
+        output_path = str(Path(chosen_dir) / f"{stem}.pkg.slp")
+
+        if hasattr(self, "_save_pkg_slp_btn"):
+            self._save_pkg_slp_btn.setEnabled(False)
+        try:
+            self._convert_fn(output_path)
+            self._show_save_status(
+                f"Saved to {output_path}. "
+                "Now use Browse worker filesystem to locate this file on the worker.",
+                error=False,
+            )
+        except Exception as exc:
+            self._show_save_status(f"Save error: {exc}", error=True)
+            if hasattr(self, "_save_pkg_slp_btn"):
+                self._save_pkg_slp_btn.setEnabled(True)
+
+    def _show_save_status(self, message: str, error: bool = False) -> None:
+        """Update the save status label below the save buttons."""
+        if self._save_status_label is None:
+            return
+        self._save_status_label.setText(message)
+        color = "#c0392b" if error else "#27ae60"
+        self._save_status_label.setStyleSheet(f"color: {color};")
+        self._save_status_label.setVisible(True)
 
     # ------------------------------------------------------------------
     # Upload — thread-safe response routing
@@ -1200,6 +1448,92 @@ class SlpPathDialog(QDialog):
     def _on_upload_response_received(self, message: str) -> None:
         """Qt slot: feed the response into the upload thread's queue."""
         self._upload_queue.put(message)
+
+    # ------------------------------------------------------------------
+    # Upload — UI actions
+    # ------------------------------------------------------------------
+
+    # ------------------------------------------------------------------
+    # Export → Upload flow  (plain .slp → temp .pkg.slp → worker)
+    # ------------------------------------------------------------------
+
+    def _on_export_upload_clicked(self) -> None:
+        """Open destination picker, confirm, then export and upload."""
+        dest_dialog = UploadDestDialog(send_fn=self._send_fn, parent=self)
+
+        if self._on_browser_changed is not None:
+            self._on_browser_changed(dest_dialog._browser)
+
+        dest_dialog._browser.load_mounts()
+        accepted = dest_dialog.exec()
+
+        if self._on_browser_changed is not None:
+            self._on_browser_changed(self._browser)
+
+        if not accepted or dest_dialog.get_dest_dir() is None:
+            return
+
+        dest_dir = dest_dialog.get_dest_dir()
+        create_subdir = dest_dialog.get_create_subdir()
+
+        # Use an approximate size estimate for the confirm dialog.
+        # The actual .pkg.slp may differ but this gives a reasonable bound.
+        if not self._confirm_upload(dest_dir, create_subdir):
+            return
+
+        self._pending_dest_dir = dest_dir
+        self._pending_create_subdir = "1" if create_subdir else "0"
+
+        # Write the temp file into an isolated tmpdir so cleanup is atomic
+        import tempfile
+        from pathlib import Path
+
+        tmp_dir = tempfile.mkdtemp(prefix="sleap_rtc_export_")
+        filename = Path(self._local_path).stem + ".pkg.slp"
+        self._temp_pkg_path = str(Path(tmp_dir) / filename)
+
+        # Disable button; show indeterminate progress while exporting
+        if self._export_btn is not None:
+            self._export_btn.setEnabled(False)
+        if self._progress_bar is not None:
+            self._progress_bar.setMinimum(0)
+            self._progress_bar.setMaximum(0)  # indeterminate
+            self._progress_bar.setVisible(True)
+
+        self._error_label.setText("<b>Status:</b> Exporting .pkg.slp…")
+        self._error_label.setStyleSheet("color: #2980b9;")
+
+        self._export_thread = _ExportThread(
+            convert_fn=self._convert_fn,
+            temp_path=self._temp_pkg_path,
+            parent=self,
+        )
+        self._export_thread.complete.connect(self._on_export_complete)
+        self._export_thread.error.connect(self._on_export_error)
+        self._export_thread.start()
+
+    def _on_export_complete(self, temp_path: str) -> None:
+        """Export finished — switch to determinate progress and start upload."""
+        self._error_label.setText("<b>Status:</b> Uploading…")
+        self._start_upload(
+            dest_dir=self._pending_dest_dir,
+            create_subdir=self._pending_create_subdir,
+            path_override=temp_path,
+        )
+
+    def _on_export_error(self, reason: str) -> None:
+        """Export failed — show error and re-enable the export button."""
+        if self._progress_bar is not None:
+            self._progress_bar.setMaximum(100)
+            self._progress_bar.setVisible(False)
+
+        self._error_label.setText(f"<b>Export error:</b> {reason}")
+        self._error_label.setStyleSheet("color: #c0392b;")
+
+        if self._export_btn is not None:
+            self._export_btn.setEnabled(True)
+
+        self._cleanup_temp_pkg()
 
     # ------------------------------------------------------------------
     # Upload — UI actions
@@ -1310,12 +1644,30 @@ class SlpPathDialog(QDialog):
 
         return dlg.exec() == QDialog.DialogCode.Accepted
 
-    def _start_upload(self, dest_dir: str, create_subdir: str) -> None:
-        """Create and start the upload thread."""
-        # Disable button and show progress bar
+    def _start_upload(
+        self,
+        dest_dir: str,
+        create_subdir: str,
+        path_override: "str | None" = None,
+    ) -> None:
+        """Create and start the upload thread.
+
+        Args:
+            dest_dir: Worker-side destination directory.
+            create_subdir: ``"1"`` to create a ``sleap_rtc_downloads``
+                subdirectory inside *dest_dir*, ``"0"`` otherwise.
+            path_override: If provided, upload this local path instead of
+                ``self._local_path``.  Used by the export flow to upload the
+                freshly-written temp ``.pkg.slp``.
+        """
+        local_path = path_override if path_override is not None else self._local_path
+
+        # Disable buttons and show progress bar
         if self._upload_btn is not None:
             self._upload_btn.setEnabled(False)
         if self._progress_bar is not None:
+            self._progress_bar.setMinimum(0)
+            self._progress_bar.setMaximum(100)
             self._progress_bar.setValue(0)
             self._progress_bar.setVisible(True)
 
@@ -1331,7 +1683,7 @@ class SlpPathDialog(QDialog):
 
         self._upload_thread = _UploadThread(
             send_fn=self._send_fn,
-            local_path=self._local_path,
+            local_path=local_path,
             dest_dir=dest_dir,
             create_subdir=create_subdir,
             response_queue=self._upload_queue,
@@ -1362,8 +1714,10 @@ class SlpPathDialog(QDialog):
         if self._upload_btn is not None:
             self._upload_btn.setEnabled(False)
 
+        self._cleanup_temp_pkg()
+
     def _on_upload_error(self, reason: str) -> None:
-        """Show error message and re-enable the Upload button for retry."""
+        """Show error message and re-enable the upload/export button for retry."""
         if self._progress_bar is not None:
             self._progress_bar.setVisible(False)
 
@@ -1372,6 +1726,30 @@ class SlpPathDialog(QDialog):
 
         if self._upload_btn is not None:
             self._upload_btn.setEnabled(True)
+        if self._export_btn is not None:
+            self._export_btn.setEnabled(True)
+
+        self._cleanup_temp_pkg()
+
+    def _cleanup_temp_pkg(self) -> None:
+        """Delete the temp .pkg.slp and its parent directory if they exist."""
+        import shutil
+        from pathlib import Path
+
+        if self._temp_pkg_path is not None:
+            try:
+                tmp = Path(self._temp_pkg_path)
+                if tmp.exists():
+                    shutil.rmtree(tmp.parent, ignore_errors=True)
+            except Exception:
+                pass
+            finally:
+                self._temp_pkg_path = None
+
+    def closeEvent(self, event) -> None:
+        """Clean up any in-progress temp file when the dialog is closed."""
+        self._cleanup_temp_pkg()
+        super().closeEvent(event)
 
 
 class PathResolutionDialog(QDialog):
