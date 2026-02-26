@@ -250,14 +250,10 @@ class WebRTCBridge:
                 # Debug: dump discovery response to file for inspection
                 import json as _json
 
-                _debug_path = (
-                    Path(tempfile.gettempdir()) / "tui-discovery-debug.json"
-                )
+                _debug_path = Path(tempfile.gettempdir()) / "tui-discovery-debug.json"
                 with open(_debug_path, "w") as _f:
                     _json.dump(workers, _f, indent=2)
-                    logging.info(
-                        f"Wrote discovery response to {_debug_path}"
-                    )
+                    logging.info(f"Wrote discovery response to {_debug_path}")
                 return workers
             else:
                 logging.warning(f"Unexpected discovery response: {data}")

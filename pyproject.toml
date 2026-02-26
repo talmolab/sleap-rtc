@@ -40,7 +40,8 @@ dev = [
     "ruff",
     "pyyaml",
     "qtpy",
-    "PyQt5",
+    "PyQt5; sys_platform != 'win32'",
+    "PyQt6; sys_platform == 'win32'",
     "sleap-io",
 ]
 
