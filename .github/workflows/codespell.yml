@@ -24,6 +24,6 @@ jobs:
       - name: Codespell
         uses: codespell-project/actions-codespell@v2
         with:
-          skip: ".git*,*.css,openspec/"
+          skip: ".git*,*.css,openspec"
           ignore_words_list: "doesnt"
           check_hidden: true

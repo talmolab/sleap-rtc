@@ -9,7 +9,6 @@ from typing import Dict, List, Optional
 
 from sleap_rtc.jobs.spec import TrainJobSpec, TrackJobSpec
 
-
 # Default ZMQ ports for progress reporting
 DEFAULT_ZMQ_PORTS = {
     "controller": 9000,

@@ -71,7 +71,6 @@ from sleap_rtc.rtc_client import run_RTCclient, run_job_submit
 from sleap_rtc.rtc_client_track import run_RTCclient_track
 from sleap_rtc.jobs.spec import TrainJobSpec, TrackJobSpec
 
-
 # =============================================================================
 # Authentication Helpers
 # =============================================================================

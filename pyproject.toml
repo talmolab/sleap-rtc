@@ -66,7 +66,7 @@ asyncio_mode = "auto"
 
 [tool.codespell]
 # Ref: https://github.com/codespell-project/codespell#using-a-config-file
-skip = '.git*,*.css,openspec/'
+skip = '.git*,*.css,openspec'
 ignore-words-list = 'doesnt'
 check-hidden = true
 # ignore-regex = ''
