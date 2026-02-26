@@ -82,7 +82,6 @@ exclude = [
     "**/.devcontainer",
     "**/Dockerfile",
     "**/.dockerignore",
-    "**/static",
     "sleap_rtc/worker/pyproject.toml",
     "sleap_rtc/client/pyproject.toml",
 ]
