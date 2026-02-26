@@ -9,6 +9,7 @@ import asyncio
 import json
 import logging
 import os
+import posixpath
 import sys
 from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor
@@ -289,8 +290,8 @@ class DirectoryBrowser:
         if self.current_path in ("/", ""):
             return False
 
-        # Get parent path
-        parent = os.path.dirname(self.current_path.rstrip("/"))
+        # Get parent path (use posixpath: remote worker paths are always Linux)
+        parent = posixpath.dirname(self.current_path.rstrip("/"))
         if parent == self.current_path:
             return False
 
@@ -312,7 +313,7 @@ class DirectoryBrowser:
         if self.showing_mounts and hasattr(self, "_mount_paths") and index is not None:
             self.current_path = self._mount_paths[index]
         else:
-            new_path = os.path.join(self.current_path, entry.name)
+            new_path = posixpath.join(self.current_path, entry.name)
             self.current_path = new_path
 
         self.selected_index = 0
@@ -324,7 +325,7 @@ class DirectoryBrowser:
         if entry.is_directory:
             return False
 
-        self.selected_path = os.path.join(self.current_path, entry.name)
+        self.selected_path = posixpath.join(self.current_path, entry.name)
         return True
 
     async def run(self) -> Optional[str]:
@@ -462,7 +463,7 @@ class DirectoryBrowser:
 
             entry = self.entries[self.selected_index]
             # Select whether it's a file or folder - construct full path
-            self.selected_path = os.path.join(self.current_path, entry.name)
+            self.selected_path = posixpath.join(self.current_path, entry.name)
             stay_in_app[0] = False
             event.app.exit()
 

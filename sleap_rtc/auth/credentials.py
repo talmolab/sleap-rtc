@@ -75,8 +75,9 @@ def save_credentials(credentials: dict[str, Any]) -> None:
         # Set restrictive permissions (owner read/write only)
         os.chmod(temp_path, stat.S_IRUSR | stat.S_IWUSR)
 
-        # Atomic rename
-        temp_path.rename(CREDENTIALS_PATH)
+        # Atomic replace (os.replace works even if destination exists, unlike
+        # Path.rename which raises FileExistsError [WinError 183] on Windows)
+        os.replace(temp_path, CREDENTIALS_PATH)
         logger.debug(f"Saved credentials to {CREDENTIALS_PATH}")
 
     except IOError as e:

@@ -43,7 +43,7 @@ class TestStopEarlySendsSignal:
     def test_stop_command_still_forwards_zmq_message(self):
         """ZMQ forwarding must not be skipped when the process group is signalled."""
         executor = self._make_executor()
-        with patch("os.killpg"), patch("os.getpgid", return_value=99999):
+        with patch("os.killpg", create=True), patch("os.getpgid", return_value=99999, create=True):
             executor.send_control_message('{"command": "stop"}')
         executor._progress_reporter.send_control_message.assert_called_once_with(
             '{"command": "stop"}'
@@ -52,14 +52,14 @@ class TestStopEarlySendsSignal:
     def test_non_stop_command_does_not_kill_process_group(self):
         """Non-stop ZMQ commands must not signal the process group."""
         executor = self._make_executor()
-        with patch("os.killpg") as mock_killpg:
+        with patch("os.killpg", create=True) as mock_killpg:
             executor.send_control_message('{"command": "pause"}')
         mock_killpg.assert_not_called()
 
     def test_stop_command_does_not_kill_already_exited_process(self):
         """Process group must not be signalled when the process has already exited."""
         executor = self._make_executor(running=False)
-        with patch("os.killpg") as mock_killpg:
+        with patch("os.killpg", create=True) as mock_killpg:
             executor.send_control_message('{"command": "stop"}')
         mock_killpg.assert_not_called()
 
@@ -101,7 +101,7 @@ class TestStopRunningJob:
     def test_stop_running_job_no_op_when_already_exited(self):
         """stop_running_job must not signal a process that has already exited."""
         executor = self._make_executor(running=False)
-        with patch("os.killpg") as mock_killpg:
+        with patch("os.killpg", create=True) as mock_killpg:
             executor.stop_running_job()
         mock_killpg.assert_not_called()
 
@@ -131,7 +131,7 @@ class TestStopRequestedFlag:
         mock_reporter = MagicMock()
 
         # Simulate stop command arriving before process exits
-        with patch("os.killpg"), patch("os.getpgid", return_value=99999):
+        with patch("os.killpg", create=True), patch("os.getpgid", return_value=99999, create=True):
             executor.send_control_message('{"command": "stop"}')
 
         with patch("asyncio.create_subprocess_exec",
@@ -187,7 +187,7 @@ class TestStopRequestedFlag:
         mock_reporter = MagicMock()
 
         # Model 1: stop requested, exits with 1
-        with patch("os.killpg"), patch("os.getpgid", return_value=99999):
+        with patch("os.killpg", create=True), patch("os.getpgid", return_value=99999, create=True):
             executor.send_control_message('{"command": "stop"}')
 
         with patch("asyncio.create_subprocess_exec",
