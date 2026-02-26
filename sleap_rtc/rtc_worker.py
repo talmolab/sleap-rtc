@@ -49,7 +49,9 @@ def run_RTCworker(
             logging.info(f"  - {mount.label}: {mount.path}")
 
     # Create the worker instance with mounts
-    worker = RTCWorkerClient(mounts=valid_mounts, working_dir=effective_working_dir, name=name)
+    worker = RTCWorkerClient(
+        mounts=valid_mounts, working_dir=effective_working_dir, name=name
+    )
 
     # Create the RTCPeerConnection object.
     pc = RTCPeerConnection()

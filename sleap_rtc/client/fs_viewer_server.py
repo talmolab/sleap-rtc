@@ -100,7 +100,9 @@ class FSViewerServer:
             except OSError:
                 continue
         else:
-            raise RuntimeError(f"Could not bind to any port in range {port}-{port + MAX_PORT_TRIES - 1}")
+            raise RuntimeError(
+                f"Could not bind to any port in range {port}-{port + MAX_PORT_TRIES - 1}"
+            )
 
         # Build URL with token
         url = f"http://localhost:{self.port}/?token={self.token}"
@@ -183,7 +185,9 @@ class FSViewerServer:
         finally:
             # Remove from clients
             self.ws_clients.discard(ws)
-            logging.info(f"WebSocket client disconnected (total: {len(self.ws_clients)})")
+            logging.info(
+                f"WebSocket client disconnected (total: {len(self.ws_clients)})"
+            )
 
         return ws
 
@@ -224,10 +228,9 @@ class FSViewerServer:
                 # Directory scanning for missing video filenames
                 directory = msg.get("directory", "")
                 filenames = msg.get("filenames", [])
-                request_payload = json.dumps({
-                    "directory": directory,
-                    "filenames": filenames
-                })
+                request_payload = json.dumps(
+                    {"directory": directory, "filenames": filenames}
+                )
                 self.send_to_worker(f"FS_SCAN_DIR::{request_payload}")
 
             elif msg_type == "write_slp":
@@ -236,12 +239,14 @@ class FSViewerServer:
                 output_dir = msg.get("output_dir", "")
                 output_filename = msg.get("output_filename", "")
                 filename_map = msg.get("filename_map", {})
-                request_payload = json.dumps({
-                    "slp_path": slp_path,
-                    "output_dir": output_dir,
-                    "output_filename": output_filename,
-                    "filename_map": filename_map
-                })
+                request_payload = json.dumps(
+                    {
+                        "slp_path": slp_path,
+                        "output_dir": output_dir,
+                        "output_filename": output_filename,
+                        "filename_map": filename_map,
+                    }
+                )
                 self.send_to_worker(f"FS_WRITE_SLP::{request_payload}")
 
             elif msg_type == "resolve_with_prefix":
@@ -249,11 +254,13 @@ class FSViewerServer:
                 original_path = msg.get("original_path", "")
                 new_path = msg.get("new_path", "")
                 other_missing = msg.get("other_missing", [])
-                request_payload = json.dumps({
-                    "original_path": original_path,
-                    "new_path": new_path,
-                    "other_missing": other_missing
-                })
+                request_payload = json.dumps(
+                    {
+                        "original_path": original_path,
+                        "new_path": new_path,
+                        "other_missing": other_missing,
+                    }
+                )
                 self.send_to_worker(f"FS_RESOLVE_WITH_PREFIX::{request_payload}")
 
             elif msg_type == "apply_prefix":
@@ -265,11 +272,16 @@ class FSViewerServer:
             elif msg_type == "get_video_check":
                 # Request video check data (for resolution UI initial load)
                 # The UI can request the pending video check data
-                if hasattr(self, 'pending_video_check_data') and self.pending_video_check_data:
-                    await self._broadcast({
-                        "type": "video_check_response",
-                        "data": self.pending_video_check_data,
-                    })
+                if (
+                    hasattr(self, "pending_video_check_data")
+                    and self.pending_video_check_data
+                ):
+                    await self._broadcast(
+                        {
+                            "type": "video_check_response",
+                            "data": self.pending_video_check_data,
+                        }
+                    )
 
             else:
                 logging.warning(f"Unknown browser message type: {msg_type}")
@@ -322,18 +334,22 @@ class FSViewerServer:
             if message.startswith("FS_INFO_RESPONSE::"):
                 json_str = message.split("::", 1)[1]
                 data = json.loads(json_str)
-                await self._broadcast({
-                    "type": "worker_info",
-                    "data": data,
-                })
+                await self._broadcast(
+                    {
+                        "type": "worker_info",
+                        "data": data,
+                    }
+                )
 
             elif message.startswith("FS_MOUNTS_RESPONSE::"):
                 json_str = message.split("::", 1)[1]
                 data = json.loads(json_str)
-                await self._broadcast({
-                    "type": "mounts",
-                    "data": data,
-                })
+                await self._broadcast(
+                    {
+                        "type": "mounts",
+                        "data": data,
+                    }
+                )
 
             elif message.startswith("FS_LIST_RESPONSE::"):
                 json_str = message.split("::", 1)[1]
@@ -344,83 +360,101 @@ class FSViewerServer:
                     data["column_index"] = self._request_metadata.get("column_index")
                     data["append"] = self._request_metadata.get("append", False)
                     self._request_metadata = None
-                await self._broadcast({
-                    "type": "list_response",
-                    "data": data,
-                })
+                await self._broadcast(
+                    {
+                        "type": "list_response",
+                        "data": data,
+                    }
+                )
 
             elif message.startswith("FS_RESOLVE_RESPONSE::"):
                 json_str = message.split("::", 1)[1]
                 data = json.loads(json_str)
-                await self._broadcast({
-                    "type": "resolve_response",
-                    "data": data,
-                })
+                await self._broadcast(
+                    {
+                        "type": "resolve_response",
+                        "data": data,
+                    }
+                )
 
             elif message.startswith("FS_ERROR::"):
                 parts = message.split("::")
                 error_code = parts[1] if len(parts) > 1 else "UNKNOWN"
                 error_msg = parts[2] if len(parts) > 2 else "Unknown error"
-                await self._broadcast({
-                    "type": "error",
-                    "code": error_code,
-                    "message": error_msg,
-                })
+                await self._broadcast(
+                    {
+                        "type": "error",
+                        "code": error_code,
+                        "message": error_msg,
+                    }
+                )
 
             elif message.startswith("FS_CHECK_VIDEOS_RESPONSE::"):
                 # Store and broadcast video accessibility check results
                 json_str = message.split("::", 1)[1]
                 data = json.loads(json_str)
                 self.pending_video_check_data = data
-                await self._broadcast({
-                    "type": "video_check_response",
-                    "data": data,
-                })
+                await self._broadcast(
+                    {
+                        "type": "video_check_response",
+                        "data": data,
+                    }
+                )
 
             elif message.startswith("FS_SCAN_DIR_RESPONSE::"):
                 # Broadcast directory scan results
                 json_str = message.split("::", 1)[1]
                 data = json.loads(json_str)
-                await self._broadcast({
-                    "type": "scan_dir_response",
-                    "data": data,
-                })
+                await self._broadcast(
+                    {
+                        "type": "scan_dir_response",
+                        "data": data,
+                    }
+                )
 
             elif message.startswith("FS_WRITE_SLP_OK::"):
                 # Broadcast successful SLP write
                 json_str = message.split("::", 1)[1]
                 data = json.loads(json_str)
-                await self._broadcast({
-                    "type": "write_slp_ok",
-                    "data": data,
-                })
+                await self._broadcast(
+                    {
+                        "type": "write_slp_ok",
+                        "data": data,
+                    }
+                )
 
             elif message.startswith("FS_WRITE_SLP_ERROR::"):
                 # Broadcast SLP write error
                 json_str = message.split("::", 1)[1]
                 data = json.loads(json_str)
-                await self._broadcast({
-                    "type": "write_slp_error",
-                    "data": data,
-                })
+                await self._broadcast(
+                    {
+                        "type": "write_slp_error",
+                        "data": data,
+                    }
+                )
 
             elif message.startswith("FS_PREFIX_PROPOSAL::"):
                 # Broadcast prefix resolution proposal
                 json_str = message.split("::", 1)[1]
                 data = json.loads(json_str)
-                await self._broadcast({
-                    "type": "prefix_proposal",
-                    "data": data,
-                })
+                await self._broadcast(
+                    {
+                        "type": "prefix_proposal",
+                        "data": data,
+                    }
+                )
 
             elif message.startswith("FS_PREFIX_APPLIED::"):
                 # Broadcast prefix application confirmation
                 json_str = message.split("::", 1)[1]
                 data = json.loads(json_str)
-                await self._broadcast({
-                    "type": "prefix_applied",
-                    "data": data,
-                })
+                await self._broadcast(
+                    {
+                        "type": "prefix_applied",
+                        "data": data,
+                    }
+                )
 
             # Call optional callback
             if self.on_worker_response:
@@ -442,10 +476,12 @@ class FSViewerServer:
 
     async def notify_worker_disconnected(self):
         """Notify all clients that Worker has disconnected."""
-        await self._broadcast({
-            "type": "connection_lost",
-            "message": "Worker disconnected",
-        })
+        await self._broadcast(
+            {
+                "type": "connection_lost",
+                "message": "Worker disconnected",
+            }
+        )
 
     def set_video_check_data(self, data: Dict[str, Any]):
         """Set the pending video check data for the resolution UI.

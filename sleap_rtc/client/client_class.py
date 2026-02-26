@@ -13,7 +13,13 @@ import zmq
 import platform
 import time
 
-from aiortc import RTCPeerConnection, RTCSessionDescription, RTCDataChannel, RTCConfiguration, RTCIceServer
+from aiortc import (
+    RTCPeerConnection,
+    RTCSessionDescription,
+    RTCDataChannel,
+    RTCConfiguration,
+    RTCIceServer,
+)
 from functools import partial
 from pathlib import Path
 from typing import List, Optional, Text, Tuple
@@ -113,7 +119,9 @@ class RTCClient:
         self.fs_response_queue = asyncio.Queue()  # For FS_* responses via data channel
 
         # Video resolution UI callback and data
-        self.on_missing_videos_detected = None  # Callback(missing_videos_data) to launch UI
+        self.on_missing_videos_detected = (
+            None  # Callback(missing_videos_data) to launch UI
+        )
         self.pending_video_check_data = None  # Store FS_CHECK_VIDEOS_RESPONSE data
 
         self.room_id = None  # Room ID for credential lookup
@@ -122,7 +130,9 @@ class RTCClient:
         # PSK P2P authentication (zero-trust layer)
         self._room_secret: Optional[str] = None  # Set via CLI flag, env var, or config
         self._authenticated = False  # Whether PSK authentication completed
-        self._auth_event = asyncio.Event()  # Signaled when auth completes (success or failure)
+        self._auth_event = (
+            asyncio.Event()
+        )  # Signaled when auth completes (success or failure)
         self._auth_failed_reason: Optional[str] = None  # Reason if auth failed
 
         # Structured job submission
@@ -533,7 +543,10 @@ class RTCClient:
                 }
 
             else:
-                return {"error": f"Unexpected response: {response[:50]}", "candidates": []}
+                return {
+                    "error": f"Unexpected response: {response[:50]}",
+                    "candidates": [],
+                }
 
         except asyncio.TimeoutError:
             logging.warning("FS_RESOLVE timed out")
@@ -591,7 +604,9 @@ class RTCClient:
                 mounts = await self._send_fs_get_mounts()
                 if not mounts:
                     print("\nError: No filesystems configured on worker.")
-                    print("Configure mounts in sleap-rtc.toml under [[worker.io.mounts]]")
+                    print(
+                        "Configure mounts in sleap-rtc.toml under [[worker.io.mounts]]"
+                    )
                     return None
 
                 # Show mount selector
@@ -720,7 +735,10 @@ class RTCClient:
                 return {"success": False, "error": error}
 
             else:
-                return {"success": False, "error": f"Unexpected response: {response[:50]}"}
+                return {
+                    "success": False,
+                    "error": f"Unexpected response: {response[:50]}",
+                }
 
         except asyncio.TimeoutError:
             logging.warning("USE_WORKER_PATH timed out")
@@ -752,7 +770,9 @@ class RTCClient:
             )
 
             # Check if this is a video check response
-            if not response.startswith(f"{MSG_FS_CHECK_VIDEOS_RESPONSE}{MSG_SEPARATOR}"):
+            if not response.startswith(
+                f"{MSG_FS_CHECK_VIDEOS_RESPONSE}{MSG_SEPARATOR}"
+            ):
                 logging.warning(f"Expected video check response, got: {response[:50]}")
                 # Put it back and proceed with original path
                 await self.fs_response_queue.put(response)
@@ -806,10 +826,12 @@ class RTCClient:
 
             # Hook into worker response handling
             original_handler = viewer_server.on_worker_response
+
             async def wrapped_handler(message: str):
                 if original_handler:
                     original_handler(message)
                 await on_write_slp_response(message)
+
             viewer_server.on_worker_response = wrapped_handler
 
             try:
@@ -822,6 +844,7 @@ class RTCClient:
 
                 # Open browser
                 import webbrowser
+
                 webbrowser.open(resolve_url)
 
                 # Forward FS_* messages to viewer server while waiting
@@ -847,8 +870,12 @@ class RTCClient:
 
                     # If a new SLP file was created, tell the Worker to use it
                     if resolved_slp_path != slp_path:
-                        logging.info(f"Updating Worker path to resolved SLP: {resolved_slp_path}")
-                        self.data_channel.send(f"{MSG_USE_WORKER_PATH}{MSG_SEPARATOR}{resolved_slp_path}")
+                        logging.info(
+                            f"Updating Worker path to resolved SLP: {resolved_slp_path}"
+                        )
+                        self.data_channel.send(
+                            f"{MSG_USE_WORKER_PATH}{MSG_SEPARATOR}{resolved_slp_path}"
+                        )
 
                         # Wait for Worker to acknowledge the new path
                         try:
@@ -856,19 +883,31 @@ class RTCClient:
                                 self.fs_response_queue.get(),
                                 timeout=10.0,
                             )
-                            if response.startswith(f"{MSG_WORKER_PATH_OK}{MSG_SEPARATOR}"):
+                            if response.startswith(
+                                f"{MSG_WORKER_PATH_OK}{MSG_SEPARATOR}"
+                            ):
                                 logging.info("Worker accepted resolved SLP path")
-                            elif response.startswith(f"{MSG_WORKER_PATH_ERROR}{MSG_SEPARATOR}"):
-                                error = response.split(MSG_SEPARATOR, 1)[1] if MSG_SEPARATOR in response else "Unknown error"
+                            elif response.startswith(
+                                f"{MSG_WORKER_PATH_ERROR}{MSG_SEPARATOR}"
+                            ):
+                                error = (
+                                    response.split(MSG_SEPARATOR, 1)[1]
+                                    if MSG_SEPARATOR in response
+                                    else "Unknown error"
+                                )
                                 logging.error(f"Worker rejected resolved path: {error}")
-                                print(f"\nWarning: Worker rejected resolved path: {error}")
+                                print(
+                                    f"\nWarning: Worker rejected resolved path: {error}"
+                                )
                                 print("Continuing with original SLP path.")
                                 resolved_slp_path = slp_path
                             else:
                                 # Not the expected response, put it back
                                 await self.fs_response_queue.put(response)
                         except asyncio.TimeoutError:
-                            logging.warning("Timeout waiting for Worker to accept resolved path")
+                            logging.warning(
+                                "Timeout waiting for Worker to accept resolved path"
+                            )
                             print("\nWarning: Worker did not respond to path update.")
 
                 except asyncio.TimeoutError:
@@ -883,7 +922,9 @@ class RTCClient:
 
         except asyncio.TimeoutError:
             logging.warning("Video check timed out, proceeding with original path")
-            print("\nVideo accessibility check timed out. Proceeding with original path.")
+            print(
+                "\nVideo accessibility check timed out. Proceeding with original path."
+            )
             return slp_path
         except json.JSONDecodeError as e:
             logging.error(f"Failed to parse video check response: {e}")
@@ -987,7 +1028,9 @@ class RTCClient:
 
         # Handle structured job submission if job_spec is set
         if self.job_spec:
-            logging.info(f"Submitting structured job: {self.job_spec.__class__.__name__}")
+            logging.info(
+                f"Submitting structured job: {self.job_spec.__class__.__name__}"
+            )
             await self.submit_job()
             return
 
@@ -1013,11 +1056,11 @@ class RTCClient:
             result = await self._send_use_worker_path(resolved_path)
 
             if result.get("success"):
-                accepted_path = result.get('path', resolved_path)
+                accepted_path = result.get("path", resolved_path)
                 logging.info(f"Worker accepted path: {accepted_path}")
 
                 # For SLP files, wait for video check response
-                if accepted_path.lower().endswith('.slp'):
+                if accepted_path.lower().endswith(".slp"):
                     final_path = await self._handle_video_resolution(accepted_path)
                     if final_path is None:
                         logging.info("Video resolution cancelled or failed")
@@ -1036,7 +1079,9 @@ class RTCClient:
                 if self.gui:
                     self.start_zmq_control()
                     asyncio.create_task(self.start_zmq_listener(self.data_channel))
-                    logging.info(f"{self.data_channel.label} ZMQ control socket started")
+                    logging.info(
+                        f"{self.data_channel.label} ZMQ control socket started"
+                    )
                 return
             else:
                 logging.error(f"Worker rejected path: {result.get('error')}")
@@ -1048,7 +1093,9 @@ class RTCClient:
         if self.file_path and not self.worker_path:
             # Path resolution failed or was cancelled
             logging.info("Path resolution failed, aborting")
-            print("\nPath resolution failed. Use --worker-path to specify the path directly.")
+            print(
+                "\nPath resolution failed. Use --worker-path to specify the path directly."
+            )
         else:
             logging.info("No file path provided")
         return
@@ -1179,7 +1226,9 @@ class RTCClient:
                         video_data = json.loads(json_str)
                         missing = video_data.get("missing", [])
                         if missing:
-                            logging.info(f"Video check found {len(missing)} missing video(s)")
+                            logging.info(
+                                f"Video check found {len(missing)} missing video(s)"
+                            )
                             self.pending_video_check_data = video_data
                             # Trigger callback to launch resolution UI if registered
                             if self.on_missing_videos_detected:
@@ -1494,7 +1543,9 @@ class RTCClient:
         logging.error("No workers discovered and no fallback peer_id available")
         return []
 
-    async def _register_with_room(self, room_id: str, token: str, jwt_token: str = None):
+    async def _register_with_room(
+        self, room_id: str, token: str, jwt_token: str = None
+    ):
         """Register client with room on signaling server.
 
         Args:
@@ -1548,7 +1599,9 @@ class RTCClient:
                 # Store ICE servers from signaling server response
                 self.ice_servers = response.get("ice_servers", [])
                 if self.ice_servers:
-                    logging.info(f"Received {len(self.ice_servers)} ICE server(s) from signaling server")
+                    logging.info(
+                        f"Received {len(self.ice_servers)} ICE server(s) from signaling server"
+                    )
                 else:
                     logging.warning("No ICE servers received from signaling server")
             else:
@@ -1919,18 +1972,24 @@ class RTCClient:
                 ice_server_objects.append(RTCIceServer(**server))
 
             config = RTCConfiguration(iceServers=ice_server_objects)
-            logging.info(f"Creating RTCPeerConnection with {len(ice_server_objects)} ICE server(s)")
+            logging.info(
+                f"Creating RTCPeerConnection with {len(ice_server_objects)} ICE server(s)"
+            )
             pc = RTCPeerConnection(configuration=config)
         else:
             # Fallback to default (no ICE servers)
-            logging.warning("No ICE servers configured, using default RTCPeerConnection")
+            logging.warning(
+                "No ICE servers configured, using default RTCPeerConnection"
+            )
             pc = RTCPeerConnection()
 
         # Register ICE connection state change handler
         pc.on("iceconnectionstatechange", self.on_iceconnectionstatechange)
         return pc
 
-    async def submit_job(self, allow_path_correction: bool = True, show_confirmation: bool = True):
+    async def submit_job(
+        self, allow_path_correction: bool = True, show_confirmation: bool = True
+    ):
         """Submit a structured job spec and wait for completion.
 
         Sends JOB_SUBMIT message with the job spec, then handles all job
@@ -1960,12 +2019,15 @@ class RTCClient:
 
         # Generate job ID and store for tracking
         import uuid
+
         job_id = str(uuid.uuid4())[:8]
         self.current_job_id = job_id
 
         # Build JOB_SUBMIT message: JOB_SUBMIT::{job_id}::{spec_json}
         spec_json = self.job_spec.to_json()
-        submit_msg = format_message(MSG_JOB_SUBMIT, f"{job_id}{MSG_SEPARATOR}{spec_json}")
+        submit_msg = format_message(
+            MSG_JOB_SUBMIT, f"{job_id}{MSG_SEPARATOR}{spec_json}"
+        )
 
         logging.info(f"Submitting job {job_id}: {self.job_spec.__class__.__name__}")
         self.data_channel.send(submit_msg)
@@ -1975,7 +2037,7 @@ class RTCClient:
             try:
                 response = await asyncio.wait_for(
                     self.job_response_queue.get(),
-                    timeout=600.0  # 10 minute timeout for long-running jobs
+                    timeout=600.0,  # 10 minute timeout for long-running jobs
                 )
             except asyncio.TimeoutError:
                 logging.error(f"Job {job_id} timed out waiting for response")
@@ -1989,10 +2051,12 @@ class RTCClient:
                 logging.debug(f"Job {accepted_job_id} accepted by worker")
 
                 # Determine job type for display
-                job_type_name = self.job_spec.__class__.__name__ if self.job_spec else "Job"
+                job_type_name = (
+                    self.job_spec.__class__.__name__ if self.job_spec else "Job"
+                )
                 is_training = "Train" in job_type_name
                 action = "Training" if is_training else "Inference"
-                worker_name = getattr(self, 'target_worker', None) or "worker"
+                worker_name = getattr(self, "target_worker", None) or "worker"
 
                 # Visual structure: Job started section (green text)
                 print(f"\n{'─' * 60}")
@@ -2017,7 +2081,9 @@ class RTCClient:
                             job_id = str(uuid.uuid4())[:8]
                             self.current_job_id = job_id
                             spec_json = self.job_spec.to_json()
-                            submit_msg = format_message(MSG_JOB_SUBMIT, f"{job_id}{MSG_SEPARATOR}{spec_json}")
+                            submit_msg = format_message(
+                                MSG_JOB_SUBMIT, f"{job_id}{MSG_SEPARATOR}{spec_json}"
+                            )
                             logging.info(f"Resubmitting job {job_id}")
                             self.data_channel.send(submit_msg)
                             continue
@@ -2026,7 +2092,9 @@ class RTCClient:
                     else:
                         print(f"\nJob rejected by worker:")
                         for err in errors:
-                            print(f"  - {err.get('field', 'unknown')}: {err.get('message', 'unknown error')}")
+                            print(
+                                f"  - {err.get('field', 'unknown')}: {err.get('message', 'unknown error')}"
+                            )
                 except json.JSONDecodeError:
                     logging.error(f"Job {rejected_job_id} rejected: {error_json}")
                     print(f"\nJob rejected: {error_json}")
@@ -2046,7 +2114,9 @@ class RTCClient:
                 result_json = parts[2] if len(parts) > 2 else "{}"
 
                 # Determine job type for display
-                job_type_name = self.job_spec.__class__.__name__ if self.job_spec else "Job"
+                job_type_name = (
+                    self.job_spec.__class__.__name__ if self.job_spec else "Job"
+                )
                 is_training = "Train" in job_type_name
                 action = "Training" if is_training else "Inference"
 
@@ -2074,7 +2144,9 @@ class RTCClient:
                 logging.error(f"Job {failed_job_id} failed: {error_msg}")
 
                 # Determine job type for display
-                job_type_name = self.job_spec.__class__.__name__ if self.job_spec else "Job"
+                job_type_name = (
+                    self.job_spec.__class__.__name__ if self.job_spec else "Job"
+                )
                 is_training = "Train" in job_type_name
                 action = "Training" if is_training else "Inference"
 
@@ -2102,7 +2174,9 @@ class RTCClient:
         from sleap_rtc.client.file_selector import JobSpecConfirmation
         from sleap_rtc.client.directory_browser import DirectoryBrowser
 
-        async def browse_callback(field_name: str, current_path: str, file_filter: str) -> str:
+        async def browse_callback(
+            field_name: str, current_path: str, file_filter: str
+        ) -> str:
             """Callback to browse for a new path."""
             import os
 
@@ -2151,7 +2225,12 @@ class RTCClient:
         from sleap_rtc.client.directory_browser import DirectoryBrowser
 
         # Path error codes that can be corrected
-        PATH_ERROR_CODES = {"PATH_NOT_FOUND", "ACCESS_DENIED", "NOT_ALLOWED", "CONFIG_INVALID_TYPE"}
+        PATH_ERROR_CODES = {
+            "PATH_NOT_FOUND",
+            "ACCESS_DENIED",
+            "NOT_ALLOWED",
+            "CONFIG_INVALID_TYPE",
+        }
 
         # Find first path error
         path_error = None
@@ -2179,15 +2258,24 @@ class RTCClient:
 
         # Determine file filter based on field name
         file_filter = None
-        if "labels" in field.lower() or "data" in field.lower() or "slp" in field.lower():
+        if (
+            "labels" in field.lower()
+            or "data" in field.lower()
+            or "slp" in field.lower()
+        ):
             file_filter = ".slp"
-        elif "config" in field.lower() and "train_labels" not in field.lower() and "val_labels" not in field.lower():
+        elif (
+            "config" in field.lower()
+            and "train_labels" not in field.lower()
+            and "val_labels" not in field.lower()
+        ):
             file_filter = ".yaml,.json"  # Support both YAML and JSON configs
         elif "model" in field.lower():
             file_filter = None  # Models are directories
 
         # Determine start path (parent of invalid path or root)
         import os
+
         start_path = os.path.dirname(invalid_path) if invalid_path else "/"
         if not start_path or start_path == invalid_path:
             start_path = "/"
@@ -2217,7 +2305,9 @@ class RTCClient:
 
         # Check for config internal path like config.train_labels_path, config[0].train_labels_path,
         # config.train_labels_path[0], or config[0].train_labels_path[0]
-        config_internal_match = re.match(r"config(?:\[\d+\])?\.(\w+)(?:\[\d+\])?", field)
+        config_internal_match = re.match(
+            r"config(?:\[\d+\])?\.(\w+)(?:\[\d+\])?", field
+        )
         if config_internal_match:
             internal_field = config_internal_match.group(1)
 
@@ -2232,7 +2322,9 @@ class RTCClient:
                 setattr(self.job_spec, override_field, selected_path)
                 print(f"\nSet {override_field} override to: {selected_path}")
             else:
-                print(f"Warning: Could not map config internal field '{internal_field}' to job spec")
+                print(
+                    f"Warning: Could not map config internal field '{internal_field}' to job spec"
+                )
                 return False
         else:
             # Handle indexed fields like "config_path[0]" -> update config_paths[0]
@@ -2243,7 +2335,9 @@ class RTCClient:
                 base_field = index_match.group(1)
                 index = int(index_match.group(2))
                 # Map singular to plural field name (config_path -> config_paths)
-                list_field = base_field + "s" if not base_field.endswith("s") else base_field
+                list_field = (
+                    base_field + "s" if not base_field.endswith("s") else base_field
+                )
 
                 if hasattr(self.job_spec, list_field):
                     field_list = getattr(self.job_spec, list_field)
@@ -2254,7 +2348,9 @@ class RTCClient:
                         print(f"Warning: Index {index} out of range for {list_field}")
                         return False
                 else:
-                    print(f"Warning: Could not find list field '{list_field}' in job spec")
+                    print(
+                        f"Warning: Could not find list field '{list_field}' in job spec"
+                    )
                     return False
             elif hasattr(self.job_spec, field):
                 setattr(self.job_spec, field, selected_path)
@@ -2266,11 +2362,14 @@ class RTCClient:
         # Resubmit job
         print("Resubmitting job with corrected path...")
         import uuid
+
         job_id = str(uuid.uuid4())[:8]
         self.current_job_id = job_id
 
         spec_json = self.job_spec.to_json()
-        submit_msg = format_message(MSG_JOB_SUBMIT, f"{job_id}{MSG_SEPARATOR}{spec_json}")
+        submit_msg = format_message(
+            MSG_JOB_SUBMIT, f"{job_id}{MSG_SEPARATOR}{spec_json}"
+        )
         self.data_channel.send(submit_msg)
         return True
 
@@ -2359,11 +2458,15 @@ class RTCClient:
 
             # Load room secret for P2P PSK authentication
             # Priority: CLI flag > env var > filesystem > credentials
-            self._room_secret = resolve_secret(room_id or "default", cli_secret=room_secret)
+            self._room_secret = resolve_secret(
+                room_id or "default", cli_secret=room_secret
+            )
             if self._room_secret:
                 logging.info("P2P PSK authentication enabled (room secret configured)")
             else:
-                logging.info("P2P PSK authentication disabled (no room secret configured)")
+                logging.info(
+                    "P2P PSK authentication disabled (no room secret configured)"
+                )
 
             # Initiate the WebSocket connection to the signaling server.
             async with websockets.connect(self.DNS) as websocket:
@@ -2491,7 +2594,9 @@ class RTCClient:
                     # Initialize data channel
                     channel = self.pc.createDataChannel("my-data-channel")
                     self.data_channel = channel
-                    logging.info("channel(%s) %s" % (channel.label, "created by local party."))
+                    logging.info(
+                        "channel(%s) %s" % (channel.label, "created by local party.")
+                    )
 
                     # Register event handlers for the data channel
                     channel.on("open", self.on_channel_open)

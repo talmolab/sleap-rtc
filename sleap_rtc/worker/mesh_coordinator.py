@@ -177,7 +177,9 @@ class MeshCoordinator:
 
                     elif msg_type == "mesh_offer":
                         # New worker connecting via signaling server
-                        logger.info(f"Admin received mesh_offer from {data.get('from_peer_id')}")
+                        logger.info(
+                            f"Admin received mesh_offer from {data.get('from_peer_id')}"
+                        )
                         await self.handle_signaling_offer(data)
 
                     elif msg_type == "ice_candidate":
@@ -186,7 +188,9 @@ class MeshCoordinator:
 
                     elif msg_type == "offer":
                         # Client connection offer - delegate to worker
-                        logger.info(f"Admin received client offer from {data.get('sender')}")
+                        logger.info(
+                            f"Admin received client offer from {data.get('sender')}"
+                        )
                         await self._handle_client_offer(data)
 
                     elif msg_type == "admin_conflict":
@@ -236,15 +240,19 @@ class MeshCoordinator:
 
         # Check worker status before accepting
         if self.worker.status in ["busy", "reserved"]:
-            logger.warning(f"Rejecting client {sender} - worker is {self.worker.status}")
+            logger.warning(
+                f"Rejecting client {sender} - worker is {self.worker.status}"
+            )
             await self.websocket.send(
-                json.dumps({
-                    "type": "error",
-                    "target": sender,
-                    "reason": "worker_busy",
-                    "message": f"Worker is currently {self.worker.status}",
-                    "current_status": self.worker.status,
-                })
+                json.dumps(
+                    {
+                        "type": "error",
+                        "target": sender,
+                        "reason": "worker_busy",
+                        "message": f"Worker is currently {self.worker.status}",
+                        "current_status": self.worker.status,
+                    }
+                )
             )
             return
 
@@ -260,12 +268,14 @@ class MeshCoordinator:
 
         # Send answer back to client
         await self.websocket.send(
-            json.dumps({
-                "type": self.worker.pc.localDescription.type,
-                "sender": self.worker.peer_id,
-                "target": sender,
-                "sdp": self.worker.pc.localDescription.sdp,
-            })
+            json.dumps(
+                {
+                    "type": self.worker.pc.localDescription.type,
+                    "sender": self.worker.peer_id,
+                    "target": sender,
+                    "sdp": self.worker.pc.localDescription.sdp,
+                }
+            )
         )
 
         logger.info(f"Admin sent answer to client {sender}")
@@ -301,7 +311,9 @@ class MeshCoordinator:
             # Store data channel IMMEDIATELY - don't wait for on_open
             # The sending code will check readyState before sending
             self.worker.data_channels[admin_peer_id] = data_channel
-            logger.info(f"Created data channel for admin {admin_peer_id} (state: {data_channel.readyState})")
+            logger.info(
+                f"Created data channel for admin {admin_peer_id} (state: {data_channel.readyState})"
+            )
 
             @data_channel.on("open")
             def on_open():
@@ -309,7 +321,9 @@ class MeshCoordinator:
 
             @data_channel.on("close")
             def on_close():
-                logger.warning(f"Mesh signaling channel closed with admin: {admin_peer_id}")
+                logger.warning(
+                    f"Mesh signaling channel closed with admin: {admin_peer_id}"
+                )
                 # Remove data channel reference
                 if admin_peer_id in self.worker.data_channels:
                     del self.worker.data_channels[admin_peer_id]
@@ -450,7 +464,9 @@ class MeshCoordinator:
             # Store data channel IMMEDIATELY - don't wait for on_open
             # The sending code will check readyState before sending
             self.worker.data_channels[peer_id] = data_channel
-            logger.info(f"Created data channel for worker {peer_id} (state: {data_channel.readyState})")
+            logger.info(
+                f"Created data channel for worker {peer_id} (state: {data_channel.readyState})"
+            )
 
             @data_channel.on("open")
             def on_open():
@@ -576,7 +592,8 @@ class MeshCoordinator:
 
         # Get list of other connected workers (excluding self and target)
         other_peers = [
-            pid for pid in self.connected_peers
+            pid
+            for pid in self.connected_peers
             if pid != self.worker.peer_id and pid != target_peer_id
         ]
 
@@ -616,9 +633,7 @@ class MeshCoordinator:
         try:
             message_str = json.dumps(message)
             data_channel.send(message_str)
-            logger.info(
-                f"Sent peer list to {target_peer_id}: {len(other_peers)} peers"
-            )
+            logger.info(f"Sent peer list to {target_peer_id}: {len(other_peers)} peers")
         except Exception as e:
             logger.error(f"Failed to send peer list to {target_peer_id}: {e}")
 
@@ -671,11 +686,11 @@ class MeshCoordinator:
                 logger.error(f"Failed to notify {peer_id} of new peer: {e}")
 
         if notified_count > 0:
-            logger.info(
-                f"Notified {notified_count} workers of new peer: {new_peer_id}"
-            )
+            logger.info(f"Notified {notified_count} workers of new peer: {new_peer_id}")
 
-    async def _do_admin_duties_async(self, new_peer_id: str, offer_data: Dict[str, Any]):
+    async def _do_admin_duties_async(
+        self, new_peer_id: str, offer_data: Dict[str, Any]
+    ):
         """Perform admin duties when a new worker connects.
 
         This is called when a new worker's data channel opens with the admin.
@@ -690,7 +705,9 @@ class MeshCoordinator:
             metadata = offer_data.get("metadata", {})
             if not metadata:
                 # Fallback: create minimal metadata
-                logger.warning(f"No metadata in offer from {new_peer_id}, using defaults")
+                logger.warning(
+                    f"No metadata in offer from {new_peer_id}, using defaults"
+                )
                 metadata = {
                     "tags": ["sleap-rtc"],
                     "properties": {"status": "available"},
@@ -786,9 +803,7 @@ class MeshCoordinator:
                 and to_peer_id != self.worker.peer_id
                 and self.admin_controller.is_admin
             ):
-                logger.debug(
-                    f"Relaying {msg_type} from {from_peer_id} to {to_peer_id}"
-                )
+                logger.debug(f"Relaying {msg_type} from {from_peer_id} to {to_peer_id}")
                 await self._relay_mesh_message(data)
                 return
 
@@ -817,11 +832,17 @@ class MeshCoordinator:
             elif msg_type == "heartbeat":
                 await self._forward_to_worker_handler("heartbeat", data, from_peer_id)
             elif msg_type == "heartbeat_response":
-                await self._forward_to_worker_handler("heartbeat_response", data, from_peer_id)
+                await self._forward_to_worker_handler(
+                    "heartbeat_response", data, from_peer_id
+                )
             elif msg_type == "status_update":
-                await self._forward_to_worker_handler("status_update", data, from_peer_id)
+                await self._forward_to_worker_handler(
+                    "status_update", data, from_peer_id
+                )
             elif msg_type == "state_broadcast":
-                await self._forward_to_worker_handler("state_broadcast", data, from_peer_id)
+                await self._forward_to_worker_handler(
+                    "state_broadcast", data, from_peer_id
+                )
             else:
                 logger.warning(f"Unknown mesh message type: {msg_type}")
 
@@ -1085,7 +1106,9 @@ class MeshCoordinator:
 
         if self.worker.room_state_crdt:
             try:
-                self.worker.room_state_crdt.add_worker(peer_id, metadata, is_admin=False)
+                self.worker.room_state_crdt.add_worker(
+                    peer_id, metadata, is_admin=False
+                )
                 logger.info(f"Added new peer {peer_id} to local CRDT")
             except Exception as e:
                 logger.error(f"Failed to add peer {peer_id} to CRDT: {e}")
@@ -1119,7 +1142,9 @@ class MeshCoordinator:
                             "properties": {"status": "available"},
                         }
                     try:
-                        self.worker.room_state_crdt.add_worker(pid, metadata, is_admin=False)
+                        self.worker.room_state_crdt.add_worker(
+                            pid, metadata, is_admin=False
+                        )
                         logger.debug(f"Added peer {pid} to local CRDT from peer list")
                     except Exception as e:
                         logger.error(f"Failed to add peer {pid} to CRDT: {e}")
@@ -1146,7 +1171,9 @@ class MeshCoordinator:
             from_peer_id: peer_id of requesting worker
         """
         request_id = data.get("request_id")
-        logger.info(f"Received admin_verify from {from_peer_id} (request_id: {request_id})")
+        logger.info(
+            f"Received admin_verify from {from_peer_id} (request_id: {request_id})"
+        )
 
         # Send acknowledgment back
         ack_message = {
@@ -1169,7 +1196,9 @@ class MeshCoordinator:
                     f"Cannot send admin_verify_ack: channel to {from_peer_id} is {data_channel.readyState}"
                 )
         else:
-            logger.warning(f"Cannot send admin_verify_ack: no channel to {from_peer_id}")
+            logger.warning(
+                f"Cannot send admin_verify_ack: no channel to {from_peer_id}"
+            )
 
     async def _handle_admin_verify_ack(self, data: Dict[str, Any], from_peer_id: str):
         """Handle admin verification acknowledgment.
@@ -1181,7 +1210,9 @@ class MeshCoordinator:
             from_peer_id: peer_id of the admin
         """
         request_id = data.get("request_id")
-        logger.info(f"Received admin_verify_ack from {from_peer_id} (request_id: {request_id})")
+        logger.info(
+            f"Received admin_verify_ack from {from_peer_id} (request_id: {request_id})"
+        )
 
         # Notify AdminController that verification succeeded
         if self.admin_controller:
@@ -1218,7 +1249,9 @@ class MeshCoordinator:
 
         try:
             data_channel.send(json.dumps(message))
-            logger.info(f"Sent admin_verify to {target_peer_id} (request_id: {request_id})")
+            logger.info(
+                f"Sent admin_verify to {target_peer_id} (request_id: {request_id})"
+            )
             return True
         except Exception as e:
             logger.error(f"Failed to send admin_verify: {e}")
@@ -1514,7 +1547,9 @@ class MeshCoordinator:
 
                 # Define admin duties to run when channel is ready
                 def do_admin_duties():
-                    logger.info(f"Data channel open with {from_peer_id}, performing admin duties")
+                    logger.info(
+                        f"Data channel open with {from_peer_id}, performing admin duties"
+                    )
                     # Admin duties:
                     # 1. Add new worker to CRDT (critical for consistent election)
                     # 2. Broadcast updated state to all workers
@@ -1530,7 +1565,9 @@ class MeshCoordinator:
                 # If channel is ALREADY open, fire admin duties immediately
                 # (on_open won't fire if channel opened before handler was registered)
                 if channel.readyState == "open":
-                    logger.info(f"Channel already open with {from_peer_id}, triggering admin duties")
+                    logger.info(
+                        f"Channel already open with {from_peer_id}, triggering admin duties"
+                    )
                     do_admin_duties()
 
                 @channel.on("close")

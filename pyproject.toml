@@ -37,6 +37,9 @@ dev = [
     "pytest-timeout",
     "black",
     "ruff",
+    "pyyaml",
+    "qtpy",
+    "PyQt5",
 ]
 
 [tool.uv]
@@ -58,7 +61,8 @@ packages = ["sleap_rtc"]
 
 [tool.codespell]
 # Ref: https://github.com/codespell-project/codespell#using-a-config-file
-skip = '.git*,*.css'
+skip = '.git*,*.css,openspec/'
+ignore-words-list = 'doesnt'
 check-hidden = true
 # ignore-regex = ''
 # ignore-words-list = ''

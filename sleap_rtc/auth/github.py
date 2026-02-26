@@ -94,11 +94,7 @@ def github_login(
             click.echo(f"\rWaiting for login... ({remaining}s) ", nl=False)
 
         try:
-            response = requests.get(
-                poll_url,
-                params={"state": state},
-                timeout=10
-            )
+            response = requests.get(poll_url, params={"state": state}, timeout=10)
 
             if response.status_code == 200:
                 if not silent:

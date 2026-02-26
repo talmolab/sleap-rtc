@@ -442,7 +442,7 @@ MSG_JOB_COMPLETE = "JOB_COMPLETE"
 MSG_JOB_FAILED = "JOB_FAILED"
 
 # Job control messages (client → worker)
-MSG_JOB_STOP = "JOB_STOP"      # Graceful stop (SIGINT, saves checkpoint)
+MSG_JOB_STOP = "JOB_STOP"  # Graceful stop (SIGINT, saves checkpoint)
 MSG_JOB_CANCEL = "JOB_CANCEL"  # Hard cancel (SIGTERM, immediate termination)
 
 # ZMQ control message forwarding (client → worker)

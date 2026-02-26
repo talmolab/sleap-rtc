@@ -93,7 +93,9 @@ class RoomListItem(ListItem):
             yield Static(name, classes="room-name")
 
             # Worker indicator (updated reactively)
-            yield Static("— online", id=f"workers-{id(self)}", classes="worker-indicator")
+            yield Static(
+                "— online", id=f"workers-{id(self)}", classes="worker-indicator"
+            )
 
             # Expiration
             yield Static(f"⏱ {exp_str}", classes="expiration")
@@ -279,7 +281,9 @@ class RoomSelectScreen(Screen):
                 ListView(id="room-list"),
                 Static("Loading rooms...", id="status"),
                 Static("", id="error"),
-                Static("Press Enter to select, 'r' to refresh, 'q' to quit", classes="hint"),
+                Static(
+                    "Press Enter to select, 'r' to refresh, 'q' to quit", classes="hint"
+                ),
                 id="room-box",
             ),
             id="room-container",
@@ -327,7 +331,9 @@ class RoomSelectScreen(Screen):
         jwt_token = get_valid_jwt()
         if not jwt_token:
             self.loading = False
-            self.error_message = "Not logged in or token expired. Run: sleap-rtc auth login"
+            self.error_message = (
+                "Not logged in or token expired. Run: sleap-rtc auth login"
+            )
             return
 
         config = get_config()
@@ -340,7 +346,7 @@ class RoomSelectScreen(Screen):
                     endpoint,
                     headers={"Authorization": f"Bearer {jwt_token}"},
                     timeout=30,
-                )
+                ),
             )
 
             if response.status_code != 200:
@@ -378,7 +384,9 @@ class RoomSelectScreen(Screen):
 
         if not active_rooms:
             # Show "no rooms" message
-            item = ListItem(Label("No active rooms. Create one with: sleap-rtc room create"))
+            item = ListItem(
+                Label("No active rooms. Create one with: sleap-rtc room create")
+            )
             room_list.append(item)
             return
 
@@ -424,9 +432,7 @@ class RoomSelectScreen(Screen):
         # Fetch worker counts concurrently
         tasks = []
         for room_data, item in self._room_items:
-            task = asyncio.create_task(
-                self._discover_workers_for_room(room_data, item)
-            )
+            task = asyncio.create_task(self._discover_workers_for_room(room_data, item))
             tasks.append(task)
 
         # Wait for all to complete (with individual error handling)
@@ -460,15 +466,17 @@ class RoomSelectScreen(Screen):
 
             async with websockets.connect(ws_url) as ws:
                 # Register with room (minimal registration for discovery)
-                register_msg = json.dumps({
-                    "type": "register",
-                    "peer_id": f"{peer_id}-probe-{room_id[:8]}",
-                    "room_id": room_id,
-                    "token": "",  # JWT auth, no room token needed
-                    "role": "client",
-                    "jwt": jwt_token,
-                    "metadata": {"tags": ["probe"]},
-                })
+                register_msg = json.dumps(
+                    {
+                        "type": "register",
+                        "peer_id": f"{peer_id}-probe-{room_id[:8]}",
+                        "room_id": room_id,
+                        "token": "",  # JWT auth, no room token needed
+                        "role": "client",
+                        "jwt": jwt_token,
+                        "metadata": {"tags": ["probe"]},
+                    }
+                )
                 await ws.send(register_msg)
 
                 # Wait for registration response
@@ -480,15 +488,17 @@ class RoomSelectScreen(Screen):
                     return
 
                 # Discover workers
-                discover_msg = json.dumps({
-                    "type": "discover_peers",
-                    "from_peer_id": f"{peer_id}-probe-{room_id[:8]}",
-                    "filters": {
-                        "role": "worker",
-                        "room_id": room_id,
-                        "tags": ["sleap-rtc"],
-                    },
-                })
+                discover_msg = json.dumps(
+                    {
+                        "type": "discover_peers",
+                        "from_peer_id": f"{peer_id}-probe-{room_id[:8]}",
+                        "filters": {
+                            "role": "worker",
+                            "room_id": room_id,
+                            "tags": ["sleap-rtc"],
+                        },
+                    }
+                )
                 await ws.send(discover_msg)
 
                 # Get worker list

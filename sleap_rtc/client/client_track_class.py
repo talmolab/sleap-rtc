@@ -435,7 +435,9 @@ sleap-nn track \\
                 return self._authenticated
             except asyncio.TimeoutError:
                 # No challenge received - worker is in legacy mode too
-                logging.info("No AUTH_CHALLENGE received - legacy mode (no auth required)")
+                logging.info(
+                    "No AUTH_CHALLENGE received - legacy mode (no auth required)"
+                )
                 self._authenticated = True
                 return True
 
@@ -593,11 +595,15 @@ sleap-nn track \\
                 worker_peer_id = session_str_json.get("peer_id")
 
                 # Load room secret for PSK authentication
-                self._room_secret = resolve_secret(worker_room_id, cli_secret=room_secret)
+                self._room_secret = resolve_secret(
+                    worker_room_id, cli_secret=room_secret
+                )
                 if self._room_secret:
                     logging.info(f"Room secret loaded for PSK authentication")
                 else:
-                    logging.debug(f"No room secret configured for room {worker_room_id}")
+                    logging.debug(
+                        f"No room secret configured for room {worker_room_id}"
+                    )
 
                 # Build registration message
                 register_data = {

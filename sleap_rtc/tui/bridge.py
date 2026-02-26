@@ -114,10 +114,7 @@ class WebRTCBridge:
     @property
     def is_connected(self) -> bool:
         """Check if data channel is open and ready."""
-        return (
-            self.data_channel is not None
-            and self.data_channel.readyState == "open"
-        )
+        return self.data_channel is not None and self.data_channel.readyState == "open"
 
     @property
     def is_authenticated(self) -> bool:
@@ -162,15 +159,18 @@ class WebRTCBridge:
             # Always wait for PSK authentication - even without a secret configured,
             # the worker may require it and we need to detect that case
             if self._on_auth_status:
-                status_msg = "Authenticating..." if self._room_secret else "Checking authentication..."
+                status_msg = (
+                    "Authenticating..."
+                    if self._room_secret
+                    else "Checking authentication..."
+                )
                 await self._call_async(self._on_auth_status, status_msg)
 
             auth_success = await self._wait_for_auth()
             if not auth_success:
                 if self._on_auth_status:
                     await self._call_async(
-                        self._on_auth_status,
-                        f"Auth failed: {self._auth_failed_reason}"
+                        self._on_auth_status, f"Auth failed: {self._auth_failed_reason}"
                     )
                 return False
 
@@ -228,11 +228,13 @@ class WebRTCBridge:
             "properties": {"status": "available"},
         }
 
-        discover_msg = json.dumps({
-            "type": "discover_peers",
-            "from_peer_id": self.peer_id,
-            "filters": filters,
-        })
+        discover_msg = json.dumps(
+            {
+                "type": "discover_peers",
+                "from_peer_id": self.peer_id,
+                "filters": filters,
+            }
+        )
 
         await self.websocket.send(discover_msg)
 
@@ -245,9 +247,12 @@ class WebRTCBridge:
                 logging.info(f"Discovered {len(workers)} workers")
                 # Debug: dump discovery response to file for inspection
                 import json as _json
+
                 with open("/tmp/tui-discovery-debug.json", "w") as _f:
                     _json.dump(workers, _f, indent=2)
-                    logging.info("Wrote discovery response to /tmp/tui-discovery-debug.json")
+                    logging.info(
+                        "Wrote discovery response to /tmp/tui-discovery-debug.json"
+                    )
                 return workers
             else:
                 logging.warning(f"Unexpected discovery response: {data}")
@@ -293,7 +298,9 @@ class WebRTCBridge:
             return None
 
         # Normalize to list
-        prefixes = [response_prefix] if isinstance(response_prefix, str) else response_prefix
+        prefixes = (
+            [response_prefix] if isinstance(response_prefix, str) else response_prefix
+        )
 
         # Create a future for this request
         future: asyncio.Future = asyncio.Future()
@@ -443,14 +450,18 @@ class WebRTCBridge:
         if not self.is_connected:
             return None
 
-        payload = json.dumps({
-            "original_path": original_path,
-            "new_path": new_path,
-            "other_missing": other_missing,
-        })
+        payload = json.dumps(
+            {
+                "original_path": original_path,
+                "new_path": new_path,
+                "other_missing": other_missing,
+            }
+        )
 
         message = f"{MSG_FS_RESOLVE_WITH_PREFIX}::{payload}"
-        response = await self.send_and_wait(message, MSG_FS_PREFIX_PROPOSAL, timeout=15.0)
+        response = await self.send_and_wait(
+            message, MSG_FS_PREFIX_PROPOSAL, timeout=15.0
+        )
 
         if response:
             _, args = parse_message(response)
@@ -481,13 +492,17 @@ class WebRTCBridge:
         if not self.is_connected:
             return None
 
-        payload = json.dumps({
-            "slp_path": slp_path,
-            "prefix_old": prefix_old,
-            "prefix_new": prefix_new,
-        })
+        payload = json.dumps(
+            {
+                "slp_path": slp_path,
+                "prefix_old": prefix_old,
+                "prefix_new": prefix_new,
+            }
+        )
         message = f"{MSG_FS_APPLY_PREFIX}::{payload}"
-        response = await self.send_and_wait(message, MSG_FS_PREFIX_APPLIED, timeout=15.0)
+        response = await self.send_and_wait(
+            message, MSG_FS_PREFIX_APPLIED, timeout=15.0
+        )
 
         if response:
             _, args = parse_message(response)
@@ -522,14 +537,17 @@ class WebRTCBridge:
         # Default output_dir to same directory as the SLP file
         if output_dir is None:
             from pathlib import Path
+
             output_dir = str(Path(slp_path).parent)
 
-        payload = json.dumps({
-            "slp_path": slp_path,
-            "output_dir": output_dir,
-            "filename_map": filename_map,
-            "output_filename": output_filename,
-        })
+        payload = json.dumps(
+            {
+                "slp_path": slp_path,
+                "output_dir": output_dir,
+                "filename_map": filename_map,
+                "output_filename": output_filename,
+            }
+        )
         message = f"{MSG_FS_WRITE_SLP}::{payload}"
 
         # Wait for either OK or ERROR response
@@ -624,7 +642,9 @@ class WebRTCBridge:
                 return self._authenticated
             except asyncio.TimeoutError:
                 # No challenge received - worker is in legacy mode too
-                logging.info("No AUTH_CHALLENGE received - legacy mode (no auth required)")
+                logging.info(
+                    "No AUTH_CHALLENGE received - legacy mode (no auth required)"
+                )
                 self._authenticated = True
                 return True
 
@@ -722,12 +742,14 @@ class WebRTCBridge:
         offer = await self.pc.createOffer()
         await self.pc.setLocalDescription(offer)
 
-        offer_msg = json.dumps({
-            "type": self.pc.localDescription.type,
-            "sender": self.peer_id,
-            "target": worker_id,
-            "sdp": self.pc.localDescription.sdp,
-        })
+        offer_msg = json.dumps(
+            {
+                "type": self.pc.localDescription.type,
+                "sender": self.peer_id,
+                "target": worker_id,
+                "sdp": self.pc.localDescription.sdp,
+            }
+        )
 
         await self.websocket.send(offer_msg)
         logging.info(f"Sent offer to worker {worker_id}")

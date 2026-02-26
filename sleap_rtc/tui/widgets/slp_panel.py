@@ -17,7 +17,6 @@ from textual.message import Message
 from textual.binding import Binding
 
 
-
 @dataclass
 class VideoInfo:
     """Information about a video in an SLP file."""
@@ -85,27 +84,33 @@ class SLPInfo:
 
         # Add accessible videos
         for v in data.get("accessible_videos", []):
-            videos.append(VideoInfo(
-                filename=v.get("filename", ""),
-                original_path=v.get("path", ""),
-                status="found",
-            ))
+            videos.append(
+                VideoInfo(
+                    filename=v.get("filename", ""),
+                    original_path=v.get("path", ""),
+                    status="found",
+                )
+            )
 
         # Add missing videos
         for v in data.get("missing", []):
-            videos.append(VideoInfo(
-                filename=v.get("filename", ""),
-                original_path=v.get("original_path", ""),
-                status="missing",
-            ))
+            videos.append(
+                VideoInfo(
+                    filename=v.get("filename", ""),
+                    original_path=v.get("original_path", ""),
+                    status="missing",
+                )
+            )
 
         # Add embedded videos
         for v in data.get("embedded_videos", []):
-            videos.append(VideoInfo(
-                filename=v.get("filename", "unknown"),
-                original_path="(embedded)",
-                status="embedded",
-            ))
+            videos.append(
+                VideoInfo(
+                    filename=v.get("filename", "unknown"),
+                    original_path="(embedded)",
+                    status="embedded",
+                )
+            )
 
         return cls(
             path=path,
@@ -300,6 +305,7 @@ class SLPContextPanel(Widget):
 
     class PanelHidden(Message):
         """Emitted when panel is hidden."""
+
         pass
 
     # Reactive properties
@@ -424,7 +430,9 @@ class SLPContextPanel(Widget):
             return None
 
         video_list = self.query_one("#video-list", ListView)
-        if video_list.index is not None and 0 <= video_list.index < len(self.slp_info.videos):
+        if video_list.index is not None and 0 <= video_list.index < len(
+            self.slp_info.videos
+        ):
             return self.slp_info.videos[video_list.index]
         return None
 

@@ -649,7 +649,9 @@ class JobExecutor:
 
             predictions_exist = Path(predictions_path).exists()
             if process.returncode == 0 and predictions_exist:
-                logging.info(f"[INFERENCE] Complete — predictions at {predictions_path}")
+                logging.info(
+                    f"[INFERENCE] Complete — predictions at {predictions_path}"
+                )
                 if channel.readyState == "open":
                     channel.send(
                         f'INFERENCE_COMPLETE::{{"predictions_path": "{predictions_path}"}}'
@@ -824,9 +826,9 @@ class JobExecutor:
                                     buf = b""
                                 break
 
-                            sep = buf[match.start():match.end()]
-                            payload = buf[:match.start()]
-                            buf = buf[match.end():]
+                            sep = buf[match.start() : match.end()]
+                            payload = buf[: match.start()]
+                            buf = buf[match.end() :]
 
                             text = payload.decode(errors="replace")
                             if not text:
@@ -867,6 +869,7 @@ class JobExecutor:
 
                                     if channel.readyState == "open":
                                         import json
+
                                         progress_msg = f"{MSG_JOB_PROGRESS}{MSG_SEPARATOR}{json.dumps(progress_data)}"
                                         channel.send(progress_msg)
 
@@ -914,14 +917,14 @@ class JobExecutor:
             # - exited with code 1 after a stop was requested: PyTorch Lightning
             #   caught SIGINT, ran graceful shutdown, then called sys.exit(1)
             cancelled = process.returncode == -signal.SIGTERM
-            stopped_early = (
-                process.returncode == -signal.SIGINT
-                or (self._stop_requested and not cancelled and process.returncode != 0)
+            stopped_early = process.returncode == -signal.SIGINT or (
+                self._stop_requested and not cancelled and process.returncode != 0
             )
 
             if process.returncode == 0 or stopped_early:
                 # Job completed successfully (or stopped early with checkpoint)
                 import json
+
                 result_data = {
                     "job_id": job_id,
                     "job_type": job_type,
@@ -930,7 +933,9 @@ class JobExecutor:
                     "stopped_early": stopped_early,
                 }
                 if channel.readyState == "open":
-                    channel.send(f"{MSG_JOB_COMPLETE}{MSG_SEPARATOR}{json.dumps(result_data)}")
+                    channel.send(
+                        f"{MSG_JOB_COMPLETE}{MSG_SEPARATOR}{json.dumps(result_data)}"
+                    )
                 if stopped_early:
                     logging.info(f"[JOB {job_id}] Job stopped early (checkpoint saved)")
                 else:
@@ -943,6 +948,7 @@ class JobExecutor:
             else:
                 # Job failed or was cancelled
                 import json
+
                 error_data = {
                     "job_id": job_id,
                     "job_type": job_type,
@@ -955,11 +961,15 @@ class JobExecutor:
                     ),
                 }
                 if channel.readyState == "open":
-                    channel.send(f"{MSG_JOB_FAILED}{MSG_SEPARATOR}{json.dumps(error_data)}")
+                    channel.send(
+                        f"{MSG_JOB_FAILED}{MSG_SEPARATOR}{json.dumps(error_data)}"
+                    )
                 if cancelled:
                     logging.info(f"[JOB {job_id}] Job cancelled by user")
                 else:
-                    logging.error(f"[JOB {job_id}] Job failed with exit code {process.returncode}")
+                    logging.error(
+                        f"[JOB {job_id}] Job failed with exit code {process.returncode}"
+                    )
                 return {
                     "success": False,
                     "stopped_early": False,
@@ -969,6 +979,7 @@ class JobExecutor:
         except Exception as e:
             # Unexpected error
             import json
+
             logging.error(f"[JOB {job_id}] Execution error: {e}")
             error_data = {
                 "job_id": job_id,

@@ -660,8 +660,13 @@ def check_video_paths(
 
     return asyncio.run(
         _check_video_paths_async(
-            slp_path, room_id, worker_id, timeout,
-            on_path_rejected, on_fs_response, on_videos_missing,
+            slp_path,
+            room_id,
+            worker_id,
+            timeout,
+            on_path_rejected,
+            on_fs_response,
+            on_videos_missing,
             on_upload_response,
         )
     )
@@ -702,16 +707,12 @@ async def _authenticate_channel(
 
     # Wait for AUTH_CHALLENGE from worker
     try:
-        challenge_msg = await asyncio.wait_for(
-            response_queue.get(), timeout=timeout
-        )
+        challenge_msg = await asyncio.wait_for(response_queue.get(), timeout=timeout)
     except asyncio.TimeoutError:
         raise ConfigurationError("Authentication timed out waiting for challenge")
 
     if not challenge_msg.startswith(MSG_AUTH_CHALLENGE):
-        raise ConfigurationError(
-            f"Expected AUTH_CHALLENGE, got: {challenge_msg[:50]}"
-        )
+        raise ConfigurationError(f"Expected AUTH_CHALLENGE, got: {challenge_msg[:50]}")
 
     # Extract nonce
     parts = challenge_msg.split(MSG_SEPARATOR, 1)
@@ -725,9 +726,7 @@ async def _authenticate_channel(
 
     # Wait for AUTH_SUCCESS or AUTH_FAILURE
     try:
-        auth_result = await asyncio.wait_for(
-            response_queue.get(), timeout=timeout
-        )
+        auth_result = await asyncio.wait_for(response_queue.get(), timeout=timeout)
     except asyncio.TimeoutError:
         raise ConfigurationError("Authentication timed out waiting for result")
 
@@ -738,9 +737,7 @@ async def _authenticate_channel(
         reason = parts[1] if len(parts) > 1 else "unknown"
         raise ConfigurationError(f"Authentication failed: {reason}")
     else:
-        raise ConfigurationError(
-            f"Unexpected response during auth: {auth_result[:50]}"
-        )
+        raise ConfigurationError(f"Unexpected response during auth: {auth_result[:50]}")
 
 
 async def _check_video_paths_async(
@@ -881,12 +878,14 @@ async def _check_video_paths_async(
             offer = await pc.createOffer()
             await pc.setLocalDescription(offer)
 
-            offer_msg = json.dumps({
-                "type": pc.localDescription.type,
-                "sender": peer_id,
-                "target": worker_id,
-                "sdp": pc.localDescription.sdp,
-            })
+            offer_msg = json.dumps(
+                {
+                    "type": pc.localDescription.type,
+                    "sender": peer_id,
+                    "target": worker_id,
+                    "sdp": pc.localDescription.sdp,
+                }
+            )
             await ws.send(offer_msg)
 
             # Wait for answer
@@ -908,9 +907,7 @@ async def _check_video_paths_async(
             await asyncio.wait_for(channel_open.wait(), timeout=10.0)
 
             # Authenticate with worker via PSK
-            await _authenticate_channel(
-                data_channel, response_queue, room_secret
-            )
+            await _authenticate_channel(data_channel, response_queue, room_secret)
 
             # Thread-safe send wrapper for callbacks that may run in
             # executor threads (Qt dialogs).  Shared by on_path_rejected
@@ -926,9 +923,7 @@ async def _check_video_paths_async(
             max_path_retries = 3
 
             for _attempt in range(max_path_retries):
-                data_channel.send(
-                    f"{MSG_USE_WORKER_PATH}{MSG_SEPARATOR}{current_path}"
-                )
+                data_channel.send(f"{MSG_USE_WORKER_PATH}{MSG_SEPARATOR}{current_path}")
 
                 # Wait for path OK/error response
                 path_response = await asyncio.wait_for(
@@ -978,9 +973,7 @@ async def _check_video_paths_async(
                 response_queue.get(), timeout=timeout
             )
             if not video_response.startswith(MSG_FS_CHECK_VIDEOS_RESPONSE):
-                raise ConfigurationError(
-                    f"Unexpected response: {video_response[:50]}"
-                )
+                raise ConfigurationError(f"Unexpected response: {video_response[:50]}")
 
             # Parse video check data
             json_str = video_response.split(MSG_SEPARATOR, 1)[1]
@@ -1023,9 +1016,7 @@ async def _check_video_paths_async(
                     _thread_safe_send,
                 )
                 if resolved_mappings_or_none is None:
-                    raise ConfigurationError(
-                        "Video path resolution cancelled by user."
-                    )
+                    raise ConfigurationError("Video path resolution cancelled by user.")
                 resolved_mappings = resolved_mappings_or_none
 
             return PathCheckResult(
@@ -1568,7 +1559,10 @@ async def _run_training_async(
             @data_channel.on("message")
             async def on_message(message):
                 if isinstance(message, str):
-                    if message.startswith("PROGRESS_REPORT::") and on_raw_progress is not None:
+                    if (
+                        message.startswith("PROGRESS_REPORT::")
+                        and on_raw_progress is not None
+                    ):
                         payload = message.split("PROGRESS_REPORT::", 1)[1]
                         on_raw_progress(payload)
                     else:
@@ -1578,12 +1572,14 @@ async def _run_training_async(
             offer = await pc.createOffer()
             await pc.setLocalDescription(offer)
 
-            offer_msg = json.dumps({
-                "type": pc.localDescription.type,
-                "sender": peer_id,
-                "target": worker_id,
-                "sdp": pc.localDescription.sdp,
-            })
+            offer_msg = json.dumps(
+                {
+                    "type": pc.localDescription.type,
+                    "sender": peer_id,
+                    "target": worker_id,
+                    "sdp": pc.localDescription.sdp,
+                }
+            )
             await ws.send(offer_msg)
 
             # Wait for answer
@@ -1605,9 +1601,7 @@ async def _run_training_async(
             await asyncio.wait_for(channel_open.wait(), timeout=30.0)
 
             # Authenticate with worker via PSK
-            await _authenticate_channel(
-                data_channel, response_queue, room_secret
-            )
+            await _authenticate_channel(data_channel, response_queue, room_secret)
 
             # Expose thread-safe send function for bidirectional communication
             if on_channel_ready:
@@ -1629,7 +1623,9 @@ async def _run_training_async(
 
             # Submit job
             spec_json = spec.to_json()
-            submit_msg = f"{MSG_JOB_SUBMIT}{MSG_SEPARATOR}{job_id}{MSG_SEPARATOR}{spec_json}"
+            submit_msg = (
+                f"{MSG_JOB_SUBMIT}{MSG_SEPARATOR}{job_id}{MSG_SEPARATOR}{spec_json}"
+            )
             data_channel.send(submit_msg)
 
             # Process responses until completion or failure
@@ -2043,12 +2039,14 @@ async def _run_inference_async(
             offer = await pc.createOffer()
             await pc.setLocalDescription(offer)
 
-            offer_msg = json.dumps({
-                "type": pc.localDescription.type,
-                "sender": peer_id,
-                "target": worker_id,
-                "sdp": pc.localDescription.sdp,
-            })
+            offer_msg = json.dumps(
+                {
+                    "type": pc.localDescription.type,
+                    "sender": peer_id,
+                    "target": worker_id,
+                    "sdp": pc.localDescription.sdp,
+                }
+            )
             await ws.send(offer_msg)
 
             # Wait for answer
@@ -2070,13 +2068,13 @@ async def _run_inference_async(
             await asyncio.wait_for(channel_open.wait(), timeout=30.0)
 
             # Authenticate with worker via PSK
-            await _authenticate_channel(
-                data_channel, response_queue, room_secret
-            )
+            await _authenticate_channel(data_channel, response_queue, room_secret)
 
             # Submit job
             spec_json = spec.to_json()
-            submit_msg = f"{MSG_JOB_SUBMIT}{MSG_SEPARATOR}{job_id}{MSG_SEPARATOR}{spec_json}"
+            submit_msg = (
+                f"{MSG_JOB_SUBMIT}{MSG_SEPARATOR}{job_id}{MSG_SEPARATOR}{spec_json}"
+            )
             data_channel.send(submit_msg)
 
             # Process responses
@@ -2117,9 +2115,7 @@ async def _run_inference_async(
                 elif response.startswith(MSG_JOB_PROGRESS):
                     # Forward progress if callback provided
                     if progress_callback:
-                        progress_callback(
-                            ProgressEvent(event_type="epoch_end")
-                        )
+                        progress_callback(ProgressEvent(event_type="epoch_end"))
 
                 elif response.startswith(MSG_JOB_COMPLETE):
                     parts = response.split(MSG_SEPARATOR, 1)

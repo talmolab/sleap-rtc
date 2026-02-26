@@ -296,7 +296,9 @@ class Config:
         mappings = []
         for entry in data.get("path_mappings", []):
             if "local" in entry and "worker" in entry:
-                mappings.append(PathMapping(local=entry["local"], worker=entry["worker"]))
+                mappings.append(
+                    PathMapping(local=entry["local"], worker=entry["worker"])
+                )
         return mappings
 
     def save_path_mapping(self, local: str, worker: str) -> None:
@@ -331,7 +333,8 @@ class Config:
         data = self._read_home_toml()
         mappings = data.get("path_mappings", [])
         new_mappings = [
-            m for m in mappings
+            m
+            for m in mappings
             if not (m.get("local") == local and m.get("worker") == worker)
         ]
         if len(new_mappings) == len(mappings):
@@ -415,7 +418,9 @@ class Config:
         # Don't add port to standard HTTPS/HTTP URLs (they use 443/80)
         # Only add port for localhost or explicit non-standard URLs
         host_part = url.split("//")[-1]
-        is_localhost = host_part.startswith("localhost") or host_part.startswith("127.0.0.1")
+        is_localhost = host_part.startswith("localhost") or host_part.startswith(
+            "127.0.0.1"
+        )
         has_port = ":" in host_part
 
         if is_localhost and not has_port:

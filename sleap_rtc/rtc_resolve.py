@@ -146,7 +146,9 @@ class ResolveClient:
 
                 if not workers:
                     logging.error("No workers found in room")
-                    print("\nNo workers found in the room. Make sure a Worker is running.")
+                    print(
+                        "\nNo workers found in the room. Make sure a Worker is running."
+                    )
                     return None
 
                 # Interactive worker selection
@@ -173,7 +175,9 @@ class ResolveClient:
                     logging.info("Waiting for PSK authentication...")
                     auth_success = await self._wait_for_auth()
                     if not auth_success:
-                        logging.error(f"PSK authentication failed: {self._auth_failed_reason}")
+                        logging.error(
+                            f"PSK authentication failed: {self._auth_failed_reason}"
+                        )
                         print(f"\nAuthentication failed: {self._auth_failed_reason}")
                         print("Make sure the room secret matches the worker's secret.")
                         return None
@@ -196,7 +200,9 @@ class ResolveClient:
                 missing = video_data.get("missing", [])
 
                 if not missing:
-                    print(f"\nAll {video_data.get('total_videos', 0)} videos are accessible!")
+                    print(
+                        f"\nAll {video_data.get('total_videos', 0)} videos are accessible!"
+                    )
                     print("No path resolution needed.")
                     return self.slp_path
 
@@ -228,6 +234,7 @@ class ResolveClient:
 
                 if open_browser:
                     import webbrowser
+
                     webbrowser.open(resolve_url)
 
                 # Run until resolution is complete or cancelled
@@ -288,11 +295,13 @@ class ResolveClient:
             "properties": {"status": "available"},
         }
 
-        discover_msg = json.dumps({
-            "type": "discover_peers",
-            "from_peer_id": self.peer_id,
-            "filters": filters,
-        })
+        discover_msg = json.dumps(
+            {
+                "type": "discover_peers",
+                "from_peer_id": self.peer_id,
+                "filters": filters,
+            }
+        )
 
         await self.websocket.send(discover_msg)
 
@@ -332,12 +341,14 @@ class ResolveClient:
         offer = await self.pc.createOffer()
         await self.pc.setLocalDescription(offer)
 
-        offer_msg = json.dumps({
-            "type": self.pc.localDescription.type,
-            "sender": self.peer_id,
-            "target": worker_id,
-            "sdp": self.pc.localDescription.sdp,
-        })
+        offer_msg = json.dumps(
+            {
+                "type": self.pc.localDescription.type,
+                "sender": self.peer_id,
+                "target": worker_id,
+                "sdp": self.pc.localDescription.sdp,
+            }
+        )
 
         await self.websocket.send(offer_msg)
         logging.info(f"Sent offer to worker {worker_id}")
@@ -403,10 +414,16 @@ class ResolveClient:
 
             elif response.startswith(MSG_WORKER_PATH_ERROR):
                 parts = response.split(MSG_SEPARATOR)
-                return {"success": False, "error": parts[1] if len(parts) > 1 else "Unknown error"}
+                return {
+                    "success": False,
+                    "error": parts[1] if len(parts) > 1 else "Unknown error",
+                }
 
             else:
-                return {"success": False, "error": f"Unexpected response: {response[:50]}"}
+                return {
+                    "success": False,
+                    "error": f"Unexpected response: {response[:50]}",
+                }
 
         except asyncio.TimeoutError:
             return {"success": False, "error": "Worker path validation timed out"}
@@ -517,7 +534,9 @@ class ResolveClient:
                 return self._authenticated
             except asyncio.TimeoutError:
                 # No challenge received - worker is in legacy mode too
-                logging.info("No AUTH_CHALLENGE received - legacy mode (no auth required)")
+                logging.info(
+                    "No AUTH_CHALLENGE received - legacy mode (no auth required)"
+                )
                 self._authenticated = True
                 return True
 
@@ -546,9 +565,11 @@ class ResolveClient:
                 return
 
             # Forward specific messages to response queue
-            if (message.startswith(MSG_WORKER_PATH_OK) or
-                message.startswith(MSG_WORKER_PATH_ERROR) or
-                message.startswith(MSG_FS_CHECK_VIDEOS_RESPONSE)):
+            if (
+                message.startswith(MSG_WORKER_PATH_OK)
+                or message.startswith(MSG_WORKER_PATH_ERROR)
+                or message.startswith(MSG_FS_CHECK_VIDEOS_RESPONSE)
+            ):
                 await self.response_queue.put(message)
 
             # Forward FS_* messages to viewer server

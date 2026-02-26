@@ -84,7 +84,9 @@ class FileManager:
         # Holds state for an in-progress upload (one at a time).
         self._upload_session: Optional[dict] = None
 
-    async def send_file(self, channel: RTCDataChannel, file_path: str, output_dir: str = ""):
+    async def send_file(
+        self, channel: RTCDataChannel, file_path: str, output_dir: str = ""
+    ):
         """Send a file to client via RTC data channel.
 
         Args:
@@ -273,7 +275,9 @@ class FileManager:
             chunk: Raw bytes received from the client.
         """
         if self._upload_session is None:
-            logging.warning("Received upload chunk with no active upload session; ignoring.")
+            logging.warning(
+                "Received upload chunk with no active upload session; ignoring."
+            )
             return
 
         session = self._upload_session
@@ -313,7 +317,9 @@ class FileManager:
             channel: RTC data channel to send the result on.
         """
         if self._upload_session is None:
-            logging.warning("Received FILE_UPLOAD_END with no active session; ignoring.")
+            logging.warning(
+                "Received FILE_UPLOAD_END with no active session; ignoring."
+            )
             return
 
         session = self._upload_session
@@ -341,9 +347,7 @@ class FileManager:
         sha256 = session["sha256_ctx"].hexdigest()
         self._upload_cache[sha256] = str(session["file_path"])
 
-        channel.send(
-            f"{MSG_FILE_UPLOAD_COMPLETE}{MSG_SEPARATOR}{session['file_path']}"
-        )
+        channel.send(f"{MSG_FILE_UPLOAD_COMPLETE}{MSG_SEPARATOR}{session['file_path']}")
         logging.info(f"Upload complete: {session['file_path']} (sha256={sha256[:12]}…)")
 
     # =========================================================================
@@ -435,7 +439,10 @@ class FileManager:
         # Count non-wildcard characters
         non_wildcard = sum(1 for c in pattern if c not in "*?[]")
         if non_wildcard < self.MIN_PATTERN_CHARS:
-            return False, f"Pattern must contain at least {self.MIN_PATTERN_CHARS} non-wildcard characters"
+            return (
+                False,
+                f"Pattern must contain at least {self.MIN_PATTERN_CHARS} non-wildcard characters",
+            )
 
         return True, None
 
@@ -768,12 +775,14 @@ class FileManager:
         for entry in paginated:
             try:
                 stat = entry.stat()
-                entries.append({
-                    "name": entry.name,
-                    "type": "directory" if entry.is_dir() else "file",
-                    "size": stat.st_size if entry.is_file() else 0,
-                    "modified": stat.st_mtime,
-                })
+                entries.append(
+                    {
+                        "name": entry.name,
+                        "type": "directory" if entry.is_dir() else "file",
+                        "size": stat.st_size if entry.is_file() else 0,
+                        "modified": stat.st_mtime,
+                    }
+                )
             except (PermissionError, OSError):
                 # Skip entries we can't stat
                 continue
@@ -886,10 +895,12 @@ class FileManager:
             else:
                 # Extract just the filename for display
                 filename = Path(video_path).name
-                missing.append({
-                    "filename": filename,
-                    "original_path": video_path,
-                })
+                missing.append(
+                    {
+                        "filename": filename,
+                        "original_path": video_path,
+                    }
+                )
 
         return {
             "slp_path": slp_path,
@@ -1202,10 +1213,12 @@ class FileManager:
 
             # Check if the transformed path exists on the Worker filesystem
             if Path(candidate).exists():
-                would_resolve.append({
-                    "original": missing_path,
-                    "resolved": candidate,
-                })
+                would_resolve.append(
+                    {
+                        "original": missing_path,
+                        "resolved": candidate,
+                    }
+                )
             else:
                 would_not_resolve.append(missing_path)
 

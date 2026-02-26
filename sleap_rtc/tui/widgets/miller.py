@@ -17,7 +17,6 @@ from textual.message import Message
 from textual.binding import Binding
 
 
-
 @dataclass
 class FileEntry:
     """Represents a file or directory entry."""

@@ -43,7 +43,9 @@ class RoomStateCRDT:
         self.doc = doc
 
     @classmethod
-    def create(cls, room_id: str, creator_peer_id: Optional[str] = None) -> "RoomStateCRDT":
+    def create(
+        cls, room_id: str, creator_peer_id: Optional[str] = None
+    ) -> "RoomStateCRDT":
         """Create a new CRDT document for a room.
 
         Args:
@@ -60,7 +62,9 @@ class RoomStateCRDT:
             root = doc.get("state", type=Map)
             root["room_id"] = room_id
             root["workers"] = Map()
-            root["admin_peer_id"] = creator_peer_id if creator_peer_id is not None else ""
+            root["admin_peer_id"] = (
+                creator_peer_id if creator_peer_id is not None else ""
+            )
             root["version"] = 0
 
         return cls(room_id, doc)
@@ -148,10 +152,7 @@ class RoomStateCRDT:
         }
 
     def add_worker(
-        self,
-        peer_id: str,
-        metadata: Dict[str, Any],
-        is_admin: bool = False
+        self, peer_id: str, metadata: Dict[str, Any], is_admin: bool = False
     ) -> None:
         """Add a new worker to the room state.
 
@@ -177,11 +178,7 @@ class RoomStateCRDT:
             metadata["properties"]["last_heartbeat"] = int(time.time() * 1000)
 
             # Create worker entry
-            worker_data = {
-                "peer_id": peer_id,
-                "role": "worker",
-                "metadata": metadata
-            }
+            worker_data = {"peer_id": peer_id, "role": "worker", "metadata": metadata}
 
             # Store as JSON string
             workers[peer_id] = json.dumps(worker_data)
@@ -194,10 +191,7 @@ class RoomStateCRDT:
             root["version"] = root.get("version", 0) + 1
 
     def update_worker_status(
-        self,
-        peer_id: str,
-        status: str,
-        current_job: Optional[str] = None
+        self, peer_id: str, status: str, current_job: Optional[str] = None
     ) -> None:
         """Update a worker's status.
 
@@ -217,7 +211,9 @@ class RoomStateCRDT:
 
             # Load existing worker data
             worker_json = workers[peer_id]
-            worker = json.loads(worker_json) if isinstance(worker_json, str) else worker_json
+            worker = (
+                json.loads(worker_json) if isinstance(worker_json, str) else worker_json
+            )
 
             # Update status fields
             if "metadata" not in worker:
@@ -251,7 +247,9 @@ class RoomStateCRDT:
 
             # Load existing worker data
             worker_json = workers[peer_id]
-            worker = json.loads(worker_json) if isinstance(worker_json, str) else worker_json
+            worker = (
+                json.loads(worker_json) if isinstance(worker_json, str) else worker_json
+            )
 
             # Update heartbeat
             if "metadata" not in worker:
@@ -299,14 +297,18 @@ class RoomStateCRDT:
             if isinstance(workers, Map):
                 for worker_id in list(workers.keys()):
                     worker_json = workers[worker_id]
-                    worker = json.loads(worker_json) if isinstance(worker_json, str) else worker_json
+                    worker = (
+                        json.loads(worker_json)
+                        if isinstance(worker_json, str)
+                        else worker_json
+                    )
 
                     if "metadata" not in worker:
                         worker["metadata"] = {}
                     if "properties" not in worker["metadata"]:
                         worker["metadata"]["properties"] = {}
 
-                    worker["metadata"]["properties"]["is_admin"] = (worker_id == peer_id)
+                    worker["metadata"]["properties"]["is_admin"] = worker_id == peer_id
                     workers[worker_id] = json.dumps(worker)
 
             root["version"] = root.get("version", 0) + 1
@@ -360,7 +362,9 @@ class RoomStateCRDT:
         result = {}
         for peer_id in workers:
             worker_json = workers[peer_id]
-            result[peer_id] = json.loads(worker_json) if isinstance(worker_json, str) else worker_json
+            result[peer_id] = (
+                json.loads(worker_json) if isinstance(worker_json, str) else worker_json
+            )
 
         return result
 
@@ -374,7 +378,8 @@ class RoomStateCRDT:
         return {
             peer_id: worker
             for peer_id, worker in all_workers.items()
-            if worker.get("metadata", {}).get("properties", {}).get("status") == "available"
+            if worker.get("metadata", {}).get("properties", {}).get("status")
+            == "available"
         }
 
     def get_version(self) -> int:

@@ -123,7 +123,9 @@ class JobValidator:
         elif spec.config_paths:
             for i, config_path in enumerate(spec.config_paths):
                 # Use indexed field name for multiple configs
-                field_name = f"config_path[{i}]" if len(spec.config_paths) > 1 else "config_path"
+                field_name = (
+                    f"config_path[{i}]" if len(spec.config_paths) > 1 else "config_path"
+                )
                 error = self._validate_path(config_path, field_name, must_exist=True)
                 if error:
                     errors.append(error)
@@ -369,7 +371,9 @@ class JobValidator:
             List of ValidationError objects for invalid internal paths
         """
         errors = []
-        config_prefix = f"config[{config_index}]." if len(spec.config_paths) > 1 else "config."
+        config_prefix = (
+            f"config[{config_index}]." if len(spec.config_paths) > 1 else "config."
+        )
 
         # Try to parse the config file
         try:
@@ -412,7 +416,9 @@ class JobValidator:
                 # sleap-nn accepts both string and list for train_labels_path
                 if isinstance(train_labels, str):
                     error = self._validate_path(
-                        train_labels, f"{config_prefix}train_labels_path", must_exist=True
+                        train_labels,
+                        f"{config_prefix}train_labels_path",
+                        must_exist=True,
                     )
                     if error:
                         errors.append(error)
@@ -420,7 +426,9 @@ class JobValidator:
                     for i, path in enumerate(train_labels):
                         if isinstance(path, str):
                             field_name = f"{config_prefix}train_labels_path[{i}]"
-                            error = self._validate_path(path, field_name, must_exist=True)
+                            error = self._validate_path(
+                                path, field_name, must_exist=True
+                            )
                             if error:
                                 errors.append(error)
 
@@ -439,7 +447,9 @@ class JobValidator:
                     for i, path in enumerate(val_labels):
                         if isinstance(path, str):
                             field_name = f"{config_prefix}val_labels_path[{i}]"
-                            error = self._validate_path(path, field_name, must_exist=True)
+                            error = self._validate_path(
+                                path, field_name, must_exist=True
+                            )
                             if error:
                                 errors.append(error)
 

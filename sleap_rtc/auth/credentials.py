@@ -226,11 +226,13 @@ def get_valid_jwt() -> Optional[str]:
 
     try:
         import jwt
+
         # Decode without verification just to read expiration claim
         claims = jwt.decode(jwt_token, options={"verify_signature": False})
         exp = claims.get("exp")
         if exp:
             import time
+
             if time.time() >= exp:
                 logger.warning("Stored JWT has expired")
                 return None

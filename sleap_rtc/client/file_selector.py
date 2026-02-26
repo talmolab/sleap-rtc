@@ -21,6 +21,7 @@ def _get_console():
     if _console is None:
         try:
             from rich.console import Console
+
             _console = Console()
         except ImportError:
             _console = False  # Mark as unavailable
@@ -46,23 +47,26 @@ def _is_interactive_terminal() -> bool:
 
     # Check for common CI/CD environments
     ci_env_vars = [
-        "CI",                    # Generic CI flag
-        "GITHUB_ACTIONS",        # GitHub Actions
-        "GITLAB_CI",             # GitLab CI
-        "JENKINS_URL",           # Jenkins
-        "TRAVIS",                # Travis CI
-        "CIRCLECI",              # CircleCI
-        "BUILDKITE",             # Buildkite
-        "TEAMCITY_VERSION",      # TeamCity
-        "TF_BUILD",              # Azure DevOps
-        "CODEBUILD_BUILD_ID",    # AWS CodeBuild
+        "CI",  # Generic CI flag
+        "GITHUB_ACTIONS",  # GitHub Actions
+        "GITLAB_CI",  # GitLab CI
+        "JENKINS_URL",  # Jenkins
+        "TRAVIS",  # Travis CI
+        "CIRCLECI",  # CircleCI
+        "BUILDKITE",  # Buildkite
+        "TEAMCITY_VERSION",  # TeamCity
+        "TF_BUILD",  # Azure DevOps
+        "CODEBUILD_BUILD_ID",  # AWS CodeBuild
     ]
     for env_var in ci_env_vars:
         if os.environ.get(env_var):
             return False
 
     # Check for non-interactive shells
-    if os.environ.get("NONINTERACTIVE") or os.environ.get("DEBIAN_FRONTEND") == "noninteractive":
+    if (
+        os.environ.get("NONINTERACTIVE")
+        or os.environ.get("DEBIAN_FRONTEND") == "noninteractive"
+    ):
         return False
 
     # Check for Emacs shell mode
@@ -71,8 +75,9 @@ def _is_interactive_terminal() -> bool:
 
     # Check for piped input (common in scripts)
     try:
-        if hasattr(sys.stdin, 'fileno'):
+        if hasattr(sys.stdin, "fileno"):
             import select
+
             # If stdin has data waiting, we're likely being piped to
             if select.select([sys.stdin], [], [], 0)[0]:
                 return False
@@ -379,9 +384,7 @@ class ArrowSelector:
             return FormattedText(lines)
 
         # Create application
-        layout = Layout(
-            Window(content=FormattedTextControl(get_formatted_text))
-        )
+        layout = Layout(Window(content=FormattedTextControl(get_formatted_text)))
 
         app = Application(
             layout=layout,
@@ -409,7 +412,10 @@ class ArrowSelector:
         except Exception as e:
             # Fall back to numbered on any error
             import logging
-            logging.debug(f"Interactive selection failed, falling back to numbered: {e}")
+
+            logging.debug(
+                f"Interactive selection failed, falling back to numbered: {e}"
+            )
             return self._run_numbered()
 
         return result[0]
@@ -426,7 +432,9 @@ class ArrowSelector:
 
             for i, candidate in enumerate(self.candidates, 1):
                 size_str = _format_size(candidate.size)
-                console.print(f"  [bold cyan]{i}.[/bold cyan] {candidate.path}  [dim]({size_str})[/dim]")
+                console.print(
+                    f"  [bold cyan]{i}.[/bold cyan] {candidate.path}  [dim]({size_str})[/dim]"
+                )
 
             console.print()
             if self.allow_cancel:
@@ -461,14 +469,20 @@ class ArrowSelector:
                 else:
                     console = _get_console()
                     if console:
-                        console.print(f"[yellow]Please enter a number between 1 and {len(self.candidates)}[/yellow]")
+                        console.print(
+                            f"[yellow]Please enter a number between 1 and {len(self.candidates)}[/yellow]"
+                        )
                     else:
-                        print(f"Please enter a number between 1 and {len(self.candidates)}")
+                        print(
+                            f"Please enter a number between 1 and {len(self.candidates)}"
+                        )
 
             except ValueError:
                 console = _get_console()
                 if console:
-                    console.print("[yellow]Invalid input. Please enter a number.[/yellow]")
+                    console.print(
+                        "[yellow]Invalid input. Please enter a number.[/yellow]"
+                    )
                 else:
                     print("Invalid input. Please enter a number.")
             except (EOFError, KeyboardInterrupt):
@@ -624,7 +638,10 @@ class MountSelector:
                 app.run()
         except Exception as e:
             import logging
-            logging.debug(f"Interactive mount selection failed, falling back to numbered: {e}")
+
+            logging.debug(
+                f"Interactive mount selection failed, falling back to numbered: {e}"
+            )
             return self._run_numbered(options)
 
         return result[0]
@@ -674,14 +691,18 @@ class MountSelector:
                 else:
                     console = _get_console()
                     if console:
-                        console.print(f"[yellow]Please enter a number between 1 and {len(options)}[/yellow]")
+                        console.print(
+                            f"[yellow]Please enter a number between 1 and {len(options)}[/yellow]"
+                        )
                     else:
                         print(f"Please enter a number between 1 and {len(options)}")
 
             except ValueError:
                 console = _get_console()
                 if console:
-                    console.print("[yellow]Invalid input. Please enter a number.[/yellow]")
+                    console.print(
+                        "[yellow]Invalid input. Please enter a number.[/yellow]"
+                    )
                 else:
                     print("Invalid input. Please enter a number.")
             except (EOFError, KeyboardInterrupt):
@@ -815,7 +836,12 @@ class WorkerSelector:
                     lines.append(("fg:ansigreen", f"{gpu_memory_gb:.1f} GB\n"))
                 else:
                     lines.append(("", f"  {display_name}\n"))
-                    lines.append(("fg:ansibrightblack", f"    {gpu_model}  •  {gpu_memory_gb:.1f} GB\n"))
+                    lines.append(
+                        (
+                            "fg:ansibrightblack",
+                            f"    {gpu_model}  •  {gpu_memory_gb:.1f} GB\n",
+                        )
+                    )
 
             # Help text with highlighted keys (matching rich-click style)
             lines.append(("", "\n"))
@@ -841,6 +867,7 @@ class WorkerSelector:
             await app.run_async()
         except Exception as e:
             import logging
+
             logging.debug(f"Interactive worker selection failed: {e}")
             return self._run_numbered()
 
@@ -870,9 +897,7 @@ class WorkerSelector:
 
                 # Show name if available, otherwise peer_id
                 display_name = name if name else peer_id[:20]
-                console.print(
-                    f"  [bold cyan]{i}.[/bold cyan] {display_name}"
-                )
+                console.print(f"  [bold cyan]{i}.[/bold cyan] {display_name}")
                 console.print(
                     f"      [dim]{gpu_model}[/dim]  •  [green]{gpu_memory_gb:.1f} GB[/green]"
                 )
@@ -922,14 +947,20 @@ class WorkerSelector:
                 else:
                     console = _get_console()
                     if console:
-                        console.print(f"[yellow]Please enter a number between 1 and {len(self.workers)}[/yellow]")
+                        console.print(
+                            f"[yellow]Please enter a number between 1 and {len(self.workers)}[/yellow]"
+                        )
                     else:
-                        print(f"Please enter a number between 1 and {len(self.workers)}")
+                        print(
+                            f"Please enter a number between 1 and {len(self.workers)}"
+                        )
 
             except ValueError:
                 console = _get_console()
                 if console:
-                    console.print("[yellow]Invalid input. Please enter a number.[/yellow]")
+                    console.print(
+                        "[yellow]Invalid input. Please enter a number.[/yellow]"
+                    )
                 else:
                     print("Invalid input. Please enter a number.")
             except (EOFError, KeyboardInterrupt):
@@ -968,7 +999,9 @@ class NoMatchMenu:
             console.print(f"[yellow]No matches found for:[/yellow] {self.filename}")
             console.print()
             console.print("[bold]Options:[/bold]")
-            console.print("  [bold cyan]B[/bold cyan] - Open filesystem browser [dim](run sleap-rtc browse)[/dim]")
+            console.print(
+                "  [bold cyan]B[/bold cyan] - Open filesystem browser [dim](run sleap-rtc browse)[/dim]"
+            )
             console.print("  [bold cyan]P[/bold cyan] - Enter path manually")
             console.print("  [bold cyan]W[/bold cyan] - Try wildcard search")
             console.print("  [bold cyan]C[/bold cyan] - Cancel")
@@ -995,7 +1028,9 @@ class NoMatchMenu:
                 else:
                     console = _get_console()
                     if console:
-                        console.print("[yellow]Invalid option. Please enter B, P, W, or C.[/yellow]")
+                        console.print(
+                            "[yellow]Invalid option. Please enter B, P, W, or C.[/yellow]"
+                        )
                     else:
                         print("Invalid option. Please enter B, P, W, or C.")
 
@@ -1093,10 +1128,18 @@ class JobSpecConfirmation:
     def _build_field_list(self):
         """Build list of fields that can be edited."""
         import re
+
         self.fields = []
 
-        def add_field(name, label, value, file_filter, list_field=None, list_index=None,
-                      maps_to_override=None):
+        def add_field(
+            name,
+            label,
+            value,
+            file_filter,
+            list_field=None,
+            list_index=None,
+            maps_to_override=None,
+        ):
             """Helper to add a field.
 
             Args:
@@ -1127,10 +1170,18 @@ class JobSpecConfirmation:
             # Add config paths
             if hasattr(self.job_spec, "config_paths") and self.job_spec.config_paths:
                 for i, path in enumerate(self.job_spec.config_paths):
-                    field_name = f"config_path[{i}]" if len(self.job_spec.config_paths) > 1 else "config_path"
+                    field_name = (
+                        f"config_path[{i}]"
+                        if len(self.job_spec.config_paths) > 1
+                        else "config_path"
+                    )
                     add_field(
                         name=field_name,
-                        label=f"Config {i+1}" if len(self.job_spec.config_paths) > 1 else "Config",
+                        label=(
+                            f"Config {i+1}"
+                            if len(self.job_spec.config_paths) > 1
+                            else "Config"
+                        ),
                         value=path,
                         file_filter=".yaml,.json",
                         list_field="config_paths",
@@ -1147,7 +1198,10 @@ class JobSpecConfirmation:
                 )
 
             # Add val_labels path (explicit override)
-            if hasattr(self.job_spec, "val_labels_path") and self.job_spec.val_labels_path:
+            if (
+                hasattr(self.job_spec, "val_labels_path")
+                and self.job_spec.val_labels_path
+            ):
                 add_field(
                     name="val_labels_path",
                     label="Val Labels",
@@ -1191,7 +1245,10 @@ class JobSpecConfirmation:
                         )
 
             # Add resume checkpoint
-            if hasattr(self.job_spec, "resume_ckpt_path") and self.job_spec.resume_ckpt_path:
+            if (
+                hasattr(self.job_spec, "resume_ckpt_path")
+                and self.job_spec.resume_ckpt_path
+            ):
                 add_field(
                     name="resume_ckpt_path",
                     label="Resume Checkpoint",
@@ -1214,7 +1271,11 @@ class JobSpecConfirmation:
                 for i, path in enumerate(self.job_spec.model_paths):
                     add_field(
                         name=f"model_paths[{i}]",
-                        label=f"Model {i+1}" if len(self.job_spec.model_paths) > 1 else "Model",
+                        label=(
+                            f"Model {i+1}"
+                            if len(self.job_spec.model_paths) > 1
+                            else "Model"
+                        ),
                         value=path,
                         file_filter=None,  # Models are directories
                         list_field="model_paths",
@@ -1231,12 +1292,14 @@ class JobSpecConfirmation:
                 )
 
         # Add Submit option at the end
-        self.fields.append({
-            "name": "_submit",
-            "label": "Submit Job",
-            "value": None,
-            "is_action": True,
-        })
+        self.fields.append(
+            {
+                "name": "_submit",
+                "label": "Submit Job",
+                "value": None,
+                "is_action": True,
+            }
+        )
 
     def _get_error_for_field(self, field_name: str) -> Optional[str]:
         """Get error message for a field if one exists."""
@@ -1245,7 +1308,9 @@ class JobSpecConfirmation:
                 return err.get("message", "Error")
         return None
 
-    def _update_field_value(self, field_index: int, new_value: str, from_browser: bool = False):
+    def _update_field_value(
+        self, field_index: int, new_value: str, from_browser: bool = False
+    ):
         """Update a field value in both the field list and job spec.
 
         Args:
@@ -1308,15 +1373,24 @@ class JobSpecConfirmation:
 
         try:
             return await self._run_interactive_impl(
-                Application, KeyBindings, Layout, Window,
-                FormattedTextControl, FormattedText
+                Application,
+                KeyBindings,
+                Layout,
+                Window,
+                FormattedTextControl,
+                FormattedText,
             )
         finally:
             root_logger.setLevel(original_level)
 
     async def _run_interactive_impl(
-        self, Application, KeyBindings, Layout, Window,
-        FormattedTextControl, FormattedText
+        self,
+        Application,
+        KeyBindings,
+        Layout,
+        Window,
+        FormattedTextControl,
+        FormattedText,
     ) -> bool:
         """Implementation of interactive confirmation with logging suppressed."""
         kb = KeyBindings()
@@ -1370,13 +1444,23 @@ class JobSpecConfirmation:
 
             # Title
             lines.append(("bold", f"\n{self.title}\n"))
-            lines.append(("fg:ansibrightblack", "Review paths before submission. Press Enter to edit a path.\n\n"))
+            lines.append(
+                (
+                    "fg:ansibrightblack",
+                    "Review paths before submission. Press Enter to edit a path.\n\n",
+                )
+            )
 
             # Show any errors
             if self.errors:
                 lines.append(("fg:ansired bold", "Validation errors:\n"))
                 for err in self.errors:
-                    lines.append(("fg:ansired", f"  - {err.get('field')}: {err.get('message')}\n"))
+                    lines.append(
+                        (
+                            "fg:ansired",
+                            f"  - {err.get('field')}: {err.get('message')}\n",
+                        )
+                    )
                 lines.append(("", "\n"))
 
             # Show fields
@@ -1384,12 +1468,16 @@ class JobSpecConfirmation:
                 selected = i == self.selected_index
                 is_action = field.get("is_action", False)
                 error = self._get_error_for_field(field["name"])
-                path_exists = field.get("path_exists", True)  # Assume exists for actions
+                path_exists = field.get(
+                    "path_exists", True
+                )  # Assume exists for actions
 
                 if is_action:
                     # Submit action
                     if selected:
-                        lines.append(("bold fg:ansigreen", f"\n  > [{field['label']}]\n"))
+                        lines.append(
+                            ("bold fg:ansigreen", f"\n  > [{field['label']}]\n")
+                        )
                     else:
                         lines.append(("fg:ansigreen", f"\n    [{field['label']}]\n"))
                 else:
@@ -1401,7 +1489,7 @@ class JobSpecConfirmation:
                     max_len = 60
                     display_value = value
                     if len(display_value) > max_len:
-                        display_value = "..." + display_value[-(max_len - 3):]
+                        display_value = "..." + display_value[-(max_len - 3) :]
 
                     # Color based on verification status:
                     # - Red: error from worker validation
@@ -1433,9 +1521,16 @@ class JobSpecConfirmation:
                         if error:
                             lines.append(("fg:ansired", f"      Error: {error}\n"))
                         elif is_unverified:
-                            lines.append(("fg:ansiyellow", f"      Will be validated by worker\n"))
+                            lines.append(
+                                (
+                                    "fg:ansiyellow",
+                                    f"      Will be validated by worker\n",
+                                )
+                            )
                         elif is_verified:
-                            lines.append(("fg:ansigreen", f"      Verified on worker\n"))
+                            lines.append(
+                                ("fg:ansigreen", f"      Verified on worker\n")
+                            )
 
             # Help text
             lines.append(("", "\n"))
@@ -1489,7 +1584,9 @@ class JobSpecConfirmation:
                 if new_path:
                     self._update_field_value(field_index, new_path, from_browser=True)
                     # Clear error for this field
-                    self.errors = [e for e in self.errors if e.get("field") != field["name"]]
+                    self.errors = [
+                        e for e in self.errors if e.get("field") != field["name"]
+                    ]
 
         return self.confirmed
 

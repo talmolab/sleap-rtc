@@ -40,6 +40,8 @@ def _configure_tui_logging():
     logging.getLogger("aiortc").setLevel(logging.WARNING)
     logging.getLogger("aioice").setLevel(logging.WARNING)
     logging.getLogger("websockets").setLevel(logging.WARNING)
+
+
 from textual.binding import Binding
 
 from sleap_rtc.tui.screens.login import LoginScreen
@@ -118,12 +120,15 @@ class TUIApp(App):
 
     def _show_login(self) -> None:
         """Show the login screen."""
+
         def on_login_success(jwt: str, user: dict) -> None:
             """Called when login succeeds."""
             self.notify(f"Logged in as {user.get('username', 'unknown')}")
             # After login, switch to room selection
             # Use switch_screen for clean transition (pops current, pushes new)
-            self.switch_screen(RoomSelectScreen(on_room_selected=self._on_room_selected))
+            self.switch_screen(
+                RoomSelectScreen(on_room_selected=self._on_room_selected)
+            )
 
         login_screen = LoginScreen(on_login_success=on_login_success)
         self.push_screen(login_screen)
@@ -135,6 +140,7 @@ class TUIApp(App):
 
         # Resolve room_secret from credentials/env/filesystem
         from sleap_rtc.auth.secret_resolver import resolve_secret
+
         room_secret = resolve_secret(room_id)
 
         self._show_browser(room_id, token, room_secret=room_secret)
