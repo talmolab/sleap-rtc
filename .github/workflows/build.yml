@@ -1,0 +1,56 @@
+name: Build and publish to PyPI
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      testpypi:
+        description: "Publish to TestPyPI instead of PyPI"
+        required: false
+        default: "false"
+
+jobs:
+  build:
+    name: Build distribution
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.11"
+
+      - name: Build package
+        run: uv build
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  pypi:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write  # required for OIDC trusted publishing
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Publish to TestPyPI
+        if: ${{ github.event.inputs.testpypi == 'true' }}
+        run: uv publish --index testpypi --trusted-publishing always
+
+      - name: Publish to PyPI
+        if: ${{ github.event.inputs.testpypi != 'true' }}
+        run: uv publish --trusted-publishing always
