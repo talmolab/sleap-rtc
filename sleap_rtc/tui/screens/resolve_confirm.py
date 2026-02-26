@@ -13,7 +13,6 @@ from textual.widgets import Static, Button, Label
 from textual.binding import Binding
 
 
-
 class ResolveConfirmScreen(ModalScreen):
     """Modal screen for confirming video path resolution.
 
@@ -157,7 +156,6 @@ class ResolveConfirmScreen(ModalScreen):
         yield Container(
             Vertical(
                 Static("Confirm Video Path Resolution", classes="title"),
-
                 # Prefix transformation section
                 Vertical(
                     Static("Prefix Transformation:", classes="prefix-label"),
@@ -165,7 +163,6 @@ class ResolveConfirmScreen(ModalScreen):
                     Static(f"New: {self.new_prefix}", classes="new-prefix"),
                     id="prefix-section",
                 ),
-
                 # Videos that will be resolved
                 Vertical(
                     Static(
@@ -178,10 +175,8 @@ class ResolveConfirmScreen(ModalScreen):
                     ),
                     id="videos-section",
                 ),
-
                 # Still missing warning (if any)
                 *(self._build_missing_section()),
-
                 # Buttons
                 Container(
                     Button("Confirm", variant="primary", id="confirm-btn"),
@@ -221,8 +216,14 @@ class ResolveConfirmScreen(ModalScreen):
                     classes="warning-text",
                 ),
                 *(
-                    [Static(f"  ... and {len(self.still_missing) - 5} more", classes="warning-text")]
-                    if len(self.still_missing) > 5 else []
+                    [
+                        Static(
+                            f"  ... and {len(self.still_missing) - 5} more",
+                            classes="warning-text",
+                        )
+                    ]
+                    if len(self.still_missing) > 5
+                    else []
                 ),
                 id="still-missing-section",
             )

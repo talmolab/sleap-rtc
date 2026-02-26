@@ -111,8 +111,13 @@ def run_presubmission_checks(
 
     # Step 3: Check video paths
     path_result = check_video_paths(
-        slp_path, room_id, worker_id, parent_widget, send_fn=send_fn,
-        convert_fn=convert_fn, save_fn=save_fn,
+        slp_path,
+        room_id,
+        worker_id,
+        parent_widget,
+        send_fn=send_fn,
+        convert_fn=convert_fn,
+        save_fn=save_fn,
     )
     if not path_result.success:
         return path_result
@@ -345,14 +350,10 @@ def check_video_paths(
         blocks until the main thread puts the user's response (corrected
         path or None) into ``dialog_response_q``.
         """
-        dialog_request_q.put(
-            (_SLP_PATH_REQUEST, attempted_path, error_msg, send_fn_dc)
-        )
+        dialog_request_q.put((_SLP_PATH_REQUEST, attempted_path, error_msg, send_fn_dc))
         return dialog_response_q.get()
 
-    def _on_videos_missing(
-        videos: list, send_fn_dc: Callable
-    ) -> dict[str, str] | None:
+    def _on_videos_missing(videos: list, send_fn_dc: Callable) -> dict[str, str] | None:
         """Callback invoked from the background thread when videos are missing.
 
         Posts a request to the main thread to show ``PathResolutionDialog``
@@ -448,13 +449,12 @@ def check_video_paths(
 
                 if dialog.exec():
                     resolved_paths = dialog.get_resolved_paths()
-                    logger.info(
-                        f"User resolved {len(resolved_paths)} video paths"
-                    )
+                    logger.info(f"User resolved {len(resolved_paths)} video paths")
                     # Offer to save directory prefix mappings for each resolved pair
                     from pathlib import Path
                     from sleap_rtc.config import get_config
                     from sleap_rtc.gui.widgets import show_save_mapping_prompt
+
                     _cfg = get_config()
                     for orig, worker in resolved_paths.items():
                         local_dir = str(Path(orig).parent)
@@ -597,7 +597,9 @@ class PresubmissionFlow:
         # Callbacks (set by caller)
         self.on_auth_required: Callable[[], bool] | None = None
         self.on_validation_issues: Callable[["ValidationResult"], bool] | None = None
-        self.on_path_resolution: Callable[["PathCheckResult"], dict | None] | None = None
+        self.on_path_resolution: Callable[["PathCheckResult"], dict | None] | None = (
+            None
+        )
 
         # Results
         self.result: PresubmissionResult | None = None

@@ -150,8 +150,8 @@ filename = received_filename
 # Reject path traversal attempts
 if os.sep in filename or (os.altsep and os.altsep in filename) or ".." in filename:
     send(FILE_NOT_FOUND, filename, "Invalid filename")
-    return
 
+Return:
 # Resolve full path
 full_path = input_path / filename
 if not full_path.exists():
@@ -442,7 +442,7 @@ MSG_JOB_COMPLETE = "JOB_COMPLETE"
 MSG_JOB_FAILED = "JOB_FAILED"
 
 # Job control messages (client → worker)
-MSG_JOB_STOP = "JOB_STOP"      # Graceful stop (SIGINT, saves checkpoint)
+MSG_JOB_STOP = "JOB_STOP"  # Graceful stop (SIGINT, saves checkpoint)
 MSG_JOB_CANCEL = "JOB_CANCEL"  # Hard cancel (SIGTERM, immediate termination)
 
 # ZMQ control message forwarding (client → worker)

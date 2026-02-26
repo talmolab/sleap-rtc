@@ -13,7 +13,7 @@ class TestGithubLogin:
         from sleap_rtc.auth.github import get_dashboard_url
 
         url = get_dashboard_url()
-        assert url == "https://alicup29-test-org.github.io/sleap-rtc-dashboard/"
+        assert url == "https://talmolab.github.io/sleap-rtc/dashboard/"
 
     def test_get_dashboard_url_env_override(self, monkeypatch):
         """Should use SLEAP_DASHBOARD_URL env var if set."""

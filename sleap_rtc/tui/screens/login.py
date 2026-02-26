@@ -146,7 +146,10 @@ class LoginScreen(Screen):
                     Static(self.login_url, id="url-text"),
                     id="url-box",
                 ),
-                Static("(The URL has been copied to your clipboard if supported)", classes="hint"),
+                Static(
+                    "(The URL has been copied to your clipboard if supported)",
+                    classes="hint",
+                ),
                 Static(self.status_message, id="status"),
                 Static(f"Time remaining: {self.remaining_time}s", id="countdown"),
                 Button("Cancel", id="cancel-btn", variant="default"),
@@ -161,8 +164,13 @@ class LoginScreen(Screen):
         # Try to copy URL to clipboard
         try:
             import subprocess
+
             subprocess.run(
-                ["pbcopy"] if os.uname().sysname == "Darwin" else ["xclip", "-selection", "clipboard"],
+                (
+                    ["pbcopy"]
+                    if os.uname().sysname == "Darwin"
+                    else ["xclip", "-selection", "clipboard"]
+                ),
                 input=self.login_url.encode(),
                 check=False,
                 capture_output=True,
@@ -173,6 +181,7 @@ class LoginScreen(Screen):
         # Try to open browser
         try:
             import webbrowser
+
             webbrowser.open(self.login_url)
         except Exception:
             pass  # Browser open is best-effort
@@ -223,7 +232,9 @@ class LoginScreen(Screen):
                 # Use asyncio-friendly request
                 response = await asyncio.get_event_loop().run_in_executor(
                     None,
-                    lambda: requests.get(poll_url, params={"state": self.state}, timeout=5)
+                    lambda: requests.get(
+                        poll_url, params={"state": self.state}, timeout=5
+                    ),
                 )
 
                 if response.status_code == 200:
@@ -235,6 +246,7 @@ class LoginScreen(Screen):
 
                         # Save credentials
                         from sleap_rtc.auth.credentials import save_jwt
+
                         save_jwt(data["jwt"], data["user"])
 
                         # Notify success and let callback handle navigation

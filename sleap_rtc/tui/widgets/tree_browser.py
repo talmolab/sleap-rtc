@@ -191,9 +191,7 @@ class TreeBrowser(Widget):
 
             # Track mount points when loading root
             if path == "/":
-                self.mount_points = {
-                    e.path for e in self.entries if e.is_dir
-                }
+                self.mount_points = {e.path for e in self.entries if e.is_dir}
 
             self.total_count = result.get("total_count", len(self.entries))
             self.has_more = result.get("has_more", False)

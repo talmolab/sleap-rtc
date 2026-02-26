@@ -130,9 +130,7 @@ class ProgressReporter:
             # Polling interval
             await asyncio.sleep(0.05)
 
-    def start_progress_listener_task(
-        self, channel: RTCDataChannel
-    ) -> asyncio.Task:
+    def start_progress_listener_task(self, channel: RTCDataChannel) -> asyncio.Task:
         """Start progress listener as a background task.
 
         Args:
@@ -141,9 +139,7 @@ class ProgressReporter:
         Returns:
             Asyncio task for the progress listener.
         """
-        self.listener_task = asyncio.create_task(
-            self.start_progress_listener(channel)
-        )
+        self.listener_task = asyncio.create_task(self.start_progress_listener(channel))
         logging.info("Progress listener task started")
         return self.listener_task
 

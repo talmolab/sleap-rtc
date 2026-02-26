@@ -245,7 +245,7 @@ async def handle_connection(pc: RTCPeerConnection, websocket: ClientConnection):
         async for message in websocket:
             data = json.loads(message)
 
-            # 1. receieve offer SDP from client (forwarded by signaling server)
+            # 1. receive offer SDP from client (forwarded by signaling server)
             if data.get("type") == "offer":
                 # 1a. set worker peer's remote description to the client's offer based on sdp data
                 logging.info("Received offer SDP")

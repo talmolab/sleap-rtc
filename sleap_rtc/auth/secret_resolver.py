@@ -76,7 +76,9 @@ def resolve_secret(
     # 2. Environment variable
     env_secret = os.environ.get(ENV_ROOM_SECRET)
     if env_secret:
-        logger.debug(f"Using room secret from {ENV_ROOM_SECRET} env var for room {room_id}")
+        logger.debug(
+            f"Using room secret from {ENV_ROOM_SECRET} env var for room {room_id}"
+        )
         return env_secret
 
     # 3. Filesystem path
@@ -126,7 +128,9 @@ def _read_filesystem_secret(room_id: str) -> Optional[str]:
         return None
 
 
-def get_secret_sources(room_id: str, cli_secret: Optional[str] = None) -> dict[str, Optional[str]]:
+def get_secret_sources(
+    room_id: str, cli_secret: Optional[str] = None
+) -> dict[str, Optional[str]]:
     """Get all potential secret sources for debugging/diagnostics.
 
     This is useful for showing users where secrets could be configured.

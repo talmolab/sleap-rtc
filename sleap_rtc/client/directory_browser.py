@@ -35,6 +35,7 @@ def suppress_logging():
         # Restore original level
         root_logger.setLevel(original_level)
 
+
 from sleap_rtc.protocol import (
     MSG_FS_LIST_DIR,
     MSG_FS_LIST_RESPONSE,
@@ -195,12 +196,14 @@ class DirectoryBrowser:
                 path = mount.get("path", "")
                 label = mount.get("label", "")
                 name = f"{label} ({path})" if label else path
-                self.entries.append(DirectoryEntry(
-                    name=name,
-                    entry_type="directory",
-                    size=0,
-                    modified=0,
-                ))
+                self.entries.append(
+                    DirectoryEntry(
+                        name=name,
+                        entry_type="directory",
+                        size=0,
+                        modified=0,
+                    )
+                )
             # Store mount paths for navigation
             self._mount_paths = [m.get("path", "") for m in mounts]
 
@@ -259,9 +262,12 @@ class DirectoryBrowser:
                     # Apply file filter (keep all directories, filter files)
                     if self.file_filters:
                         self.entries = [
-                            e for e in self.entries
-                            if e.is_directory or any(
-                                e.name.lower().endswith(ext) for ext in self.file_filters
+                            e
+                            for e in self.entries
+                            if e.is_directory
+                            or any(
+                                e.name.lower().endswith(ext)
+                                for ext in self.file_filters
                             )
                         ]
 
@@ -303,7 +309,7 @@ class DirectoryBrowser:
             return False
 
         # If showing mounts, use the stored mount path
-        if self.showing_mounts and hasattr(self, '_mount_paths') and index is not None:
+        if self.showing_mounts and hasattr(self, "_mount_paths") and index is not None:
             self.current_path = self._mount_paths[index]
         else:
             new_path = os.path.join(self.current_path, entry.name)
@@ -352,16 +358,25 @@ class DirectoryBrowser:
 
         try:
             return await self._run_interactive_impl(
-                Application, KeyBindings, Layout, Window,
-                FormattedTextControl, FormattedText
+                Application,
+                KeyBindings,
+                Layout,
+                Window,
+                FormattedTextControl,
+                FormattedText,
             )
         finally:
             # Restore logging
             root_logger.setLevel(original_level)
 
     async def _run_interactive_impl(
-        self, Application, KeyBindings, Layout, Window,
-        FormattedTextControl, FormattedText
+        self,
+        Application,
+        KeyBindings,
+        Layout,
+        Window,
+        FormattedTextControl,
+        FormattedText,
     ) -> Optional[str]:
         """Implementation of interactive browser with logging suppressed."""
         # Initial directory listing
@@ -471,7 +486,9 @@ class DirectoryBrowser:
                 visible_end = min(len(self.entries), visible_start + 15)
 
                 if visible_start > 0:
-                    lines.append(("fg:ansibrightblack", f"  ... {visible_start} more above\n"))
+                    lines.append(
+                        ("fg:ansibrightblack", f"  ... {visible_start} more above\n")
+                    )
 
                 for i in range(visible_start, visible_end):
                     entry = self.entries[i]
@@ -493,7 +510,9 @@ class DirectoryBrowser:
 
                 remaining = len(self.entries) - visible_end
                 if remaining > 0:
-                    lines.append(("fg:ansibrightblack", f"  ... {remaining} more below\n"))
+                    lines.append(
+                        ("fg:ansibrightblack", f"  ... {remaining} more below\n")
+                    )
 
             # Help text
             lines.append(("", "\n"))
@@ -516,9 +535,7 @@ class DirectoryBrowser:
             return FormattedText(lines)
 
         # Create layout once
-        layout = Layout(
-            Window(content=FormattedTextControl(get_formatted_text))
-        )
+        layout = Layout(Window(content=FormattedTextControl(get_formatted_text)))
 
         # Create app with erase_when_done=False to prevent screen clearing between runs
         app = Application(
@@ -531,6 +548,7 @@ class DirectoryBrowser:
 
         # Run app loop - stay in fullscreen mode until done
         while stay_in_app[0] and not self.cancelled and not self.selected_path:
+
             def run_app():
                 app.run()
 

@@ -191,7 +191,7 @@ async def run_client(
     global win
     output_dir = output_dir
 
-    # Initalize peer connection and data channel.
+    # Initialize peer connection and data channel.
     reconnect_attempts = 0
     pc = RTCPeerConnection()
     channel = pc.createDataChannel("my-data-channel")
@@ -532,7 +532,7 @@ async def run_client(
     # Register the event handler explicitly
     pc.on("iceconnectionstatechange", on_iceconnectionstatechange)
 
-    # Initate the WebSocket connection to the signaling server.
+    # Initiate the WebSocket connection to the signaling server.
     async with websockets.connect(DNS) as websocket:
 
         # Register the client with the signaling server.

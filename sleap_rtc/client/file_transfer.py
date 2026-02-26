@@ -87,9 +87,7 @@ async def upload_file(
     channel.send(
         f"{MSG_FILE_UPLOAD_CHECK}{MSG_SEPARATOR}{sha256}{MSG_SEPARATOR}{filename}"
     )
-    resp = await asyncio.wait_for(
-        response_queue.get(), timeout=UPLOAD_RESPONSE_TIMEOUT
-    )
+    resp = await asyncio.wait_for(response_queue.get(), timeout=UPLOAD_RESPONSE_TIMEOUT)
 
     if resp.startswith(MSG_FILE_UPLOAD_CACHE_HIT + MSG_SEPARATOR):
         cached_path = resp.split(MSG_SEPARATOR, 1)[1]
@@ -109,9 +107,7 @@ async def upload_file(
         f"{MSG_FILE_UPLOAD_START}{MSG_SEPARATOR}{filename}{MSG_SEPARATOR}"
         f"{total_bytes}{MSG_SEPARATOR}{dest_dir}{MSG_SEPARATOR}{create_subdir}"
     )
-    resp = await asyncio.wait_for(
-        response_queue.get(), timeout=UPLOAD_RESPONSE_TIMEOUT
-    )
+    resp = await asyncio.wait_for(response_queue.get(), timeout=UPLOAD_RESPONSE_TIMEOUT)
 
     if resp.startswith(MSG_FILE_UPLOAD_ERROR + MSG_SEPARATOR):
         reason = resp.split(MSG_SEPARATOR, 1)[1]

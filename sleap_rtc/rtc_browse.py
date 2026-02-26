@@ -114,7 +114,9 @@ class BrowseClient:
 
                 if not workers:
                     logging.error("No workers found in room")
-                    print("\nNo workers found in the room. Make sure a Worker is running.")
+                    print(
+                        "\nNo workers found in the room. Make sure a Worker is running."
+                    )
                     return
 
                 # Interactive worker selection
@@ -141,10 +143,14 @@ class BrowseClient:
                 logging.info("Waiting for PSK authentication...")
                 auth_success = await self._wait_for_auth()
                 if not auth_success:
-                    logging.error(f"PSK authentication failed: {self._auth_failed_reason}")
+                    logging.error(
+                        f"PSK authentication failed: {self._auth_failed_reason}"
+                    )
                     print(f"\nAuthentication failed: {self._auth_failed_reason}")
                     if not self._room_secret:
-                        print("The worker requires a room secret. Configure it with --room-secret flag.")
+                        print(
+                            "The worker requires a room secret. Configure it with --room-secret flag."
+                        )
                     else:
                         print("Make sure the room secret matches the worker's secret.")
                     return
@@ -220,11 +226,13 @@ class BrowseClient:
             "properties": {"status": "available"},
         }
 
-        discover_msg = json.dumps({
-            "type": "discover_peers",
-            "from_peer_id": self.peer_id,
-            "filters": filters,
-        })
+        discover_msg = json.dumps(
+            {
+                "type": "discover_peers",
+                "from_peer_id": self.peer_id,
+                "filters": filters,
+            }
+        )
 
         await self.websocket.send(discover_msg)
 
@@ -264,12 +272,14 @@ class BrowseClient:
         offer = await self.pc.createOffer()
         await self.pc.setLocalDescription(offer)
 
-        offer_msg = json.dumps({
-            "type": self.pc.localDescription.type,  # "offer"
-            "sender": self.peer_id,
-            "target": worker_id,
-            "sdp": self.pc.localDescription.sdp,
-        })
+        offer_msg = json.dumps(
+            {
+                "type": self.pc.localDescription.type,  # "offer"
+                "sender": self.peer_id,
+                "target": worker_id,
+                "sdp": self.pc.localDescription.sdp,
+            }
+        )
 
         await self.websocket.send(offer_msg)
         logging.info(f"Sent offer to worker {worker_id}")
@@ -388,7 +398,9 @@ class BrowseClient:
                 return self._authenticated
             except asyncio.TimeoutError:
                 # No challenge received - worker is in legacy mode too
-                logging.info("No AUTH_CHALLENGE received - legacy mode (no auth required)")
+                logging.info(
+                    "No AUTH_CHALLENGE received - legacy mode (no auth required)"
+                )
                 self._authenticated = True
                 return True
 

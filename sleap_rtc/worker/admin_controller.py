@@ -121,9 +121,13 @@ class AdminController:
         if request_id in self._pending_verifications:
             event = self._pending_verifications[request_id]
             event.set()
-            logger.debug(f"Admin verification succeeded for {from_peer_id} (request_id: {request_id})")
+            logger.debug(
+                f"Admin verification succeeded for {from_peer_id} (request_id: {request_id})"
+            )
         else:
-            logger.warning(f"Received unexpected admin_verify_ack (request_id: {request_id})")
+            logger.warning(
+                f"Received unexpected admin_verify_ack (request_id: {request_id})"
+            )
 
     async def verify_admin_alive(self, admin_peer_id: str) -> bool:
         """Verify that the elected admin is alive and reachable.
@@ -320,7 +324,9 @@ class AdminController:
             self.crdt_state.remove_worker(departed_peer_id)
             logger.debug(f"Removed non-admin worker: {departed_peer_id}")
 
-    async def handle_worker_joined(self, peer_id: str, metadata: Dict[str, Any]) -> None:
+    async def handle_worker_joined(
+        self, peer_id: str, metadata: Dict[str, Any]
+    ) -> None:
         """Handle new worker joining the room.
 
         Adds worker to CRDT and potentially triggers re-election if the
@@ -403,13 +409,16 @@ class AdminController:
         logger.debug(f"Broadcasting state update (version {version}) to all workers")
 
         # Import here to avoid circular dependency
-        from sleap_rtc.worker.mesh_messages import create_state_broadcast, serialize_message
+        from sleap_rtc.worker.mesh_messages import (
+            create_state_broadcast,
+            serialize_message,
+        )
 
         # Create broadcast message with base64-encoded CRDT binary
         message = create_state_broadcast(
             from_peer_id=self.worker.peer_id,
             crdt_snapshot={"_crdt_b64": crdt_b64},  # Wrap in dict with marker
-            version=version
+            version=version,
         )
 
         # Send to all connected workers
@@ -484,8 +493,10 @@ class AdminController:
 
         # Sort by GPU memory (descending) for consistent ordering
         matched_workers.sort(
-            key=lambda w: w.get("metadata", {}).get("properties", {}).get("gpu_memory_mb", 0),
-            reverse=True
+            key=lambda w: w.get("metadata", {})
+            .get("properties", {})
+            .get("gpu_memory_mb", 0),
+            reverse=True,
         )
 
         # Limit results if requested

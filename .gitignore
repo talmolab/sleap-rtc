@@ -207,7 +207,6 @@ marimo/_lsp/
 __marimo__/
 
 # Claude Code
-.claude/
 AGENTS.md
 CLAUDE.md
 
@@ -236,5 +235,6 @@ scratch/
 jwt_private.pem
 jwt_public.pem
 
-# Design docs (local planning)
-docs/plans/
+# Design docs and local config (local planning/development only)
+docs/
+sleap-rtc.toml

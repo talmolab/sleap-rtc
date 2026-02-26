@@ -9,7 +9,6 @@ from typing import Dict, List, Optional
 
 from sleap_rtc.jobs.spec import TrainJobSpec, TrackJobSpec
 
-
 # Default ZMQ ports for progress reporting
 DEFAULT_ZMQ_PORTS = {
     "controller": 9000,
@@ -70,9 +69,7 @@ class CommandBuilder:
 
         if spec.batch_size is not None:
             # Apply to both train and val data loaders
-            cmd.append(
-                f"trainer_config.train_data_loader.batch_size={spec.batch_size}"
-            )
+            cmd.append(f"trainer_config.train_data_loader.batch_size={spec.batch_size}")
             cmd.append(f"trainer_config.val_data_loader.batch_size={spec.batch_size}")
 
         if spec.learning_rate is not None:
@@ -81,10 +78,14 @@ class CommandBuilder:
         # Determine run_name: caller-supplied override takes top priority (used
         # by the worker pipeline to inject a timestamped name), then
         # spec.run_name, then the per-model model_types entry as a last resort.
-        effective_run_name = run_name_override or spec.run_name or (
-            spec.model_types[config_index]
-            if spec.model_types and config_index < len(spec.model_types)
-            else None
+        effective_run_name = (
+            run_name_override
+            or spec.run_name
+            or (
+                spec.model_types[config_index]
+                if spec.model_types and config_index < len(spec.model_types)
+                else None
+            )
         )
         if effective_run_name:
             cmd.append(f"trainer_config.run_name={effective_run_name}")
@@ -95,7 +96,9 @@ class CommandBuilder:
         # ZMQ ports for progress reporting
         # Use ++ prefix to add or override (config may already contain zmq keys)
         ports = zmq_ports or DEFAULT_ZMQ_PORTS
-        cmd.append(f"++trainer_config.zmq.controller_port={ports.get('controller', 9000)}")
+        cmd.append(
+            f"++trainer_config.zmq.controller_port={ports.get('controller', 9000)}"
+        )
         cmd.append(f"++trainer_config.zmq.publish_port={ports.get('publish', 9001)}")
 
         return cmd

@@ -51,32 +51,60 @@ if TYPE_CHECKING:
 def _is_mock_mode() -> bool:
     """Check if mock mode is enabled via environment variable."""
     import os
+
     return os.environ.get("SLEAP_RTC_MOCK", "").lower() in ("1", "true", "yes")
 
 
 def _get_mock_rooms():
     """Get mock rooms for testing."""
     from sleap_rtc.api import Room
+
     return [
-        Room(id="room-1", name="Lab GPU Server", owner="mockuser", created_at="2024-01-15"),
-        Room(id="room-2", name="Cloud Training", owner="mockuser", created_at="2024-02-01"),
+        Room(
+            id="room-1",
+            name="Lab GPU Server",
+            owner="mockuser",
+            created_at="2024-01-15",
+        ),
+        Room(
+            id="room-2",
+            name="Cloud Training",
+            owner="mockuser",
+            created_at="2024-02-01",
+        ),
     ]
 
 
 def _get_mock_workers(room_id: str):
     """Get mock workers for testing."""
     from sleap_rtc.api import Worker
+
     if room_id == "room-1":
         return [
-            Worker(id="worker-1", name="GPU Server A", status="available",
-                   gpu_name="NVIDIA RTX 4090", gpu_memory_mb=24576),
-            Worker(id="worker-2", name="GPU Server B", status="busy",
-                   gpu_name="NVIDIA A100", gpu_memory_mb=81920),
+            Worker(
+                id="worker-1",
+                name="GPU Server A",
+                status="available",
+                gpu_name="NVIDIA RTX 4090",
+                gpu_memory_mb=24576,
+            ),
+            Worker(
+                id="worker-2",
+                name="GPU Server B",
+                status="busy",
+                gpu_name="NVIDIA A100",
+                gpu_memory_mb=81920,
+            ),
         ]
     elif room_id == "room-2":
         return [
-            Worker(id="worker-3", name="Cluster Node 1", status="available",
-                   gpu_name="NVIDIA V100", gpu_memory_mb=32768),
+            Worker(
+                id="worker-3",
+                name="Cluster Node 1",
+                status="available",
+                gpu_name="NVIDIA V100",
+                gpu_memory_mb=32768,
+            ),
         ]
     return []
 
@@ -111,6 +139,7 @@ def _has_room_secret(room_id: str) -> bool:
         True if the room has a locally stored secret.
     """
     from sleap_rtc.auth.credentials import get_room_secret
+
     return get_room_secret(room_id) is not None
 
 
@@ -129,6 +158,7 @@ class WorkerDiscoveryThread(QThread):
         try:
             if _is_mock_mode():
                 import time
+
                 time.sleep(0.3)  # Simulate network delay
                 self.workers_loaded.emit(_get_mock_workers(self.room_id))
                 return
@@ -155,6 +185,7 @@ class RoomLoadThread(QThread):
         try:
             if _is_mock_mode():
                 import time
+
                 time.sleep(0.3)  # Simulate network delay
                 self.rooms_loaded.emit(_get_mock_rooms())
                 return
@@ -185,6 +216,7 @@ class LoginThread(QThread):
             if _is_mock_mode():
                 from sleap_rtc.api import User
                 import time
+
                 time.sleep(0.5)  # Simulate brief delay
                 mock_user = User(
                     id="mock-user-123",
@@ -242,7 +274,7 @@ class WorkerSetupDialog(QDialog):
         )
         if self._room_name:
             header_text = (
-                f"The room \"{self._room_name}\" has no workers connected. You need "
+                f'The room "{self._room_name}" has no workers connected. You need '
                 "a worker running on a GPU machine to train remotely."
             )
 
@@ -318,7 +350,7 @@ class WorkerSetupDialog(QDialog):
         step4_layout.addWidget(step4_label)
 
         # Build worker command with room secret if available
-        worker_cmd_parts = ['uvx sleap-rtc worker', '--api-key YOUR_API_KEY']
+        worker_cmd_parts = ["uvx sleap-rtc worker", "--api-key YOUR_API_KEY"]
         worker_cmd_parts.append('--name "My GPU Server"')
         if self._room_secret:
             worker_cmd_parts.append(f"--room-secret {self._room_secret}")
@@ -434,7 +466,11 @@ class RoomSecretSetupDialog(QDialog):
     secret_saved = Signal(str, str)  # room_id, secret
 
     def __init__(
-        self, room_id: str, room_name: str = "", is_owner: bool = True, parent: QWidget | None = None
+        self,
+        room_id: str,
+        room_name: str = "",
+        is_owner: bool = True,
+        parent: QWidget | None = None,
     ):
         super().__init__(parent)
         self.setWindowTitle("Room Setup Required")
@@ -450,7 +486,9 @@ class RoomSecretSetupDialog(QDialog):
         layout.setSpacing(12)
 
         # Header explanation
-        room_display = f'"{self._room_name}"' if self._room_name else f"ID: {self._room_id}"
+        room_display = (
+            f'"{self._room_name}"' if self._room_name else f"ID: {self._room_id}"
+        )
         header_text = (
             f"Room {room_display} needs a secret for secure P2P communication. "
             "This secret must be shared with any workers that will connect to this room."
@@ -485,7 +523,9 @@ class RoomSecretSetupDialog(QDialog):
 
         # Enter existing secret
         enter_label = QLabel(
-            "<b>Option 2: Enter existing secret</b>" if self._is_owner else "<b>Enter room secret</b>"
+            "<b>Option 2: Enter existing secret</b>"
+            if self._is_owner
+            else "<b>Enter room secret</b>"
         )
         layout.addWidget(enter_label)
 
@@ -494,9 +534,7 @@ class RoomSecretSetupDialog(QDialog):
                 "If workers are already using a secret for this room, enter it here."
             )
         else:
-            enter_desc = QLabel(
-                "Ask the room owner for the secret and enter it here."
-            )
+            enter_desc = QLabel("Ask the room owner for the secret and enter it here.")
         enter_desc.setWordWrap(True)
         layout.addWidget(enter_desc)
 
@@ -703,7 +741,9 @@ class RoomBrowserDialog(QDialog):
             self._table.setItem(row, 3, workers_item)
 
         if rooms:
-            self._status_label.setText(f"{len(rooms)} room{'s' if len(rooms) != 1 else ''} available")
+            self._status_label.setText(
+                f"{len(rooms)} room{'s' if len(rooms) != 1 else ''} available"
+            )
             self._status_label.setStyleSheet("color: green;")
         else:
             self._status_label.setText("No rooms available")
@@ -739,7 +779,9 @@ class RoomBrowserDialog(QDialog):
     def _on_select(self):
         """Handle select button click."""
         if self._selected_room_id:
-            self.room_selected.emit(self._selected_room_id, self._selected_room_name or "")
+            self.room_selected.emit(
+                self._selected_room_id, self._selected_room_name or ""
+            )
             self.accept()
 
     def get_selected_room(self) -> tuple[str | None, str | None]:
@@ -888,9 +930,7 @@ class _UploadThread(QThread):
         try:
             return self._response_queue.get(timeout=t)
         except _queue_module.Empty:
-            raise RuntimeError(
-                f"Timed out waiting for worker response ({t:.0f} s)"
-            )
+            raise RuntimeError(f"Timed out waiting for worker response ({t:.0f} s)")
 
     def run(self):
         import hashlib
@@ -1163,6 +1203,7 @@ class SlpPathDialog(QDialog):
 
         # Auto-fill worker path from saved path mappings (if any match)
         from sleap_rtc.config import get_config
+
         translated = get_config().translate_path(local_path)
         if translated:
             self._path_edit.setText(translated)
@@ -1198,9 +1239,7 @@ class SlpPathDialog(QDialog):
         worker_layout = QHBoxLayout()
         self._path_edit = QLineEdit()
         self._path_edit.setMinimumWidth(400)
-        self._path_edit.setPlaceholderText(
-            "e.g. /root/vast/data/labels.v002.slp"
-        )
+        self._path_edit.setPlaceholderText("e.g. /root/vast/data/labels.v002.slp")
         self._path_edit.textChanged.connect(self._on_text_changed)
         worker_layout.addWidget(self._path_edit)
         form.addRow("Worker path:", worker_layout)
@@ -1239,9 +1278,7 @@ class SlpPathDialog(QDialog):
 
         # Upload button — only for .pkg.slp with an active connection
         is_pkg_slp = local_path.lower().endswith(".pkg.slp")
-        is_plain_slp = (
-            not is_pkg_slp and local_path.lower().endswith(".slp")
-        )
+        is_plain_slp = not is_pkg_slp and local_path.lower().endswith(".slp")
         if is_pkg_slp and self._send_fn is not None:
             self._upload_btn = QPushButton("Upload file to worker...")
             self._upload_btn.setToolTip(
@@ -1253,9 +1290,7 @@ class SlpPathDialog(QDialog):
 
         # Export+upload button — for plain .slp when convert_fn is provided
         if is_plain_slp and self._convert_fn is not None and self._send_fn is not None:
-            self._export_btn = QPushButton(
-                "Export as .pkg.slp and upload to worker..."
-            )
+            self._export_btn = QPushButton("Export as .pkg.slp and upload to worker...")
             self._export_btn.setToolTip(
                 "Embed video frames locally and transfer the packaged file "
                 "directly to the worker over the data channel. "
@@ -1265,13 +1300,8 @@ class SlpPathDialog(QDialog):
             layout.addWidget(self._export_btn)
 
         # Shared progress bar (used by both upload and export→upload flows)
-        if (
-            (is_pkg_slp and self._send_fn is not None)
-            or (
-                is_plain_slp
-                and self._convert_fn is not None
-                and self._send_fn is not None
-            )
+        if (is_pkg_slp and self._send_fn is not None) or (
+            is_plain_slp and self._convert_fn is not None and self._send_fn is not None
         ):
             self._progress_bar = QProgressBar()
             self._progress_bar.setVisible(False)
@@ -1373,9 +1403,7 @@ class SlpPathDialog(QDialog):
         from pathlib import Path
         from qtpy.QtWidgets import QFileDialog
 
-        chosen_dir = QFileDialog.getExistingDirectory(
-            self, "Choose save folder", ""
-        )
+        chosen_dir = QFileDialog.getExistingDirectory(self, "Choose save folder", "")
         if not chosen_dir:
             return
 
@@ -1401,9 +1429,7 @@ class SlpPathDialog(QDialog):
         from pathlib import Path
         from qtpy.QtWidgets import QFileDialog
 
-        chosen_dir = QFileDialog.getExistingDirectory(
-            self, "Choose save folder", ""
-        )
+        chosen_dir = QFileDialog.getExistingDirectory(self, "Choose save folder", "")
         if not chosen_dir:
             return
 
@@ -1601,7 +1627,11 @@ class SlpPathDialog(QDialog):
             dest_display = dest_dir.rstrip("/") + "/sleap_rtc_downloads/"
 
         from qtpy.QtWidgets import (
-            QDialog, QDialogButtonBox, QLabel, QTextEdit, QVBoxLayout,
+            QDialog,
+            QDialogButtonBox,
+            QLabel,
+            QTextEdit,
+            QVBoxLayout,
         )
         from qtpy.QtGui import QFont
 
@@ -1635,8 +1665,7 @@ class SlpPathDialog(QDialog):
         layout.addWidget(time_label)
 
         buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok
-            | QDialogButtonBox.StandardButton.Cancel
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
         buttons.rejected.connect(dlg.reject)
         buttons.accepted.connect(dlg.accept)
@@ -1782,7 +1811,9 @@ class PathResolutionDialog(QDialog):
         self._path_widgets: dict[str, QLineEdit] = {}
         self._send_fn = send_fn
         self._browser: RemoteFileBrowser | None = None
-        self._browse_target_path: str | None = None  # original_path of row being browsed
+        self._browse_target_path: str | None = (
+            None  # original_path of row being browsed
+        )
         self._setup_ui()
 
     def _setup_ui(self):
@@ -2445,7 +2476,9 @@ class RemoteFileBrowser(QWidget):
         # Bottom bar: path + select button
         bottom = QHBoxLayout()
         self._path_bar = QLineEdit()
-        placeholder = "No directory selected" if self._directory_mode else "No file selected"
+        placeholder = (
+            "No directory selected" if self._directory_mode else "No file selected"
+        )
         self._path_bar.setPlaceholderText(placeholder)
         self._path_bar.setReadOnly(True)
         self._select_button = QPushButton("Select")
@@ -2651,9 +2684,7 @@ class RemoteFileBrowser(QWidget):
             load_more.setData(
                 Qt.ItemDataRole.UserRole + 4, col.count()
             )  # offset = current count
-            load_more.setForeground(
-                col.palette().color(col.palette().ColorRole.Link)
-            )
+            load_more.setForeground(col.palette().color(col.palette().ColorRole.Link))
             col.addItem(load_more)
 
         # Scroll column container to show new column
@@ -2688,9 +2719,7 @@ class RemoteFileBrowser(QWidget):
         if item_type == "mount":
             # Mount click: clear columns after mount selector, request root listing
             self._remove_columns_after(0)
-            self._send_fn(
-                f"FS_LIST_DIR{self._SEPARATOR}{path}{self._SEPARATOR}0"
-            )
+            self._send_fn(f"FS_LIST_DIR{self._SEPARATOR}{path}{self._SEPARATOR}0")
             self._clear_preview()
             self.directory_entered.emit(path)
             if self._directory_mode:
@@ -2706,9 +2735,7 @@ class RemoteFileBrowser(QWidget):
             # Directory click: remove deeper columns, request listing
             if col_idx >= 0:
                 self._remove_columns_after(col_idx)
-            self._send_fn(
-                f"FS_LIST_DIR{self._SEPARATOR}{path}{self._SEPARATOR}0"
-            )
+            self._send_fn(f"FS_LIST_DIR{self._SEPARATOR}{path}{self._SEPARATOR}0")
             self._clear_preview()
             self.directory_entered.emit(path)
             if self._directory_mode:
@@ -3017,7 +3044,10 @@ class RemoteTrainingWidget(QGroupBox):
                     display_text = f"{room.name} ({room.role}) [needs setup]"
                 self._room_combo.addItem(display_text, room.id)
                 # Check if this is the pending selection
-                if self._pending_room_selection and room.id == self._pending_room_selection:
+                if (
+                    self._pending_room_selection
+                    and room.id == self._pending_room_selection
+                ):
                     select_index = i
 
             # Default to first room with secret, or first room if none have secrets
@@ -3066,9 +3096,7 @@ class RemoteTrainingWidget(QGroupBox):
 
         if not workers:
             self._worker_combo.addItem("No workers available", None)
-            self._connection_status_label.setText(
-                "Status: Connected (0 workers)"
-            )
+            self._connection_status_label.setText("Status: Connected (0 workers)")
             self._connection_status_label.setStyleSheet("color: orange;")
 
             # Show worker setup dialog
@@ -3105,7 +3133,11 @@ class RemoteTrainingWidget(QGroupBox):
         error_lower = error.lower()
         if "no access" in error_lower or "room not found" in error_lower:
             display_error = "Room secret may be incorrect or expired"
-        elif "authentication" in error_lower or "401" in error_lower or "403" in error_lower:
+        elif (
+            "authentication" in error_lower
+            or "401" in error_lower
+            or "403" in error_lower
+        ):
             display_error = "Authentication failed - try logging in again"
         elif "timeout" in error_lower or "connection" in error_lower:
             display_error = "Connection timeout - check network"
@@ -3307,9 +3339,7 @@ class RemoteTrainingWidget(QGroupBox):
         if self._auto_worker_radio.isChecked():
             self.worker_changed.emit("")  # Empty = auto-select
         else:
-            worker_id = self._worker_combo.itemData(
-                self._worker_combo.currentIndex()
-            )
+            worker_id = self._worker_combo.itemData(self._worker_combo.currentIndex())
             self.worker_changed.emit(worker_id or "")
 
     def _on_worker_combo_changed(self, index: int):

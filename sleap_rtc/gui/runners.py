@@ -94,7 +94,9 @@ class RemoteProgressBridge(QObject):
         self._last_epoch: int | None = None
         self._inference_dialog = None  # InferenceProgressDialog, created on demand
         self._on_predictions_ready: Callable[[str], None] | None = None
-        self._last_n_frames: int | None = None  # parsed from INFERENCE_LOG progress lines
+        self._last_n_frames: int | None = (
+            None  # parsed from INFERENCE_LOG progress lines
+        )
 
     def set_model_type(self, model_type: str):
         """Update the model type for subsequent messages.
@@ -141,9 +143,7 @@ class RemoteProgressBridge(QObject):
             # SUB socket for receiving commands from LossViewer
             self._sub_socket = self._context.socket(zmq.SUB)
             self._sub_socket.subscribe(b"")  # Subscribe to all messages
-            self._sub_socket.connect(
-                f"tcp://127.0.0.1:{self._controller_port}"
-            )
+            self._sub_socket.connect(f"tcp://127.0.0.1:{self._controller_port}")
 
             self._started = True
             self._stop_event.clear()
@@ -300,15 +300,15 @@ class RemoteProgressBridge(QObject):
 
                     send_fn = self._send_fn
                     if send_fn is None:
-                        logger.warning(
-                            f"Received {command} but no send_fn available"
-                        )
+                        logger.warning(f"Received {command} but no send_fn available")
                         continue
 
                     try:
                         if command == "cancel":
                             # Cancel = process-level kill (SIGTERM)
-                            logger.info("LossViewer sent cancel — sending MSG_JOB_CANCEL")
+                            logger.info(
+                                "LossViewer sent cancel — sending MSG_JOB_CANCEL"
+                            )
                             send_fn(MSG_JOB_CANCEL)
                         else:
                             # All other commands (including stop) = transparent
@@ -397,9 +397,7 @@ class RemoteProgressBridge(QObject):
     # Post-training inference message handling
     # ------------------------------------------------------------------
 
-    def set_predictions_ready_callback(
-        self, callback: "Callable[[str], None] | None"
-    ):
+    def set_predictions_ready_callback(self, callback: "Callable[[str], None] | None"):
         """Register a callback to be invoked when inference completes.
 
         The callback receives the ``predictions_path`` string from the worker's
@@ -458,7 +456,11 @@ class RemoteProgressBridge(QObject):
                     eta_m = re.search(r"ETA:\s*(\d+):(\d+):(\d+)", text)
                     eta = 0
                     if eta_m:
-                        h, mn, s = int(eta_m.group(1)), int(eta_m.group(2)), int(eta_m.group(3))
+                        h, mn, s = (
+                            int(eta_m.group(1)),
+                            int(eta_m.group(2)),
+                            int(eta_m.group(3)),
+                        )
                         eta = h * 3600 + mn * 60 + s
                     self._inference_dialog.set_progress(n_processed, n_total, rate, eta)
                     self._last_n_frames = n_total
@@ -475,9 +477,7 @@ class RemoteProgressBridge(QObject):
             n_frames = data.get("n_frames") or self._last_n_frames
             n_with_instances = data.get("n_with_instances")
             n_empty = data.get("n_empty")
-            logger.info(
-                f"Inference complete — predictions at {predictions_path}"
-            )
+            logger.info(f"Inference complete — predictions at {predictions_path}")
             if self._inference_dialog is not None:
                 self._inference_dialog.finish(n_frames, n_with_instances, n_empty)
             if self._on_predictions_ready and predictions_path:

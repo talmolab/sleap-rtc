@@ -19,7 +19,13 @@ import time
 from datetime import datetime
 from typing import Optional
 
-from aiortc import RTCPeerConnection, RTCSessionDescription, RTCDataChannel, RTCConfiguration, RTCIceServer
+from aiortc import (
+    RTCPeerConnection,
+    RTCSessionDescription,
+    RTCDataChannel,
+    RTCConfiguration,
+    RTCIceServer,
+)
 
 # from run_training import run_all_training_jobs
 from pathlib import Path
@@ -113,7 +119,9 @@ logging.basicConfig(level=logging.INFO)
 SEP = re.compile(rb"[\r\n]")
 
 
-def _get_checkpoint_dir(config_path: str, run_name_override: Optional[str] = None) -> Optional[str]:
+def _get_checkpoint_dir(
+    config_path: str, run_name_override: Optional[str] = None
+) -> Optional[str]:
     """Parse a sleap-nn training config YAML and return the checkpoint directory.
 
     The checkpoint directory is ``{ckpt_dir}/{run_name}/``.  When ``ckpt_dir``
@@ -216,7 +224,9 @@ class RTCWorkerClient:
 
         # ICE server configuration (received from signaling server during registration)
         self.ice_servers: list = []  # For client-worker connections (STUN + TURN)
-        self.mesh_ice_servers: list = []  # For worker-worker mesh connections (STUN only)
+        self.mesh_ice_servers: list = (
+            []
+        )  # For worker-worker mesh connections (STUN only)
 
         # Mesh networking attributes (Phase 3-6)
         self.peer_id_for_cleanup = None  # Set during run_worker
@@ -234,9 +244,13 @@ class RTCWorkerClient:
         # Heartbeat attributes (Phase 4)
         self.heartbeat_sequence = 0  # Sequence number for heartbeat messages
         self.heartbeat_task = None  # Background task for sending heartbeats
-        self.heartbeat_check_task = None  # Background task for checking heartbeat timeouts
+        self.heartbeat_check_task = (
+            None  # Background task for checking heartbeat timeouts
+        )
         self.heartbeat_interval = 5.0  # Seconds between heartbeats
-        self.heartbeat_timeout = 15.0  # Seconds before peer is considered dead (3x interval)
+        self.heartbeat_timeout = (
+            15.0  # Seconds before peer is considered dead (3x interval)
+        )
         self.last_heartbeat = {}  # peer_id -> last heartbeat timestamp
 
         # Network partition recovery attributes (Phase 5)
@@ -252,8 +266,12 @@ class RTCWorkerClient:
         # PSK P2P authentication (zero-trust layer)
         self._room_secret: Optional[str] = None  # Set via CLI flag, env var, or config
         self._pending_auth: dict[str, str] = {}  # channel_label -> nonce
-        self._authenticated_channels: set[str] = set()  # Set of authenticated channel labels
-        self._auth_timeout_tasks: dict[str, asyncio.Task] = {}  # channel_label -> timeout task
+        self._authenticated_channels: set[str] = (
+            set()
+        )  # Set of authenticated channel labels
+        self._auth_timeout_tasks: dict[str, asyncio.Task] = (
+            {}
+        )  # channel_label -> timeout task
 
     async def clean_exit(self):
         """Handles cleanup and shutdown of the worker.
@@ -298,7 +316,9 @@ class RTCWorkerClient:
 
     # ===== P2P PSK Authentication Methods =====
 
-    async def _handle_auth_response(self, channel: RTCDataChannel, message: str) -> None:
+    async def _handle_auth_response(
+        self, channel: RTCDataChannel, message: str
+    ) -> None:
         """Handle AUTH_RESPONSE message from client.
 
         Verifies the HMAC against the pending nonce and marks the channel as
@@ -312,7 +332,9 @@ class RTCWorkerClient:
 
         # Check if we're expecting a response from this channel
         if channel_label not in self._pending_auth:
-            logging.warning(f"Unexpected AUTH_RESPONSE from {channel_label} (no pending challenge)")
+            logging.warning(
+                f"Unexpected AUTH_RESPONSE from {channel_label} (no pending challenge)"
+            )
             return
 
         # Parse the HMAC from the message
@@ -411,11 +433,15 @@ class RTCWorkerClient:
 
             config = RTCConfiguration(iceServers=ice_server_objects)
             connection_type = "mesh" if for_mesh else "client"
-            logging.info(f"Creating RTCPeerConnection for {connection_type} with {len(ice_server_objects)} ICE server(s)")
+            logging.info(
+                f"Creating RTCPeerConnection for {connection_type} with {len(ice_server_objects)} ICE server(s)"
+            )
             pc = RTCPeerConnection(configuration=config)
         else:
             # Fallback to default (no ICE servers)
-            logging.warning("No ICE servers configured, using default RTCPeerConnection")
+            logging.warning(
+                "No ICE servers configured, using default RTCPeerConnection"
+            )
             pc = RTCPeerConnection()
 
         return pc
@@ -498,8 +524,12 @@ class RTCWorkerClient:
                 if self.mesh_coordinator:
                     await self.mesh_coordinator.on_admin_demotion()
         else:
-            logging.warning("AdminController not initialized, cannot trigger re-election")
-            self.admin_peer_id = None  # Only reset if no controller to handle re-election
+            logging.warning(
+                "AdminController not initialized, cannot trigger re-election"
+            )
+            self.admin_peer_id = (
+                None  # Only reset if no controller to handle re-election
+            )
 
     async def _handle_worker_disconnect(self, peer_id: str):
         """Handle non-admin worker disconnect.
@@ -535,7 +565,9 @@ class RTCWorkerClient:
                 await self.admin_controller.broadcast_state_update()
                 logging.info("Broadcast CRDT state after worker departure")
         else:
-            logging.warning("AdminController not initialized, cannot handle worker departure")
+            logging.warning(
+                "AdminController not initialized, cannot handle worker departure"
+            )
 
     async def _handle_client_disconnect(self, peer_id: str):
         """Handle client disconnect - existing behavior.
@@ -553,7 +585,9 @@ class RTCWorkerClient:
         # (update status, clean up files, etc.)
         # This will be integrated when we refactor existing client connection code
 
-    async def on_mesh_iceconnectionstatechange(self, peer_id: str, pc: RTCPeerConnection):
+    async def on_mesh_iceconnectionstatechange(
+        self, peer_id: str, pc: RTCPeerConnection
+    ):
         """Handle ICE connection state changes for mesh connections.
 
         This is separate from on_iceconnectionstatechange which handles
@@ -661,9 +695,7 @@ class RTCWorkerClient:
             logging.warning(f"Received status update but not admin: {from_peer_id}")
             return
 
-        logging.info(
-            f"Received status update from {from_peer_id}: {message.status}"
-        )
+        logging.info(f"Received status update from {from_peer_id}: {message.status}")
 
         # Update CRDT with new status
         if self.room_state_crdt:
@@ -691,18 +723,21 @@ class RTCWorkerClient:
         import base64
 
         if from_peer_id != self.admin_peer_id:
-            logging.warning(
-                f"Received state broadcast from non-admin: {from_peer_id}"
-            )
+            logging.warning(f"Received state broadcast from non-admin: {from_peer_id}")
             return
 
-        logging.debug(f"Received state broadcast from admin (version {message.version})")
+        logging.debug(
+            f"Received state broadcast from admin (version {message.version})"
+        )
 
         # Apply CRDT update
         if self.room_state_crdt and message.crdt_snapshot:
             try:
                 # Check if this is a base64-encoded binary CRDT update
-                if isinstance(message.crdt_snapshot, dict) and "_crdt_b64" in message.crdt_snapshot:
+                if (
+                    isinstance(message.crdt_snapshot, dict)
+                    and "_crdt_b64" in message.crdt_snapshot
+                ):
                     crdt_b64 = message.crdt_snapshot["_crdt_b64"]
                     crdt_binary = base64.b64decode(crdt_b64)
                     self.room_state_crdt.apply_update(crdt_binary)
@@ -759,7 +794,9 @@ class RTCWorkerClient:
             logging.warning(f"Received query_workers but not admin: {from_peer_id}")
             return
 
-        logging.info(f"Client {from_peer_id} querying workers with filters: {message.filters}")
+        logging.info(
+            f"Client {from_peer_id} querying workers with filters: {message.filters}"
+        )
 
         # Use AdminController to handle query
         if self.admin_controller:
@@ -866,13 +903,10 @@ class RTCWorkerClient:
         """
         # Phase 5: Read-only mode during partition
         if self.is_partitioned:
-            logging.warning(
-                f"Partitioned: Queueing status update ({status}) for later"
+            logging.warning(f"Partitioned: Queueing status update ({status}) for later")
+            self.pending_status_updates.append(
+                {"status": status, "current_job": current_job}
             )
-            self.pending_status_updates.append({
-                "status": status,
-                "current_job": current_job
-            })
             return
 
         if not self.admin_peer_id:
@@ -930,7 +964,9 @@ class RTCWorkerClient:
 
         Runs in background, checks every heartbeat_interval seconds.
         """
-        logging.info(f"Starting heartbeat check loop (timeout: {self.heartbeat_timeout}s)")
+        logging.info(
+            f"Starting heartbeat check loop (timeout: {self.heartbeat_timeout}s)"
+        )
 
         while not self.shutting_down:
             try:
@@ -985,7 +1021,9 @@ class RTCWorkerClient:
             logging.info("Heartbeat sending task started")
 
         if self.heartbeat_check_task is None or self.heartbeat_check_task.done():
-            self.heartbeat_check_task = asyncio.create_task(self._heartbeat_check_loop())
+            self.heartbeat_check_task = asyncio.create_task(
+                self._heartbeat_check_loop()
+            )
             logging.info("Heartbeat checking task started")
 
     async def stop_heartbeat_tasks(self):
@@ -1032,16 +1070,16 @@ class RTCWorkerClient:
             return False
 
         # Count connected workers (excluding self)
-        connected_count = len([
-            peer_id for peer_id in self.worker_connections.keys()
-            if peer_id != self.peer_id
-        ])
+        connected_count = len(
+            [
+                peer_id
+                for peer_id in self.worker_connections.keys()
+                if peer_id != self.peer_id
+            ]
+        )
 
         # Check admin connection
-        has_admin = (
-            self.admin_peer_id
-            and self.admin_peer_id in self.worker_connections
-        )
+        has_admin = self.admin_peer_id and self.admin_peer_id in self.worker_connections
 
         # Calculate connectivity ratio
         # Subtract 1 from total to exclude self
@@ -1192,9 +1230,7 @@ class RTCWorkerClient:
             if peer_id not in self.worker_connections:
                 logging.info(f"Starting reconnection attempts for {peer_id}")
                 # Start retry task
-                task = asyncio.create_task(
-                    self._retry_connection_with_backoff(peer_id)
-                )
+                task = asyncio.create_task(self._retry_connection_with_backoff(peer_id))
                 self.retry_tasks[peer_id] = task
 
     async def _retry_connection_with_backoff(
@@ -1238,9 +1274,7 @@ class RTCWorkerClient:
             except Exception as e:
                 logging.error(f"Reconnection attempt failed for {peer_id}: {e}")
 
-        logging.error(
-            f"Failed to reconnect to {peer_id} after {max_attempts} attempts"
-        )
+        logging.error(f"Failed to reconnect to {peer_id} after {max_attempts} attempts")
         # Remove from retry tasks
         if peer_id in self.retry_tasks:
             del self.retry_tasks[peer_id]
@@ -1277,19 +1311,21 @@ class RTCWorkerClient:
         connected = len(self.worker_connections)
         connectivity = connected / total_peers if total_peers > 0 else 1.0
 
-        has_admin = (
-            self.admin_peer_id and self.admin_peer_id in self.worker_connections
-        )
+        has_admin = self.admin_peer_id and self.admin_peer_id in self.worker_connections
 
         logging.info("=" * 60)
         logging.info("MESH CONNECTION HEALTH")
         logging.info("=" * 60)
         logging.info(f"Total workers in room: {len(all_workers)}")
-        logging.info(f"Connected workers: {connected}/{total_peers} ({connectivity:.1%})")
+        logging.info(
+            f"Connected workers: {connected}/{total_peers} ({connectivity:.1%})"
+        )
         logging.info(
             f"Admin connection: {'✓ Connected' if has_admin else '✗ Disconnected'}"
         )
-        logging.info(f"Partition status: {'✗ PARTITIONED' if self.is_partitioned else '✓ Healthy'}")
+        logging.info(
+            f"Partition status: {'✗ PARTITIONED' if self.is_partitioned else '✓ Healthy'}"
+        )
 
         if self.is_partitioned and self.partition_detected_at:
             import time
@@ -1336,6 +1372,7 @@ class RTCWorkerClient:
             # Get SLEAP version
             try:
                 import sleap
+
                 sleap_version = sleap.__version__
             except (ImportError, AttributeError):
                 sleap_version = "unknown"
@@ -1411,13 +1448,19 @@ class RTCWorkerClient:
 
             # 2. Add discovered workers to CRDT first (from signaling server)
             if discovered_peers and peer_metadata:
-                logging.info(f"Adding {len(discovered_peers)} discovered workers to CRDT")
+                logging.info(
+                    f"Adding {len(discovered_peers)} discovered workers to CRDT"
+                )
                 for peer_id in discovered_peers:
                     if peer_id != self.peer_id:  # Don't add ourselves yet
                         metadata = peer_metadata.get(peer_id, {})
                         is_admin = peer_id == discovered_admin
-                        self.room_state_crdt.add_worker(peer_id, metadata, is_admin=is_admin)
-                        logging.info(f"Added discovered worker: {peer_id} (admin: {is_admin})")
+                        self.room_state_crdt.add_worker(
+                            peer_id, metadata, is_admin=is_admin
+                        )
+                        logging.info(
+                            f"Added discovered worker: {peer_id} (admin: {is_admin})"
+                        )
 
             # 3. Add ourselves to CRDT
             self.room_state_crdt.add_worker(
@@ -1448,7 +1491,11 @@ class RTCWorkerClient:
             # 4b. Set admin status callback for real-time admin checks during re-registration
             if self.state_manager:
                 self.state_manager.set_admin_callback(
-                    lambda: self.admin_controller.is_admin if self.admin_controller else False
+                    lambda: (
+                        self.admin_controller.is_admin
+                        if self.admin_controller
+                        else False
+                    )
                 )
 
             # 5. Initialize MeshCoordinator
@@ -1473,9 +1520,13 @@ class RTCWorkerClient:
                 # 2. Receiving notifications about new workers joining
                 # 3. Fallback signaling if mesh relay fails
                 if admin_peer_id != self.peer_id:
-                    success = await self.mesh_coordinator.connect_to_admin(admin_peer_id)
+                    success = await self.mesh_coordinator.connect_to_admin(
+                        admin_peer_id
+                    )
                     if success:
-                        logging.info(f"Successfully connected to admin: {admin_peer_id}")
+                        logging.info(
+                            f"Successfully connected to admin: {admin_peer_id}"
+                        )
                         # Admin will send peer list via data channel once connection is open
                         # Worker will then connect to other workers via mesh relay
                     else:
@@ -1608,15 +1659,23 @@ class RTCWorkerClient:
                     self.ice_servers = data.get("ice_servers", [])
                     self.mesh_ice_servers = data.get("mesh_ice_servers", [])
                     if self.ice_servers:
-                        logging.info(f"Received {len(self.ice_servers)} ICE server(s) for client connections")
+                        logging.info(
+                            f"Received {len(self.ice_servers)} ICE server(s) for client connections"
+                        )
                     if self.mesh_ice_servers:
-                        logging.info(f"Received {len(self.mesh_ice_servers)} ICE server(s) for mesh connections")
+                        logging.info(
+                            f"Received {len(self.mesh_ice_servers)} ICE server(s) for mesh connections"
+                        )
 
                     # Log discovery info
                     if discovered_admin:
-                        logging.info(f"Discovered admin from signaling server: {discovered_admin}")
+                        logging.info(
+                            f"Discovered admin from signaling server: {discovered_admin}"
+                        )
                     if discovered_peers:
-                        logging.info(f"Discovered {len(discovered_peers)} peers from signaling server: {discovered_peers}")
+                        logging.info(
+                            f"Discovered {len(discovered_peers)} peers from signaling server: {discovered_peers}"
+                        )
 
                     # Print session string for direct worker connection (backward compatibility)
                     logging.info("=" * 80)
@@ -1680,7 +1739,9 @@ class RTCWorkerClient:
                     if self.mesh_coordinator:
                         await self.mesh_coordinator.handle_signaling_ice_candidate(data)
                     else:
-                        logging.warning("Received ice_candidate but mesh not initialized")
+                        logging.warning(
+                            "Received ice_candidate but mesh not initialized"
+                        )
 
                 elif msg_type == "admin_conflict":
                     # Handle race condition: another worker is already admin
@@ -1885,7 +1946,9 @@ class RTCWorkerClient:
 
                 # Check for errors in result
                 if "error" in result:
-                    return f"{MSG_FS_WRITE_SLP_ERROR}{MSG_SEPARATOR}{json.dumps(result)}"
+                    return (
+                        f"{MSG_FS_WRITE_SLP_ERROR}{MSG_SEPARATOR}{json.dumps(result)}"
+                    )
 
                 return f"{MSG_FS_WRITE_SLP_OK}{MSG_SEPARATOR}{json.dumps(result)}"
 
@@ -2042,11 +2105,19 @@ class RTCWorkerClient:
             parts = message.split(MSG_SEPARATOR, 2)
             if len(parts) < 3 or not parts[2]:
                 client_job_id = parts[1] if len(parts) > 1 else "unknown"
-                error_response = json.dumps({"errors": [{
-                    "field": "spec",
-                    "message": "Job specification JSON is required",
-                }]})
-                channel.send(f"{MSG_JOB_REJECTED}{MSG_SEPARATOR}{client_job_id}{MSG_SEPARATOR}{error_response}")
+                error_response = json.dumps(
+                    {
+                        "errors": [
+                            {
+                                "field": "spec",
+                                "message": "Job specification JSON is required",
+                            }
+                        ]
+                    }
+                )
+                channel.send(
+                    f"{MSG_JOB_REJECTED}{MSG_SEPARATOR}{client_job_id}{MSG_SEPARATOR}{error_response}"
+                )
                 return
 
             client_job_id = parts[1]  # Job ID from client (for tracking)
@@ -2057,11 +2128,19 @@ class RTCWorkerClient:
             try:
                 spec = parse_job_spec(json_spec)
             except (json.JSONDecodeError, ValueError) as e:
-                error_response = json.dumps({"errors": [{
-                    "field": "spec",
-                    "message": f"Invalid job specification: {e}",
-                }]})
-                channel.send(f"{MSG_JOB_REJECTED}{MSG_SEPARATOR}{client_job_id}{MSG_SEPARATOR}{error_response}")
+                error_response = json.dumps(
+                    {
+                        "errors": [
+                            {
+                                "field": "spec",
+                                "message": f"Invalid job specification: {e}",
+                            }
+                        ]
+                    }
+                )
+                channel.send(
+                    f"{MSG_JOB_REJECTED}{MSG_SEPARATOR}{client_job_id}{MSG_SEPARATOR}{error_response}"
+                )
                 return
 
             # Apply path_mappings to remap client-side paths to worker paths
@@ -2075,10 +2154,16 @@ class RTCWorkerClient:
 
             # If spec has config_contents, write each to a temp file and set config_paths
             temp_config_paths: list[str] = []
-            if isinstance(spec, TrainJobSpec) and getattr(spec, "config_contents", None):
+            if isinstance(spec, TrainJobSpec) and getattr(
+                spec, "config_contents", None
+            ):
                 try:
                     temp_dir = self.working_dir
-                    if temp_dir is None and self.file_manager and self.file_manager.mounts:
+                    if (
+                        temp_dir is None
+                        and self.file_manager
+                        and self.file_manager.mounts
+                    ):
                         temp_dir = self.file_manager.mounts[0].path
 
                     for idx, content in enumerate(spec.config_contents):
@@ -2093,15 +2178,25 @@ class RTCWorkerClient:
                         with os.fdopen(fd, "w") as f:
                             f.write(content)
                         temp_config_paths.append(temp_path)
-                        logging.info(f"Wrote config_contents[{idx}] to temp file: {temp_path}")
+                        logging.info(
+                            f"Wrote config_contents[{idx}] to temp file: {temp_path}"
+                        )
 
                     spec.config_paths = temp_config_paths
                 except OSError as e:
-                    error_response = json.dumps({"errors": [{
-                        "field": "config_contents",
-                        "message": f"Failed to write config to temp file: {e}",
-                    }]})
-                    channel.send(f"{MSG_JOB_REJECTED}{MSG_SEPARATOR}{client_job_id}{MSG_SEPARATOR}{error_response}")
+                    error_response = json.dumps(
+                        {
+                            "errors": [
+                                {
+                                    "field": "config_contents",
+                                    "message": f"Failed to write config to temp file: {e}",
+                                }
+                            ]
+                        }
+                    )
+                    channel.send(
+                        f"{MSG_JOB_REJECTED}{MSG_SEPARATOR}{client_job_id}{MSG_SEPARATOR}{error_response}"
+                    )
                     return
 
             try:
@@ -2113,8 +2208,12 @@ class RTCWorkerClient:
                     # Send JOB_REJECTED with validation errors
                     error_dicts = [e.to_dict() for e in errors]
                     error_response = json.dumps({"errors": error_dicts})
-                    logging.warning(f"Job rejected with {len(errors)} validation error(s)")
-                    channel.send(f"{MSG_JOB_REJECTED}{MSG_SEPARATOR}{client_job_id}{MSG_SEPARATOR}{error_response}")
+                    logging.warning(
+                        f"Job rejected with {len(errors)} validation error(s)"
+                    )
+                    channel.send(
+                        f"{MSG_JOB_REJECTED}{MSG_SEPARATOR}{client_job_id}{MSG_SEPARATOR}{error_response}"
+                    )
                     return
 
                 # Generate job ID and send JOB_ACCEPTED
@@ -2133,7 +2232,8 @@ class RTCWorkerClient:
                     _ts = datetime.now().strftime("%Y%m%d_%H%M%S")
                     _model_types = getattr(spec, "model_types", []) or []
                     per_model_run_names = [
-                        spec.run_name or (
+                        spec.run_name
+                        or (
                             f"{_model_types[i]}_{_ts}"
                             if i < len(_model_types)
                             else f"model_{i}_{_ts}"
@@ -2145,7 +2245,8 @@ class RTCWorkerClient:
                     # run_name so the checkpoint path is predictable.
                     commands = [
                         builder.build_train_command(
-                            spec, config_index=i,
+                            spec,
+                            config_index=i,
                             run_name_override=per_model_run_names[i],
                         )
                         for i in range(len(spec.config_paths))
@@ -2177,25 +2278,40 @@ class RTCWorkerClient:
                         for i, cmd in enumerate(commands):
                             config_name = Path(spec.config_paths[i]).stem
                             if total_configs > 1:
-                                logging.info(f"Training model {i+1}/{total_configs}: {config_name}")
-                                channel.send(f"Training model {i+1}/{total_configs}: {config_name}\n")
+                                logging.info(
+                                    f"Training model {i+1}/{total_configs}: {config_name}"
+                                )
+                                channel.send(
+                                    f"Training model {i+1}/{total_configs}: {config_name}\n"
+                                )
 
                             # Send MODEL_TYPE:: so the client can switch LossViewer
                             # Skip i=0: client already initialized with first model type
-                            if i > 0 and getattr(spec, "model_types", None) and i < len(spec.model_types):
+                            if (
+                                i > 0
+                                and getattr(spec, "model_types", None)
+                                and i < len(spec.model_types)
+                            ):
                                 channel.send(f"MODEL_TYPE::{spec.model_types[i]}")
 
-                            model_job_id = f"{job_id}_{i}" if total_configs > 1 else job_id
+                            model_job_id = (
+                                f"{job_id}_{i}" if total_configs > 1 else job_id
+                            )
                             logging.info(
                                 f"[PIPELINE] Starting model {i+1}/{total_configs} "
                                 f"(job_id={model_job_id}, config={config_name!r})"
                             )
                             result = await self.job_executor.execute_from_spec(
-                                channel, cmd, model_job_id, job_type="train",
+                                channel,
+                                cmd,
+                                model_job_id,
+                                job_type="train",
                                 zmq_ports=DEFAULT_ZMQ_PORTS,
                                 progress_reporter=pipeline_reporter,
                             )
-                            model_outcomes.append((per_model_run_names[i], result or {}))
+                            model_outcomes.append(
+                                (per_model_run_names[i], result or {})
+                            )
 
                             # Track per-model result for inference decision.
                             if result and result.get("cancelled"):
@@ -2223,9 +2339,13 @@ class RTCWorkerClient:
                             # before switching model type on the client. This prevents
                             # stale messages from appearing in the next model's LossViewer.
                             if i < total_configs - 1:
-                                await pipeline_reporter.restart_progress_listener(channel)
+                                await pipeline_reporter.restart_progress_listener(
+                                    channel
+                                )
                     finally:
-                        logging.info("[PIPELINE] All models finished — running pipeline_reporter.async_cleanup()")
+                        logging.info(
+                            "[PIPELINE] All models finished — running pipeline_reporter.async_cleanup()"
+                        )
                         await pipeline_reporter.async_cleanup()
                         self.job_executor._progress_reporter = None
 
@@ -2276,7 +2396,9 @@ class RTCWorkerClient:
                             os.unlink(temp_path)
                             logging.info(f"Cleaned up temp config: {temp_path}")
                         except OSError as e:
-                            logging.warning(f"Failed to clean up temp config {temp_path}: {e}")
+                            logging.warning(
+                                f"Failed to clean up temp config {temp_path}: {e}"
+                            )
 
         except Exception as e:
             logging.error(f"Error handling job submit: {e}")
@@ -2286,12 +2408,20 @@ class RTCWorkerClient:
                 client_job_id = parts[1] if len(parts) > 1 else "unknown"
             except Exception:
                 client_job_id = "unknown"
-            error_response = json.dumps({"errors": [{
-                "field": "internal",
-                "message": f"Internal error: {e}",
-            }]})
+            error_response = json.dumps(
+                {
+                    "errors": [
+                        {
+                            "field": "internal",
+                            "message": f"Internal error: {e}",
+                        }
+                    ]
+                }
+            )
             if channel.readyState == "open":
-                channel.send(f"{MSG_JOB_REJECTED}{MSG_SEPARATOR}{client_job_id}{MSG_SEPARATOR}{error_response}")
+                channel.send(
+                    f"{MSG_JOB_REJECTED}{MSG_SEPARATOR}{client_job_id}{MSG_SEPARATOR}{error_response}"
+                )
 
     async def _run_post_training_inference(
         self,
@@ -2358,7 +2488,9 @@ class RTCWorkerClient:
         for p in missing:
             logging.warning(f"[INFERENCE] Checkpoint directory not found: {p}")
         if not valid_model_paths:
-            logging.info("[INFERENCE] Skipping — no checkpoint directories found on disk")
+            logging.info(
+                "[INFERENCE] Skipping — no checkpoint directories found on disk"
+            )
             if channel.readyState == "open":
                 channel.send('INFERENCE_SKIPPED::{"reason": "checkpoint_dir_missing"}')
             return "skipped (checkpoint dirs missing on disk)"
@@ -2537,11 +2669,15 @@ class RTCWorkerClient:
                             channel.send(format_message(MSG_AUTH_FAILURE, "timeout"))
                             # Note: aiortc doesn't have channel.close(), connection will be reset
 
-                self._auth_timeout_tasks[channel.label] = asyncio.create_task(auth_timeout())
+                self._auth_timeout_tasks[channel.label] = asyncio.create_task(
+                    auth_timeout()
+                )
             else:
                 # No secret configured - mark as authenticated immediately (legacy mode)
                 self._authenticated_channels.add(channel.label)
-                logging.info(f"{channel.label} authenticated (legacy mode - no secret configured)")
+                logging.info(
+                    f"{channel.label} authenticated (legacy mode - no secret configured)"
+                )
 
         # Register handler for future open events
         @channel.on("open")
@@ -2578,8 +2714,13 @@ class RTCWorkerClient:
                     return
 
                 # Block commands if PSK authentication is required but not completed
-                if self._room_secret and channel.label not in self._authenticated_channels:
-                    logging.warning(f"Rejected command from unauthenticated channel {channel.label}: {log_msg}")
+                if (
+                    self._room_secret
+                    and channel.label not in self._authenticated_channels
+                ):
+                    logging.warning(
+                        f"Rejected command from unauthenticated channel {channel.label}: {log_msg}"
+                    )
                     # Don't send error to avoid leaking info - just ignore
                     return
 
@@ -2692,7 +2833,9 @@ class RTCWorkerClient:
 
                     # Unzip results if needed.
                     if file_path.endswith(".zip"):
-                        self.unzipped_dir = await self.file_manager.unzip_results(file_path)
+                        self.unzipped_dir = await self.file_manager.unzip_results(
+                            file_path
+                        )
                         logging.info(f"Unzipped results from {file_path}")
 
                     # Reset dictionary for next file
@@ -2708,7 +2851,9 @@ class RTCWorkerClient:
                         if Path(track_script_path).exists():
                             self.job_executor.unzipped_dir = self.unzipped_dir
                             self.job_executor.output_dir = self.output_dir
-                            await self.job_executor.run_track_workflow(channel, track_script_path)
+                            await self.job_executor.run_track_workflow(
+                                channel, track_script_path
+                            )
                         else:
                             logging.error(
                                 f"No track script found in {self.unzipped_dir}. Skipping inference."
@@ -2736,7 +2881,9 @@ class RTCWorkerClient:
                                     )
 
                                     # Start ZMQ progress listener
-                                    progress_listener_task = self.progress_reporter.start_progress_listener_task(channel)
+                                    progress_listener_task = self.progress_reporter.start_progress_listener_task(
+                                        channel
+                                    )
                                     logging.info(
                                         f"{channel.label} progress listener started"
                                     )
@@ -2958,7 +3105,16 @@ class RTCWorkerClient:
 
             logging.info("Ready for new client connection!")
 
-    async def run_worker(self, pc, DNS: str, port_number, api_key=None, room_id=None, token=None, room_secret=None):
+    async def run_worker(
+        self,
+        pc,
+        DNS: str,
+        port_number,
+        api_key=None,
+        room_id=None,
+        token=None,
+        room_secret=None,
+    ):
         """Main function to run the worker. Contains several event handlers for the WebRTC connection and data channel.
 
         Args:
@@ -3002,17 +3158,24 @@ class RTCWorkerClient:
 
             # Load room secret for P2P PSK authentication
             # Priority: CLI flag > env var > filesystem > config
-            self._room_secret = resolve_secret(room_id or "default", cli_secret=room_secret)
+            self._room_secret = resolve_secret(
+                room_id or "default", cli_secret=room_secret
+            )
             if self._room_secret:
                 logging.info("P2P PSK authentication enabled (room secret configured)")
             else:
-                logging.info("P2P PSK authentication disabled (no room secret configured)")
+                logging.info(
+                    "P2P PSK authentication disabled (no room secret configured)"
+                )
 
             # Generate a worker peer ID based on API key prefix
             peer_id = f"worker-{api_key[4:12]}-{socket.gethostname()[:8]}"
             self.peer_id_for_cleanup = peer_id
             # Room ID and token will be returned by server after API key validation
-            room_json = {"room_id": None, "token": None}  # Placeholder - server provides these
+            room_json = {
+                "room_id": None,
+                "token": None,
+            }  # Placeholder - server provides these
 
             # Store credentials for re-registration after reset
             self.room_id = room_json.get("room_id")

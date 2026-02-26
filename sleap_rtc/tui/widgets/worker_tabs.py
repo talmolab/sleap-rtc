@@ -16,7 +16,6 @@ from textual.message import Message
 from textual.binding import Binding
 
 
-
 @dataclass
 class WorkerInfo:
     """Information about a worker."""

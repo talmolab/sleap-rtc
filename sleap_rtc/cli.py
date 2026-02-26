@@ -71,7 +71,6 @@ from sleap_rtc.rtc_client import run_RTCclient, run_job_submit
 from sleap_rtc.rtc_client_track import run_RTCclient_track
 from sleap_rtc.jobs.spec import TrainJobSpec, TrackJobSpec
 
-
 # =============================================================================
 # Authentication Helpers
 # =============================================================================
@@ -111,15 +110,20 @@ def require_login() -> str:
     # Check JWT expiration
     try:
         import jwt
+
         claims = jwt.decode(jwt_token, options={"verify_signature": False})
         exp = claims.get("exp")
         if exp:
             from datetime import datetime
+
             exp_dt = datetime.fromtimestamp(exp)
             if exp_dt < datetime.now():
                 user = get_user()
                 username = user.get("username", "unknown") if user else "unknown"
-                click.echo(click.style("Error: ", fg="red", bold=True) + "JWT token has expired.")
+                click.echo(
+                    click.style("Error: ", fg="red", bold=True)
+                    + "JWT token has expired."
+                )
                 click.echo(f"  Last logged in as: {username}")
                 click.echo("")
                 click.echo("Please log in again:")
@@ -219,6 +223,7 @@ def whoami():
     if jwt_token:
         try:
             import jwt
+
             # Decode without verification just to read claims
             claims = jwt.decode(jwt_token, options={"verify_signature": False})
             exp = claims.get("exp")
@@ -335,11 +340,13 @@ def token_create(room, name, expires, save):
 
 @token.command(name="list")
 @click.option(
-    "--room", "-r",
+    "--room",
+    "-r",
     help="Filter by room ID.",
 )
 @click.option(
-    "--sort", "-s",
+    "--sort",
+    "-s",
     type=click.Choice(["name", "created", "expires", "room"]),
     default="created",
     help="Sort by field.",
@@ -350,7 +357,8 @@ def token_create(room, name, expires, save):
     help="Reverse sort order.",
 )
 @click.option(
-    "--active-only", "-a",
+    "--active-only",
+    "-a",
     is_flag=True,
     help="Hide revoked and expired tokens.",
 )
@@ -381,7 +389,12 @@ def token_list(room, sort, reverse, active_only):
         params["room_id"] = room
     if active_only:
         params["active_only"] = "true"
-    sort_map = {"name": "worker_name", "created": "created_at", "expires": "expires_at", "room": "room_name"}
+    sort_map = {
+        "name": "worker_name",
+        "created": "created_at",
+        "expires": "expires_at",
+        "room": "room_name",
+    }
     params["sort_by"] = sort_map.get(sort, "created_at")
     params["sort_order"] = "asc" if reverse else "desc"
 
@@ -498,7 +511,9 @@ def token_delete(token_id, yes):
         sys.exit(1)
 
     if not yes:
-        if not click.confirm(f"Permanently delete token {token_id[:20]}...? This cannot be undone."):
+        if not click.confirm(
+            f"Permanently delete token {token_id[:20]}...? This cannot be undone."
+        ):
             click.echo("Cancelled")
             return
 
@@ -525,7 +540,9 @@ def token_delete(token_id, yes):
 
 
 @token.command(name="cleanup")
-@click.option("--room", "-r", help="Filter by room ID (delete only tokens for this room).")
+@click.option(
+    "--room", "-r", help="Filter by room ID (delete only tokens for this room)."
+)
 @click.option("--yes", "-y", is_flag=True, help="Skip confirmation prompt.")
 def token_cleanup(room, yes):
     """Delete all revoked and expired tokens.
@@ -580,7 +597,9 @@ def token_cleanup(room, yes):
         sys.exit(1)
 
     if not yes:
-        if not click.confirm(f"Delete {len(inactive_tokens)} inactive token(s)? This cannot be undone."):
+        if not click.confirm(
+            f"Delete {len(inactive_tokens)} inactive token(s)? This cannot be undone."
+        ):
             click.echo("Cancelled")
             return
 
@@ -624,20 +643,23 @@ def room():
 
 @room.command(name="list")
 @click.option(
-    "--filter", "-f",
+    "--filter",
+    "-f",
     "role_filter",
     type=click.Choice(["all", "owned", "member"]),
     default="all",
     help="Filter by ownership role.",
 )
 @click.option(
-    "--sort", "-s",
+    "--sort",
+    "-s",
     type=click.Choice(["name", "created", "expires", "role"]),
     default="created",
     help="Sort by field.",
 )
 @click.option(
-    "--reverse", "-r",
+    "--reverse",
+    "-r",
     is_flag=True,
     help="Reverse sort order.",
 )
@@ -670,7 +692,12 @@ def room_list(role_filter, sort, reverse, search):
     params = {}
     if role_filter != "all":
         params["role"] = role_filter.replace("owned", "owner")  # Map 'owned' to 'owner'
-    sort_map = {"name": "name", "created": "joined_at", "expires": "expires_at", "role": "role"}
+    sort_map = {
+        "name": "name",
+        "created": "joined_at",
+        "expires": "expires_at",
+        "role": "role",
+    }
     params["sort_by"] = sort_map.get(sort, "joined_at")
     params["sort_order"] = "asc" if reverse else "desc"
     if search:
@@ -802,7 +829,9 @@ def room_create(name, expires):
         click.echo(f"  Expires:  {expires_str}")
         click.echo("")
         click.echo("Next steps:")
-        click.echo(f"  1. Create a worker token: sleap-rtc token create --room {data['room_id']} --name my-worker")
+        click.echo(
+            f"  1. Create a worker token: sleap-rtc token create --room {data['room_id']} --name my-worker"
+        )
         click.echo(f"  2. Start a worker with the token")
         click.echo("")
 
@@ -840,7 +869,9 @@ def room_info(room_id):
         )
 
         if response.status_code != 200:
-            error = response.json().get("detail", response.json().get("error", response.text))
+            error = response.json().get(
+                "detail", response.json().get("error", response.text)
+            )
             logger.error(f"Failed to get room info: {error}")
             sys.exit(1)
 
@@ -859,7 +890,9 @@ def room_info(room_id):
                 expires_str = f"{expires_dt.strftime('%Y-%m-%d %H:%M')} ({time_left.days} days left)"
             elif time_left.seconds > 3600:
                 hours_left = time_left.seconds // 3600
-                expires_str = f"{expires_dt.strftime('%Y-%m-%d %H:%M')} ({hours_left} hours left)"
+                expires_str = (
+                    f"{expires_dt.strftime('%Y-%m-%d %H:%M')} ({hours_left} hours left)"
+                )
             else:
                 minutes_left = time_left.seconds // 60
                 expires_str = f"{expires_dt.strftime('%Y-%m-%d %H:%M')} ({minutes_left} minutes left)"
@@ -880,7 +913,9 @@ def room_info(room_id):
             click.echo("  Members:")
             for member in members:
                 role_icon = "👑" if member.get("role") == "owner" else "👤"
-                click.echo(f"    {role_icon} {member.get('username', member.get('user_id', 'unknown'))} ({member.get('role', 'member')})")
+                click.echo(
+                    f"    {role_icon} {member.get('username', member.get('user_id', 'unknown'))} ({member.get('role', 'member')})"
+                )
 
         click.echo("")
 
@@ -916,7 +951,9 @@ def room_delete(room_id, force):
         sys.exit(1)
 
     if not force:
-        if not click.confirm(f"Are you sure you want to delete room '{room_id}'? This cannot be undone."):
+        if not click.confirm(
+            f"Are you sure you want to delete room '{room_id}'? This cannot be undone."
+        ):
             click.echo("Cancelled")
             return
 
@@ -931,7 +968,9 @@ def room_delete(room_id, force):
         )
 
         if response.status_code != 200:
-            error = response.json().get("detail", response.json().get("error", response.text))
+            error = response.json().get(
+                "detail", response.json().get("error", response.text)
+            )
             logger.error(f"Failed to delete room: {error}")
             sys.exit(1)
 
@@ -1024,7 +1063,6 @@ def room_create_secret(room, save):
     4. Credentials file: ~/.sleap-rtc/credentials.json
 
     Examples:
-
         # Generate and save secret for a room
         sleap-rtc room create-secret --room my-room
 
@@ -1044,7 +1082,9 @@ def room_create_secret(room, save):
     # Check if secret already exists
     existing = get_room_secret(room)
     if existing:
-        if not click.confirm(f"Room '{room}' already has a secret. Generate a new one?"):
+        if not click.confirm(
+            f"Room '{room}' already has a secret. Generate a new one?"
+        ):
             click.echo("Cancelled")
             return
 
@@ -1070,7 +1110,9 @@ def room_create_secret(room, save):
     click.echo("    # Or set SLEAP_ROOM_SECRET environment variable")
     click.echo("")
     click.echo("  Client:")
-    click.echo(f"    sleap-rtc train --room {room} --config /path/to/config.yaml --room-secret {secret}")
+    click.echo(
+        f"    sleap-rtc train --room {room} --config /path/to/config.yaml --room-secret {secret}"
+    )
     click.echo("    # Or set SLEAP_ROOM_SECRET environment variable")
     click.echo("")
 
@@ -1205,6 +1247,7 @@ def worker(api_key, room, working_dir, name, verbose, room_secret):
     # Check for credential file if no explicit auth provided
     if not api_key and not room:
         from sleap_rtc.auth.credentials import get_credentials
+
         creds = get_credentials()
         tokens = creds.get("tokens", {})
         if tokens:
@@ -1429,7 +1472,6 @@ def train(**kwargs):
     (e.g., /vast) or ensure files exist on the worker.
 
     Examples:
-
     \b
     # Basic training with config file
     sleap-rtc train --room my-room --config /vast/project/centroid.yaml
@@ -1517,7 +1559,9 @@ def train(**kwargs):
         logger.warning("=" * 60)
         logger.warning("DEPRECATION WARNING: --pkg-path is deprecated.")
         logger.warning("Use --config with --labels for the new workflow:")
-        logger.warning("  sleap-rtc train --room ROOM --config /path/to/config.yaml --labels /path/to/labels.slp")
+        logger.warning(
+            "  sleap-rtc train --room ROOM --config /path/to/config.yaml --labels /path/to/labels.slp"
+        )
         logger.warning("=" * 60)
 
     # Validation: Must provide either session string OR room credentials
@@ -1592,7 +1636,9 @@ def train(**kwargs):
         if len(config_paths) == 1:
             logger.info(f"Using structured job submission with 1 config")
         else:
-            logger.info(f"Using structured job submission with {len(config_paths)} configs (multi-model training)")
+            logger.info(
+                f"Using structured job submission with {len(config_paths)} configs (multi-model training)"
+            )
         job_spec = TrainJobSpec(
             config_paths=list(config_paths),
             labels_path=labels_path,
@@ -1764,7 +1810,6 @@ def track(**kwargs):
     worker filesystem. Use shared storage or ensure files exist on the worker.
 
     Examples:
-
     \b
     # Basic inference with single model
     sleap-rtc track --room my-room \\
@@ -1902,9 +1947,20 @@ def track(**kwargs):
 @click.option("--room", "--room-id", "-r", type=str, required=False)
 @click.option("--worker-id", "-w", type=str, required=False)
 @click.option("--auto-select", "-a", is_flag=True, default=False)
-@click.option("--pkg-path", "--pkg_path", "-p", type=str, required=True, help="Path resolved on worker")
-@click.option("--controller-port", "--controller_port", type=int, required=False, default=9000)
-@click.option("--publish-port", "--publish_port", type=int, required=False, default=9001)
+@click.option(
+    "--pkg-path",
+    "--pkg_path",
+    "-p",
+    type=str,
+    required=True,
+    help="Path resolved on worker",
+)
+@click.option(
+    "--controller-port", "--controller_port", type=int, required=False, default=9000
+)
+@click.option(
+    "--publish-port", "--publish_port", type=int, required=False, default=9001
+)
 @click.option("--min-gpu-memory", type=int, required=False, default=None)
 @click.option("--worker-path", type=str, required=False, default=None)
 @click.option("--non-interactive", is_flag=True, default=False)
@@ -1925,9 +1981,20 @@ def client_train_deprecated(ctx, **kwargs):
 @click.option("--room", "--room-id", "-r", type=str, required=False)
 @click.option("--worker-id", "-w", type=str, required=False)
 @click.option("--auto-select", "-a", is_flag=True, default=False)
-@click.option("--pkg-path", "--pkg_path", "-p", type=str, required=True, help="Path resolved on worker")
-@click.option("--controller-port", "--controller_port", type=int, required=False, default=9000)
-@click.option("--publish-port", "--publish_port", type=int, required=False, default=9001)
+@click.option(
+    "--pkg-path",
+    "--pkg_path",
+    "-p",
+    type=str,
+    required=True,
+    help="Path resolved on worker",
+)
+@click.option(
+    "--controller-port", "--controller_port", type=int, required=False, default=9000
+)
+@click.option(
+    "--publish-port", "--publish_port", type=int, required=False, default=9001
+)
 @click.option("--min-gpu-memory", type=int, required=False, default=None)
 @click.option("--worker-path", type=str, required=False, default=None)
 @click.option("--non-interactive", is_flag=True, default=False)
@@ -1948,10 +2015,26 @@ def client_deprecated(ctx, **kwargs):
 @click.option("--room", "--room-id", "-r", type=str, required=False)
 @click.option("--worker-id", "-w", type=str, required=False)
 @click.option("--auto-select", "-a", is_flag=True, default=False)
-@click.option("--data-path", "--data_path", "-d", type=str, required=True, help="Local path, transferred to worker")
-@click.option("--model-paths", "--model_paths", "-m", multiple=True, required=True, help="Local paths, transferred to worker")
+@click.option(
+    "--data-path",
+    "--data_path",
+    "-d",
+    type=str,
+    required=True,
+    help="Local path, transferred to worker",
+)
+@click.option(
+    "--model-paths",
+    "--model_paths",
+    "-m",
+    multiple=True,
+    required=True,
+    help="Local paths, transferred to worker",
+)
 @click.option("--output", "-o", type=str, default="predictions.slp")
-@click.option("--only-suggested-frames", "--only_suggested_frames", is_flag=True, default=True)
+@click.option(
+    "--only-suggested-frames", "--only_suggested_frames", is_flag=True, default=True
+)
 @click.option("--min-gpu-memory", type=int, required=False, default=None)
 @click.option("--room-secret", type=str, envvar="SLEAP_ROOM_SECRET", required=False)
 @click.pass_context
@@ -2028,7 +2111,6 @@ def test_browse(room, port, no_browser, room_secret):
     Requires authentication. Run 'sleap-rtc login' first.
 
     Examples:
-
         # Connect to a Worker and open browser
         sleap-rtc test browse --room my-room
 
@@ -2125,7 +2207,6 @@ def test_resolve_paths(room, slp, port, no_browser, room_secret, use_jwt):
     6. Save creates a new SLP with corrected paths
 
     Examples:
-
         # Check video paths in an SLP file
         sleap-rtc test resolve-paths --room my-room --slp /mnt/data/project.slp
 
@@ -2203,7 +2284,6 @@ def tui(room, room_secret):
     bypassing the room selection screen.
 
     Examples:
-
         # Launch TUI with room selection
         sleap-rtc tui
 
@@ -2262,16 +2342,20 @@ def status():
         if jwt_token:
             try:
                 import jwt
+
                 claims = jwt.decode(jwt_token, options={"verify_signature": False})
                 exp = claims.get("exp")
                 if exp:
                     from datetime import datetime
+
                     exp_dt = datetime.fromtimestamp(exp)
                     now = datetime.now()
                     if exp_dt > now:
                         remaining = exp_dt - now
                         hours = remaining.total_seconds() / 3600
-                        click.echo(f"  JWT expires: {exp_dt.strftime('%Y-%m-%d %H:%M')} ({hours:.1f}h remaining)")
+                        click.echo(
+                            f"  JWT expires: {exp_dt.strftime('%Y-%m-%d %H:%M')} ({hours:.1f}h remaining)"
+                        )
                     else:
                         click.echo(f"  JWT expires: {click.style('EXPIRED', fg='red')}")
             except Exception:
@@ -2349,7 +2433,9 @@ def doctor():
     if py_major >= 3 and py_minor >= 11:
         click.echo(f"  Python version: {py_version} {click.style('✓', fg='green')}")
     else:
-        click.echo(f"  Python version: {py_version} {click.style('✗ (requires 3.11+)', fg='red')}")
+        click.echo(
+            f"  Python version: {py_version} {click.style('✗ (requires 3.11+)', fg='red')}"
+        )
         all_ok = False
 
     click.echo(f"  Platform: {platform.system()} {platform.release()}")
@@ -2370,6 +2456,7 @@ def doctor():
     click.echo("")
     click.echo(click.style("Network Connectivity:", bold=True))
     from sleap_rtc.config import get_config
+
     config = get_config()
     server_url = config.get_http_url()
     click.echo(f"  Signaling server: {server_url}")
@@ -2379,7 +2466,9 @@ def doctor():
         if response.status_code == 200:
             click.echo(f"  Health check: {click.style('✓ reachable', fg='green')}")
         else:
-            click.echo(f"  Health check: {click.style(f'✗ HTTP {response.status_code}', fg='yellow')}")
+            click.echo(
+                f"  Health check: {click.style(f'✗ HTTP {response.status_code}', fg='yellow')}"
+            )
             all_ok = False
     except requests.exceptions.Timeout:
         click.echo(f"  Health check: {click.style('✗ timeout', fg='red')}")
@@ -2395,16 +2484,20 @@ def doctor():
     click.echo("")
     click.echo(click.style("Credentials:", bold=True))
     from sleap_rtc.auth.credentials import CREDENTIALS_PATH, is_logged_in
+
     click.echo(f"  File: {CREDENTIALS_PATH}")
 
     if CREDENTIALS_PATH.exists():
         click.echo(f"  Exists: {click.style('✓', fg='green')}")
         # Check permissions
         import stat
+
         file_stat = CREDENTIALS_PATH.stat()
         mode = file_stat.st_mode
         if mode & stat.S_IRWXO:  # Others have any permissions
-            click.echo(f"  Permissions: {click.style('✗ world-readable (insecure)', fg='yellow')}")
+            click.echo(
+                f"  Permissions: {click.style('✗ world-readable (insecure)', fg='yellow')}"
+            )
         else:
             click.echo(f"  Permissions: {click.style('✓ secure', fg='green')}")
 
@@ -2421,7 +2514,9 @@ def doctor():
     click.echo(click.style("Configuration:", bold=True))
     config_file = Path("sleap-rtc.toml")
     if config_file.exists():
-        click.echo(f"  Config file: {config_file.absolute()} {click.style('✓', fg='green')}")
+        click.echo(
+            f"  Config file: {config_file.absolute()} {click.style('✓', fg='green')}"
+        )
     else:
         click.echo(f"  Config file: {click.style('using defaults', fg='cyan')}")
 
@@ -2431,7 +2526,9 @@ def doctor():
     if all_ok:
         click.echo(click.style("All checks passed! ✓", fg="green", bold=True))
     else:
-        click.echo(click.style("Some checks failed. Review above.", fg="yellow", bold=True))
+        click.echo(
+            click.style("Some checks failed. Review above.", fg="yellow", bold=True)
+        )
     click.echo("")
 
 
@@ -2561,12 +2658,17 @@ def credentials_show(reveal):
                 click.echo(f"  JWT:      {jwt_token}")
             else:
                 # Show first and last few chars
-                masked = jwt_token[:20] + "..." + jwt_token[-10:] if len(jwt_token) > 30 else "****"
+                masked = (
+                    jwt_token[:20] + "..." + jwt_token[-10:]
+                    if len(jwt_token) > 30
+                    else "****"
+                )
                 click.echo(f"  JWT:      {masked}")
 
             # Show JWT expiry
             try:
                 import jwt
+
                 claims = jwt.decode(jwt_token, options={"verify_signature": False})
                 exp = claims.get("exp")
                 if exp:
@@ -2575,7 +2677,9 @@ def credentials_show(reveal):
                     if exp_dt > now:
                         remaining = exp_dt - now
                         hours = remaining.total_seconds() / 3600
-                        click.echo(f"  Expires:  {exp_dt.strftime('%Y-%m-%d %H:%M')} ({hours:.1f}h remaining)")
+                        click.echo(
+                            f"  Expires:  {exp_dt.strftime('%Y-%m-%d %H:%M')} ({hours:.1f}h remaining)"
+                        )
                     else:
                         click.echo(f"  Expires:  {click.style('EXPIRED', fg='red')}")
             except Exception:
@@ -2757,7 +2861,9 @@ def credentials_remove_token(room, yes):
     if not yes:
         click.echo(f"Token: {name}")
         click.echo("")
-        click.echo(click.style("Note:", fg="yellow") + " This only removes the local copy.")
+        click.echo(
+            click.style("Note:", fg="yellow") + " This only removes the local copy."
+        )
         click.echo("To revoke the token on the server, use: sleap-rtc token revoke")
         click.echo("")
         if not click.confirm(f"Remove local token for room '{room}'?"):
@@ -2830,11 +2936,17 @@ def config_show(as_json):
                 "working_dir": config.get_worker_io_config().working_dir,
             },
             "sources": {
-                "config_file": str(config._find_config_file()) if config._find_config_file() else None,
+                "config_file": (
+                    str(config._find_config_file())
+                    if config._find_config_file()
+                    else None
+                ),
                 "env_vars": {
                     "SLEAP_RTC_ENV": os.environ.get("SLEAP_RTC_ENV"),
                     "SLEAP_RTC_SIGNALING_WS": os.environ.get("SLEAP_RTC_SIGNALING_WS"),
-                    "SLEAP_RTC_SIGNALING_HTTP": os.environ.get("SLEAP_RTC_SIGNALING_HTTP"),
+                    "SLEAP_RTC_SIGNALING_HTTP": os.environ.get(
+                        "SLEAP_RTC_SIGNALING_HTTP"
+                    ),
                 },
             },
         }
@@ -2879,7 +2991,9 @@ def config_show(as_json):
     if io_config.mounts:
         for mount in io_config.mounts:
             valid = mount.validate()
-            status = click.style("✓", fg="green") if valid else click.style("✗", fg="red")
+            status = (
+                click.style("✓", fg="green") if valid else click.style("✗", fg="red")
+            )
             click.echo(f"    {status} {mount.label}: {mount.path}")
     else:
         click.echo("    (none configured)")
@@ -2933,7 +3047,9 @@ def config_path():
     click.echo(f"  Path: {home_config}")
     if home_config.exists():
         if cwd_config.exists():
-            click.echo(f"  Status: {click.style('exists', fg='green')} (shadowed by CWD config)")
+            click.echo(
+                f"  Status: {click.style('exists', fg='green')} (shadowed by CWD config)"
+            )
         else:
             click.echo(f"  Status: {click.style('exists', fg='green')} (will be used)")
     else:
@@ -3004,10 +3120,12 @@ def config_add_mount(path, label, use_global):
             break
     else:
         # Add new mount
-        config_data["worker"]["io"]["mounts"].append({
-            "path": path,
-            "label": label,
-        })
+        config_data["worker"]["io"]["mounts"].append(
+            {
+                "path": path,
+                "label": label,
+            }
+        )
 
     # Ensure directory exists
     config_file.parent.mkdir(parents=True, exist_ok=True)

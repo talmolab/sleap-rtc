@@ -1,7 +1,7 @@
 [project]
 name = "sleap-rtc"
-version = "0.1.0"
-description = "Add your description here"
+version = "0.0.1"
+description = "Real-time communication layer for remote SLEAP training and inference"
 readme = "README.md"
 requires-python = ">=3.11"
 classifiers = [
@@ -17,7 +17,6 @@ dependencies = [
     "pyzmq",
     "jsonpickle",
     "boto3",
-    "sleap-nn[torch]",
     "opencv-python-headless>=4.12.0.88",
     "prompt_toolkit>=3.0.0",
     "aiohttp>=3.9.0",
@@ -35,8 +34,14 @@ sleap-rtc = "sleap_rtc.cli:cli"
 [project.optional-dependencies]
 dev = [
     "pytest",
+    "pytest-asyncio",
+    "pytest-timeout",
     "black",
     "ruff",
+    "pyyaml",
+    "qtpy",
+    "PyQt5",
+    "sleap-io",
 ]
 
 [tool.uv]
@@ -49,6 +54,21 @@ line-length = 88
 select = [
     "D",  # pydocstyle
 ]
+# Ignore "missing docstring" rules — enforce incrementally as coverage improves.
+# Also ignore style issues in existing docstrings that predate CI.
+ignore = [
+    "D100",  # Missing docstring in public module
+    "D101",  # Missing docstring in public class
+    "D102",  # Missing docstring in public method
+    "D103",  # Missing docstring in public function
+    "D104",  # Missing docstring in public package
+    "D105",  # Missing docstring in magic method
+    "D107",  # Missing docstring in __init__
+    "D205",  # 1 blank line required between summary line and description
+    "D301",  # Use r""" if any backslashes in a docstring
+    "D415",  # First line should end with a period, question mark, or exclamation point
+    "D417",  # Missing argument descriptions in the docstring
+]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
@@ -56,9 +76,13 @@ convention = "google"
 [tool.setuptools]
 packages = ["sleap_rtc"]
 
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+
 [tool.codespell]
 # Ref: https://github.com/codespell-project/codespell#using-a-config-file
-skip = '.git*,*.css'
+skip = '.git*,*.css,openspec'
+ignore-words-list = 'doesnt'
 check-hidden = true
 # ignore-regex = ''
 # ignore-words-list = ''

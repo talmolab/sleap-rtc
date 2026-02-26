@@ -75,11 +75,7 @@ class TrainJobSpec:
         """Serialize spec to JSON string."""
         data = {"type": "train", **asdict(self)}
         # Remove None values, empty lists, and empty dicts for cleaner JSON
-        data = {
-            k: v
-            for k, v in data.items()
-            if v is not None and v != [] and v != {}
-        }
+        data = {k: v for k, v in data.items() if v is not None and v != [] and v != {}}
         return json.dumps(data)
 
     @classmethod
@@ -99,11 +95,7 @@ class TrainJobSpec:
     def to_dict(self) -> dict:
         """Convert spec to dictionary with type field."""
         data = {"type": "train", **asdict(self)}
-        return {
-            k: v
-            for k, v in data.items()
-            if v is not None and v != [] and v != {}
-        }
+        return {k: v for k, v in data.items() if v is not None and v != [] and v != {}}
 
     @classmethod
     def from_dict(cls, data: dict) -> "TrainJobSpec":

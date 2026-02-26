@@ -214,13 +214,21 @@ class BrowserScreen(Screen):
     def compose(self) -> ComposeResult:
         # Get user info for profile display
         from sleap_rtc.auth.credentials import get_user
+
         user = get_user()
         username = user.get("username", "unknown") if user else "unknown"
 
         # Custom header
         with Horizontal(id="app-header"):
             yield Static("sleap-rtc", id="header-title")
-            yield Static(f"[{self.room_id[:12]}...]" if len(self.room_id) > 15 else f"[{self.room_id}]", id="header-room")
+            yield Static(
+                (
+                    f"[{self.room_id[:12]}...]"
+                    if len(self.room_id) > 15
+                    else f"[{self.room_id}]"
+                ),
+                id="header-room",
+            )
             yield Static(f"👤 {username}", id="header-user")
             yield Static("○ Disconnected", id="header-status")
 
@@ -356,9 +364,7 @@ class BrowserScreen(Screen):
                 return
 
             # Convert to WorkerInfo objects
-            self.worker_infos = [
-                WorkerInfo.from_dict(w) for w in self.workers_data
-            ]
+            self.worker_infos = [WorkerInfo.from_dict(w) for w in self.workers_data]
 
             # Update worker tabs
             worker_tabs = self.query_one("#worker-tabs", WorkerTabs)
@@ -450,7 +456,9 @@ class BrowserScreen(Screen):
                     )
             else:
                 self.connection_status = "Connection failed"
-                connecting_status.update(f"Failed to connect to {worker_info.display_name}")
+                connecting_status.update(
+                    f"Failed to connect to {worker_info.display_name}"
+                )
 
             # Update tab connection status
             worker_tabs = self.query_one("#worker-tabs", WorkerTabs)
@@ -463,22 +471,29 @@ class BrowserScreen(Screen):
             worker_index: Index of worker to connect to after getting secret.
             error_message: Optional error message to display.
         """
+
         def on_secret_result(secret: Optional[str]) -> None:
             """Handle secret input result."""
             if secret:
                 # Update room_secret and retry connection
                 self.room_secret = secret
-                asyncio.create_task(self._retry_connection_with_secret(worker_index, secret))
+                asyncio.create_task(
+                    self._retry_connection_with_secret(worker_index, secret)
+                )
             else:
                 # User cancelled - update status
                 self.connection_status = "Authentication cancelled"
                 connecting_status = self.query_one("#connecting-status", Static)
-                connecting_status.update("Authentication cancelled - no secret provided")
+                connecting_status.update(
+                    "Authentication cancelled - no secret provided"
+                )
 
         # Show secret input screen
         secret_screen = SecretInputScreen(
             room_id=self.room_id,
-            error_message=error_message if "No room secret" not in (error_message or "") else None,
+            error_message=(
+                error_message if "No room secret" not in (error_message or "") else None
+            ),
         )
         self.app.push_screen(secret_screen, on_secret_result)
 
@@ -546,7 +561,9 @@ class BrowserScreen(Screen):
                 await self._prompt_for_secret(worker_index, reason)
             else:
                 self.connection_status = "Connection failed"
-                connecting_status.update(f"Failed to connect to {worker_info.display_name}")
+                connecting_status.update(
+                    f"Failed to connect to {worker_info.display_name}"
+                )
 
     def _save_room_secret(self, secret: str):
         """Save room secret to credentials for future use.
@@ -556,6 +573,7 @@ class BrowserScreen(Screen):
         """
         try:
             from sleap_rtc.auth.credentials import save_room_secret
+
             save_room_secret(self.room_id, secret)
             self.app.notify(
                 f"Room secret saved for future connections",
@@ -749,7 +767,8 @@ class BrowserScreen(Screen):
 
         # Get other missing videos for batch resolution
         other_missing = [
-            v.original_path for v in slp_info.videos
+            v.original_path
+            for v in slp_info.videos
             if v.is_missing and v.original_path != video.original_path
         ]
 
@@ -810,7 +829,9 @@ class BrowserScreen(Screen):
         def on_confirm():
             # Apply resolutions when user confirms
             asyncio.create_task(
-                self._apply_resolutions(slp_info, videos_to_resolve, still_missing_paths)
+                self._apply_resolutions(
+                    slp_info, videos_to_resolve, still_missing_paths
+                )
             )
 
         confirm_screen = ResolveConfirmScreen(
@@ -903,7 +924,9 @@ class BrowserScreen(Screen):
                 timeout=5,
             )
         else:
-            self.notify(f"All {slp_info.total_videos} videos found!", severity="information")
+            self.notify(
+                f"All {slp_info.total_videos} videos found!", severity="information"
+            )
 
     def action_quit(self):
         """Quit the application."""
@@ -945,7 +968,9 @@ class BrowserScreen(Screen):
         """Fix a missing video path using the currently selected file."""
         slp_panel = self.query_one("#slp-panel", SLPContextPanel)
         if not slp_panel.slp_info:
-            self.notify("No SLP file loaded - select an SLP file first", severity="warning")
+            self.notify(
+                "No SLP file loaded - select an SLP file first", severity="warning"
+            )
             return
 
         if slp_panel.slp_info.missing == 0:
@@ -978,7 +1003,8 @@ class BrowserScreen(Screen):
 
         # Get other missing videos for batch resolution
         other_missing = [
-            v.original_path for v in slp_panel.slp_info.videos
+            v.original_path
+            for v in slp_panel.slp_info.videos
             if v.is_missing and v.original_path != missing_video.original_path
         ]
 

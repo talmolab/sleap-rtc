@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "sleap_rtc/**"
+      - "tests/**"
+      - ".github/workflows/ci.yml"
+      - "pyproject.toml"
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install dev dependencies
+        run: uv sync --extra dev
+
+      - name: Black
+        run: uv run black --check sleap_rtc/
+
+      - name: Ruff
+        run: uv run ruff check sleap_rtc/
+
+  tests:
+    name: Tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install graphics libraries (Ubuntu)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgl1 \
+            libegl-mesa0 \
+            libgles2 \
+            libxcb-xinerama0 \
+            libxcb-icccm4 \
+            libxcb-image0 \
+            libxcb-keysyms1 \
+            libxcb-randr0 \
+            libxcb-render-util0 \
+            libxcb-xkb1 \
+            libxkbcommon-x11-0 \
+            x11-utils
+
+      - name: Install dependencies
+        run: uv sync --extra dev
+
+      - name: Run tests (Ubuntu)
+        if: runner.os == 'Linux'
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: uv run pytest tests/ -v --timeout=60
+
+      - name: Run tests (macOS)
+        if: runner.os == 'macOS'
+        run: uv run pytest tests/ -v --timeout=60
