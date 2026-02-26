@@ -23,3 +23,7 @@ jobs:
         uses: codespell-project/codespell-problem-matcher@v1
       - name: Codespell
         uses: codespell-project/actions-codespell@v2
+        with:
+          skip: ".git*,*.css,openspec/"
+          ignore_words_list: "doesnt"
+          check_hidden: true

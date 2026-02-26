@@ -34,12 +34,14 @@ sleap-rtc = "sleap_rtc.cli:cli"
 [project.optional-dependencies]
 dev = [
     "pytest",
+    "pytest-asyncio",
     "pytest-timeout",
     "black",
     "ruff",
     "pyyaml",
     "qtpy",
     "PyQt5",
+    "sleap-io",
 ]
 
 [tool.uv]
@@ -58,6 +60,9 @@ convention = "google"
 
 [tool.setuptools]
 packages = ["sleap_rtc"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
 
 [tool.codespell]
 # Ref: https://github.com/codespell-project/codespell#using-a-config-file

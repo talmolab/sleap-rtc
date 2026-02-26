@@ -52,7 +52,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            libgl1-mesa-glx \
+            libgl1 \
             libegl-mesa0 \
             libgles2 \
             libxcb-xinerama0 \
