@@ -34,6 +34,7 @@ sleap-rtc = "sleap_rtc.cli:cli"
 [project.optional-dependencies]
 dev = [
     "pytest",
+    "pytest-timeout",
     "black",
     "ruff",
 ]
