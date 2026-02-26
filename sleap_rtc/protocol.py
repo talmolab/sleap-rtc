@@ -150,8 +150,8 @@ filename = received_filename
 # Reject path traversal attempts
 if os.sep in filename or (os.altsep and os.altsep in filename) or ".." in filename:
     send(FILE_NOT_FOUND, filename, "Invalid filename")
-    return
 
+Return:
 # Resolve full path
 full_path = input_path / filename
 if not full_path.exists():

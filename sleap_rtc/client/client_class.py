@@ -2412,6 +2412,7 @@ class RTCClient:
                 will try to resolve from SLEAP_ROOM_SECRET env var, filesystem, or config.
             job_spec: Optional TrainJobSpec or TrackJobSpec for structured job submission.
                 If provided, uses the new job submission protocol instead of file transfer.
+
         Returns:
             None
         """

@@ -1063,7 +1063,6 @@ def room_create_secret(room, save):
     4. Credentials file: ~/.sleap-rtc/credentials.json
 
     Examples:
-
         # Generate and save secret for a room
         sleap-rtc room create-secret --room my-room
 
@@ -1473,7 +1472,6 @@ def train(**kwargs):
     (e.g., /vast) or ensure files exist on the worker.
 
     Examples:
-
     \b
     # Basic training with config file
     sleap-rtc train --room my-room --config /vast/project/centroid.yaml
@@ -1812,7 +1810,6 @@ def track(**kwargs):
     worker filesystem. Use shared storage or ensure files exist on the worker.
 
     Examples:
-
     \b
     # Basic inference with single model
     sleap-rtc track --room my-room \\
@@ -2114,7 +2111,6 @@ def test_browse(room, port, no_browser, room_secret):
     Requires authentication. Run 'sleap-rtc login' first.
 
     Examples:
-
         # Connect to a Worker and open browser
         sleap-rtc test browse --room my-room
 
@@ -2211,7 +2207,6 @@ def test_resolve_paths(room, slp, port, no_browser, room_secret, use_jwt):
     6. Save creates a new SLP with corrected paths
 
     Examples:
-
         # Check video paths in an SLP file
         sleap-rtc test resolve-paths --room my-room --slp /mnt/data/project.slp
 
@@ -2289,7 +2284,6 @@ def tui(room, room_secret):
     bypassing the room selection screen.
 
     Examples:
-
         # Launch TUI with room selection
         sleap-rtc tui
 
