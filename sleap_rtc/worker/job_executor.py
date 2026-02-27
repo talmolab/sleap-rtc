@@ -12,6 +12,7 @@ import re
 import signal
 import shutil
 import stat
+import sys
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -97,24 +98,38 @@ class JobExecutor:
 
         Kills the entire process group so distributed workers (rank 1, …)
         exit alongside the main process, allowing sleap-nn to save a checkpoint.
+        On Windows, falls back to proc.terminate() (no process groups).
         """
         proc = self._running_process
         if proc is not None and proc.returncode is None:
             try:
-                pgid = os.getpgid(proc.pid)
-                logging.info(f"Sending SIGINT to process group {pgid} (graceful stop)")
-                os.killpg(pgid, signal.SIGINT)
+                if sys.platform == "win32":
+                    proc.terminate()
+                else:
+                    pgid = os.getpgid(proc.pid)
+                    logging.info(
+                        f"Sending SIGINT to process group {pgid} (graceful stop)"
+                    )
+                    os.killpg(pgid, signal.SIGINT)
             except ProcessLookupError:
                 pass
 
     def cancel_running_job(self):
-        """Send SIGTERM to the running job's process group for immediate cancellation."""
+        """Send SIGTERM to the running job's process group for immediate cancellation.
+
+        On Windows, falls back to proc.kill() (no process groups).
+        """
         proc = self._running_process
         if proc is not None and proc.returncode is None:
             try:
-                pgid = os.getpgid(proc.pid)
-                logging.info(f"Sending SIGTERM to process group {pgid} (hard cancel)")
-                os.killpg(pgid, signal.SIGTERM)
+                if sys.platform == "win32":
+                    proc.kill()
+                else:
+                    pgid = os.getpgid(proc.pid)
+                    logging.info(
+                        f"Sending SIGTERM to process group {pgid} (hard cancel)"
+                    )
+                    os.killpg(pgid, signal.SIGTERM)
             except ProcessLookupError:
                 pass
 
@@ -639,7 +654,9 @@ class JobExecutor:
             self._running_process = None
             logging.info(f"[INFERENCE] Process exited with code {process.returncode}")
 
-            cancelled = process.returncode == -signal.SIGTERM
+            cancelled = sys.platform != "win32" and (
+                process.returncode == -signal.SIGTERM
+            )
 
             if cancelled:
                 logging.info("[INFERENCE] Inference was cancelled by user")
@@ -892,19 +909,20 @@ class JobExecutor:
             # seconds while NCCL / TCPStore cleanup runs.  If we start the
             # next pipeline model before rank 1 vacates MASTER_PORT, the new
             # DDP init will collide with the lingering connection → Broken pipe.
-            pgid = process.pid
-            deadline = asyncio.get_event_loop().time() + 30.0
-            while asyncio.get_event_loop().time() < deadline:
-                try:
-                    os.killpg(pgid, 0)  # signal 0: probe group existence
-                    await asyncio.sleep(0.5)
-                except (ProcessLookupError, PermissionError):
-                    break  # all ranks have exited
-            else:
-                logging.warning(
-                    f"[JOB {job_id}] Process group {pgid} still alive after "
-                    "30 s — proceeding anyway"
-                )
+            if sys.platform != "win32":
+                pgid = process.pid
+                deadline = asyncio.get_event_loop().time() + 30.0
+                while asyncio.get_event_loop().time() < deadline:
+                    try:
+                        os.killpg(pgid, 0)  # signal 0: probe group existence
+                        await asyncio.sleep(0.5)
+                    except (ProcessLookupError, PermissionError):
+                        break  # all ranks have exited
+                else:
+                    logging.warning(
+                        f"[JOB {job_id}] Process group {pgid} still alive after "
+                        "30 s — proceeding anyway"
+                    )
 
             duration_seconds = int(time.time() - start_time)
             logging.info(
@@ -916,10 +934,12 @@ class JobExecutor:
             # - killed by SIGINT (-2): process group killed by OS signal, OR
             # - exited with code 1 after a stop was requested: PyTorch Lightning
             #   caught SIGINT, ran graceful shutdown, then called sys.exit(1)
-            cancelled = process.returncode == -signal.SIGTERM
-            stopped_early = process.returncode == -signal.SIGINT or (
-                self._stop_requested and not cancelled and process.returncode != 0
+            cancelled = sys.platform != "win32" and (
+                process.returncode == -signal.SIGTERM
             )
+            stopped_early = (
+                sys.platform != "win32" and process.returncode == -signal.SIGINT
+            ) or (self._stop_requested and not cancelled and process.returncode != 0)
 
             if process.returncode == 0 or stopped_early:
                 # Job completed successfully (or stopped early with checkpoint)

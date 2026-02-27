@@ -1,5 +1,6 @@
 """Tests for SlpPathDialog auto-fill and save-mapping prompt (Phase 4)."""
 
+import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -112,6 +113,7 @@ class TestSaveMappingPrompt:
         # prompt was shown (exec was called) — no mapping saved since rejected
         assert cfg.get_path_mappings() == []
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="Unix path assertions (Mac/Linux client → Linux worker)")
     def test_save_mapping_on_save(self, qapp, tmp_path, monkeypatch):
         cfg = Config()
         monkeypatch.setattr(cfg, "_home_config_path", lambda: tmp_path / "config.toml")
@@ -165,6 +167,7 @@ class TestSaveMappingPrompt:
 
         assert exec_calls == []
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="Unix path assertions (Mac/Linux client → Linux worker)")
     def test_prompt_not_shown_when_mapping_already_exists(
         self, qapp, tmp_path, monkeypatch
     ):

@@ -53,7 +53,7 @@ class CommandBuilder:
         # Config path - split into name and directory
         config_path = Path(spec.config_paths[config_index])
         cmd.extend(["--config-name", config_path.name])
-        cmd.extend(["--config-dir", str(config_path.parent)])
+        cmd.extend(["--config-dir", config_path.parent.as_posix()])
 
         # Data path overrides (Hydra syntax)
         # sleap-nn expects train_labels_path as a list

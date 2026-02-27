@@ -938,6 +938,7 @@ class TestStopCancelCommands:
 class TestJobExecutorStopCancel:
     """Tests for JobExecutor stop/cancel methods."""
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="Unix process groups only")
     def test_stop_running_job_sends_sigint(self):
         """stop_running_job should send SIGINT to the process group."""
         import signal
@@ -956,6 +957,7 @@ class TestJobExecutorStopCancel:
 
         mock_killpg.assert_called_once_with(99999, signal.SIGINT)
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="Unix process groups only")
     def test_cancel_running_job_sends_sigterm(self):
         """cancel_running_job should send SIGTERM to the process group."""
         import signal

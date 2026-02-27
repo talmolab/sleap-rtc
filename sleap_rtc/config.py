@@ -367,7 +367,7 @@ class Config:
             prefix_len = len(str(local_prefix))
             if prefix_len > best_prefix_len:
                 best_prefix_len = prefix_len
-                best_worker_path = str(Path(mapping.worker) / rel)
+                best_worker_path = (Path(mapping.worker) / rel).as_posix()
         return best_worker_path
 
     def _apply_env_overrides(self) -> None:

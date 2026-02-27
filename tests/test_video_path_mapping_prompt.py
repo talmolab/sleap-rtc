@@ -1,5 +1,6 @@
 """Tests for video-path save-mapping prompt (Phase 5)."""
 
+import sys
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
@@ -126,6 +127,7 @@ class TestPresubmissionVideoPrompt:
 
         assert calls == []
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="Unix path assertions (Mac/Linux client → Linux worker)")
     def test_video_resolution_saves_correct_dirs(self, qapp, cfg):
         """Directories extracted from file paths are the parent dirs."""
         resolved = {
