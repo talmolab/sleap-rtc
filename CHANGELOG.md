@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.3] - 2026-02-27
+
+### Fixed
+
+- **`ModuleNotFoundError: No module named 'yaml'`** — `pyyaml` was listed only in `[optional-dependencies.dev]`, so it was absent from the installed wheel. Any worker startup (e.g. `uvx sleap-rtc worker`) would crash at import time. ([#56](https://github.com/talmolab/sleap-rtc/pull/56))
+
 ## [0.0.2] - 2026-02-27
 
 ### Fixed
