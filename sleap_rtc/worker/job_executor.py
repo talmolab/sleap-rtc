@@ -90,6 +90,7 @@ class JobExecutor:
             payload = json.loads(raw_zmq_message)
             if payload.get("command") == "stop":
                 self._stop_requested = True
+                self.stop_running_job()
         except (json.JSONDecodeError, AttributeError):
             pass
 

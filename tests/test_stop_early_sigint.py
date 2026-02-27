@@ -31,7 +31,7 @@ class TestStopEarlySendsSignal:
         executor._running_process = mock_process
         return executor
 
-    @pytest.mark.xfail(reason="send_control_message does not directly call os.killpg; needs investigation")
+    @pytest.mark.skipif(sys.platform == "win32", reason="Unix process groups only")
     def test_stop_command_kills_process_group_with_sigint(self):
         """send_control_message('{"command":"stop"}') must SIGINT the whole process group."""
         executor = self._make_executor()
