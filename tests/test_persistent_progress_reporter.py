@@ -135,7 +135,6 @@ class TestExecuteFromSpecReporterOwnership:
 class TestPipelineReporter:
     """handle_job_submit must create one reporter for the whole pipeline."""
 
-    @pytest.mark.xfail(reason="Reporter not forwarded to all pipeline models; needs investigation")
     @pytest.mark.asyncio
     async def test_passes_same_reporter_to_all_models(
         self, worker, mock_channel, temp_mount
@@ -161,6 +160,7 @@ class TestPipelineReporter:
 
         pipeline_reporter = MagicMock()
         pipeline_reporter.async_cleanup = AsyncMock()
+        pipeline_reporter.restart_progress_listener = AsyncMock()
 
         with patch("sleap_rtc.worker.worker_class.ProgressReporter", return_value=pipeline_reporter):
             await worker.handle_job_submit(mock_channel, message)
