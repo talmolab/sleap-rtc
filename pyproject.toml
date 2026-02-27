@@ -1,6 +1,6 @@
 [project]
 name = "sleap-rtc"
-version = "0.0.2"
+version = "0.0.3"
 description = "Real-time communication layer for remote SLEAP training and inference"
 readme = "README.md"
 requires-python = ">=3.11"
