@@ -298,10 +298,10 @@ class JobExecutor:
                                     continue
 
                                 if sep == b"\n":
-                                    # Flush the latest progress bar line first
-                                    if pending_cr:
-                                        channel.send(pending_cr + "\n")
-                                        pending_cr = ""
+                                    # \n supersedes any pending \r line (tqdm
+                                    # emits \r...\n for each batch; discard the
+                                    # \r version to avoid duplicate sends)
+                                    pending_cr = ""
                                     channel.send(text + "\n")
                                 else:  # sep == b'\r' — hold, keep only latest
                                     pending_cr = text
@@ -884,10 +884,10 @@ class JobExecutor:
                             # Log and send log line to client
                             logging.info(f"[JOB {job_id}] {text}")
                             if sep == b"\n":
-                                # Flush latest progress bar line before this \n line
-                                if pending_cr and channel.readyState == "open":
-                                    channel.send(pending_cr + "\n")
-                                    pending_cr = ""
+                                # \n supersedes any pending \r line (tqdm
+                                # emits \r...\n for each batch; discard the
+                                # \r version to avoid duplicate sends)
+                                pending_cr = ""
                                 if channel.readyState == "open":
                                     channel.send(text + "\n")
                             else:  # \r — hold, keep only latest
