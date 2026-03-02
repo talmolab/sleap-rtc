@@ -19,6 +19,10 @@ from typing import TYPE_CHECKING
 
 from aiortc import RTCDataChannel
 
+# Watchdog polling interval (seconds).  Tests patch this to 0 so they don't
+# wait 30 real seconds for the watchdog cycle to fire.
+_WATCHDOG_INTERVAL_SECS = 30
+
 from sleap_rtc.worker.progress_reporter import ProgressReporter
 
 if TYPE_CHECKING:
@@ -782,16 +786,38 @@ class JobExecutor:
 
             logging.info(f"[JOB {job_id}] Process started with PID: {process.pid}")
 
-            # Watchdog: log subprocess liveness every 30 s so we can see in
-            # the worker output whether the process is stuck or already gone.
+            # Watchdog: log subprocess liveness every 30 s.  If a stop was
+            # requested and ZMQ alone hasn't worked after one full cycle,
+            # escalate to SIGINT so the pipeline doesn't hang indefinitely.
+            # By the time the watchdog fires (30 s after stop), DDP's
+            # reduce_boolean_decision barrier has either completed or already
+            # timed out, so SIGINT is safe at this point.
             async def _subprocess_watchdog():
+                sigint_sent = False
                 while True:
-                    await asyncio.sleep(30)
+                    await asyncio.sleep(_WATCHDOG_INTERVAL_SECS)
                     rc = process.returncode
                     if rc is None:
                         logging.info(
                             f"[JOB {job_id}] Watchdog: PID {process.pid} still running"
                         )
+                        if (
+                            self._stop_requested
+                            and not sigint_sent
+                            and sys.platform != "win32"
+                        ):
+                            try:
+                                pgid = os.getpgid(process.pid)
+                                logging.info(
+                                    f"[JOB {job_id}] ZMQ stop not effective after "
+                                    f"30 s — sending SIGINT to process group {pgid}"
+                                )
+                                os.killpg(pgid, signal.SIGINT)
+                                sigint_sent = True
+                            except (ProcessLookupError, PermissionError) as e:
+                                logging.warning(
+                                    f"[JOB {job_id}] SIGINT fallback failed: {e}"
+                                )
                     else:
                         logging.info(
                             f"[JOB {job_id}] Watchdog: PID {process.pid} has exited (rc={rc})"

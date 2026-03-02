@@ -224,6 +224,70 @@ class TestStopRequestedFlag:
         )
 
 
+class TestWatchdogSigintFallback:
+    """Watchdog must send SIGINT after 30 s when ZMQ stop alone doesn't work."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.skipif(sys.platform == "win32", reason="Unix process groups only")
+    async def test_watchdog_sends_sigint_when_stop_requested_and_process_lingers(self):
+        """When _stop_requested is True and the process is still alive after
+        one watchdog cycle, the watchdog must send SIGINT to the process group."""
+        executor = JobExecutor(worker=MagicMock(), capabilities=MagicMock())
+
+        # Process that keeps stdout open until SIGINT is delivered, matching
+        # real behaviour where a stuck process doesn't close its stdout pipe.
+        killed_event = asyncio.Event()
+        linger_process = MagicMock()
+        linger_process.pid = 12345
+        linger_process.returncode = None
+        linger_process.stdout = MagicMock()
+
+        async def fake_read(n):
+            # Block until the process is killed, then return EOF.
+            await killed_event.wait()
+            return b""
+
+        linger_process.stdout.read = fake_read
+
+        async def fake_wait():
+            await killed_event.wait()
+
+        linger_process.wait = fake_wait
+
+        sigint_calls = []
+
+        def fake_killpg(pgid, sig):
+            if sig == 0:
+                # Signal 0 is a liveness probe; raise once the process is dead.
+                if killed_event.is_set():
+                    raise ProcessLookupError
+                return
+            sigint_calls.append((pgid, sig))
+            linger_process.returncode = -signal.SIGINT
+            killed_event.set()  # unblocks both fake_read (stdout EOF) and fake_wait
+
+        mock_channel = MagicMock()
+        mock_channel.readyState = "open"
+
+        # Patch asyncio.sleep so the 30-second watchdog cycle fires immediately.
+        with patch("os.killpg", side_effect=fake_killpg), \
+             patch("os.getpgid", return_value=99999), \
+             patch("sleap_rtc.worker.job_executor._WATCHDOG_INTERVAL_SECS", 0), \
+             patch("asyncio.create_subprocess_exec",
+                   new=AsyncMock(return_value=linger_process)):
+            executor._stop_requested = True
+            await executor.execute_from_spec(
+                mock_channel, ["sleep", "999"], "job_1",
+                job_type="train",
+                zmq_ports={"controller": 9000, "publish": 9001},
+                progress_reporter=MagicMock(),
+            )
+
+        assert any(sig == signal.SIGINT for _, sig in sigint_calls), (
+            "Watchdog must send SIGINT when stop was requested and process lingers"
+        )
+
+
 class TestSubprocessNewSession:
 
     @pytest.mark.asyncio
