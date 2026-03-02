@@ -263,15 +263,16 @@ class JobExecutor:
                 assert process.stdout is not None
                 logging.info(f"Process started with PID: {process.pid}")
 
-                async def stream_logs(
-                    emit_on_cr=True, read_size=512, max_flush=64 * 1024
-                ):
+                async def stream_logs(read_size=512, max_flush=64 * 1024):
                     buf = b""
+                    pending_cr = ""
                     try:
                         while True:
                             chunk = await process.stdout.read(read_size)
                             if not chunk:
                                 # process ended; flush any remaining text
+                                if pending_cr:
+                                    channel.send(pending_cr + "\n")
                                 if buf:
                                     channel.send(buf.decode(errors="replace") + "\n")
                                 break
@@ -281,11 +282,10 @@ class JobExecutor:
                             while True:
                                 m = SEP.search(buf)
                                 if not m:
-                                    # If tqdm keeps extending one long line, flush
+                                    # If tqdm keeps extending one long line, hold as
+                                    # pending and clear the buffer
                                     if len(buf) > max_flush:
-                                        text = buf.decode(errors="replace")
-                                        if emit_on_cr and text:
-                                            channel.send("\r" + text)
+                                        pending_cr = buf.decode(errors="replace")
                                         buf = b""
                                     break
 
@@ -298,10 +298,13 @@ class JobExecutor:
                                     continue
 
                                 if sep == b"\n":
+                                    # Flush the latest progress bar line first
+                                    if pending_cr:
+                                        channel.send(pending_cr + "\n")
+                                        pending_cr = ""
                                     channel.send(text + "\n")
-                                else:  # sep == b'\r'
-                                    if emit_on_cr:
-                                        channel.send("\r" + text)
+                                else:  # sep == b'\r' — hold, keep only latest
+                                    pending_cr = text
 
                     except Exception as e:
                         logging.exception("stream_logs failed: %s", e)
@@ -840,6 +843,7 @@ class JobExecutor:
                 current_loss = None
                 current_val_loss = None
 
+                pending_cr = ""
                 try:
                     while True:
                         chunk = await process.stdout.read(512)
@@ -849,6 +853,8 @@ class JobExecutor:
                                 f"[JOB {job_id}] EOF on stdout from PID {process.pid} — "
                                 f"subprocess has closed stdout (returncode={process.returncode!r})"
                             )
+                            if pending_cr and channel.readyState == "open":
+                                channel.send(pending_cr + "\n")
                             if buf:
                                 line = buf.decode(errors="replace")
                                 logging.info(f"[JOB {job_id}] {line}")
@@ -861,11 +867,9 @@ class JobExecutor:
                         while True:
                             match = SEP.search(buf)
                             if not match:
-                                # Flush long lines
+                                # Hold long lines as pending rather than flushing mid-line
                                 if len(buf) > 64 * 1024:
-                                    text = buf.decode(errors="replace")
-                                    if channel.readyState == "open":
-                                        channel.send("\r" + text)
+                                    pending_cr = buf.decode(errors="replace")
                                     buf = b""
                                 break
 
@@ -880,11 +884,14 @@ class JobExecutor:
                             # Log and send log line to client
                             logging.info(f"[JOB {job_id}] {text}")
                             if sep == b"\n":
+                                # Flush latest progress bar line before this \n line
+                                if pending_cr and channel.readyState == "open":
+                                    channel.send(pending_cr + "\n")
+                                    pending_cr = ""
                                 if channel.readyState == "open":
                                     channel.send(text + "\n")
-                            else:  # \r for progress bars
-                                if channel.readyState == "open":
-                                    channel.send("\r" + text)
+                            else:  # \r — hold, keep only latest
+                                pending_cr = text
 
                             # Extract progress info for training jobs
                             if job_type == "train":
