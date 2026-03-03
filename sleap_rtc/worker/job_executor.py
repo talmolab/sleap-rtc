@@ -922,8 +922,10 @@ class JobExecutor:
                             if not text:
                                 continue
 
-                            # Log and send log line to client
-                            logging.info(f"[JOB {job_id}] {text}")
+                            # Log and send log line to client (debug only —
+                            # avoids flooding the terminal with every training
+                            # output line at INFO level)
+                            logging.debug(f"[JOB {job_id}] {text}")
                             if sep == b"\n":
                                 # \n supersedes any pending \r line (tqdm
                                 # emits \r...\n for each batch; discard the
