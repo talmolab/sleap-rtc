@@ -47,6 +47,49 @@ def _read_rss_mb(pid: int) -> float | None:
     return None
 
 
+def _read_private_dirty_mb(pid: int) -> float | None:
+    """Read Private_Dirty pages in MB from /proc/<pid>/smaps_rollup.
+
+    Private_Dirty is the memory that is truly private to this process —
+    heap allocations, written stack pages, modified data.  Unlike RSS it
+    does NOT count read-only shared-library pages that are shared with
+    sibling processes, so summing this across the process tree gives a
+    much more accurate picture of actual physical memory consumed.
+
+    Returns None if smaps_rollup is unavailable (kernel < 4.14, non-Linux).
+    """
+    try:
+        with open(f"/proc/{pid}/smaps_rollup") as f:
+            for line in f:
+                if line.startswith("Private_Dirty:"):
+                    return int(line.split()[1]) / 1024
+    except OSError:
+        pass
+    return None
+
+
+def _read_cgroup_memory_mb() -> float | None:
+    """Read actual container memory usage from the cgroup memory controller.
+
+    This is the number the OOM killer uses — physical pages counted once
+    regardless of how many processes share them.  Tries cgroup v2 first
+    (/sys/fs/cgroup/memory.current), then falls back to cgroup v1
+    (/sys/fs/cgroup/memory/memory.usage_in_bytes).
+
+    Returns None if neither path is readable (non-Linux, no cgroup mount).
+    """
+    for path in (
+        "/sys/fs/cgroup/memory.current",
+        "/sys/fs/cgroup/memory/memory.usage_in_bytes",
+    ):
+        try:
+            with open(path) as f:
+                return int(f.read().strip()) / (1024 * 1024)
+        except OSError:
+            pass
+    return None
+
+
 def _get_child_pids(pid: int) -> list[int]:
     """Get direct child PIDs from /proc/{pid}/task/*/children."""
     children = []
@@ -63,12 +106,8 @@ def _get_child_pids(pid: int) -> list[int]:
     return children
 
 
-def _read_process_tree_rss_mb(root_pid: int) -> tuple[float, int]:
-    """Sum RSS in MB for root_pid and all its descendants.
-
-    Returns:
-        (total_mb, process_count) — total RSS and number of live processes found.
-    """
+def _iter_process_tree(root_pid: int) -> set[int]:
+    """Return the set of root_pid and all its descendant PIDs."""
     pids: set[int] = set()
     frontier = [root_pid]
     while frontier:
@@ -77,10 +116,18 @@ def _read_process_tree_rss_mb(root_pid: int) -> tuple[float, int]:
             continue
         pids.add(pid)
         frontier.extend(_get_child_pids(pid))
+    return pids
 
+
+def _read_process_tree_rss_mb(root_pid: int) -> tuple[float, int]:
+    """Sum RSS in MB for root_pid and all its descendants.
+
+    Returns:
+        (total_mb, process_count) — total RSS and number of live processes found.
+    """
     total = 0.0
     count = 0
-    for pid in pids:
+    for pid in _iter_process_tree(root_pid):
         rss = _read_rss_mb(pid)
         if rss is not None:
             total += rss
@@ -967,13 +1014,29 @@ class JobExecutor:
                     if process.returncode is not None:
                         break
                     w_mb = _read_rss_mb(worker_pid)
-                    total_mb, n_procs = _read_process_tree_rss_mb(process.pid)
+                    rss_total_mb, n_procs = _read_process_tree_rss_mb(process.pid)
+                    # Private_Dirty: sum of truly private pages across the
+                    # process tree — excludes shared library pages so this
+                    # is a much better estimate of actual physical RAM used
+                    # by the training job (avoids the ×N double-counting of
+                    # shared .so pages that inflates the RSS sum).
+                    private_total_mb = sum(
+                        v
+                        for pid in _iter_process_tree(process.pid)
+                        if (v := _read_private_dirty_mb(pid)) is not None
+                    )
+                    cgroup_mb = _read_cgroup_memory_mb()
                     vram = await _query_vram()
+                    cgroup_part = (
+                        f", cgroup actual: {cgroup_mb:.0f} MB" if cgroup_mb else ""
+                    )
                     vram_part = f", VRAM [{vram}]" if vram else ""
                     logging.info(
                         f"[JOB {job_id}] Memory — "
                         f"worker: {w_mb:.0f} MB, "
-                        f"subprocess tree ({n_procs} procs): {total_mb:.0f} MB"
+                        f"subprocess RSS sum ({n_procs} procs): {rss_total_mb:.0f} MB "
+                        f"(private only: {private_total_mb:.0f} MB)"
+                        f"{cgroup_part}"
                         f"{vram_part}"
                         if w_mb is not None
                         else f"[JOB {job_id}] Memory read unavailable (non-Linux?)"
