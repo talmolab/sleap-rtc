@@ -47,6 +47,72 @@ def _read_rss_mb(pid: int) -> float | None:
     return None
 
 
+def _get_child_pids(pid: int) -> list[int]:
+    """Get direct child PIDs from /proc/{pid}/task/*/children."""
+    children = []
+    try:
+        for tid_dir in Path(f"/proc/{pid}/task").iterdir():
+            try:
+                with open(tid_dir / "children") as f:
+                    for cpid_str in f.read().split():
+                        children.append(int(cpid_str))
+            except OSError:
+                pass
+    except OSError:
+        pass
+    return children
+
+
+def _read_process_tree_rss_mb(root_pid: int) -> tuple[float, int]:
+    """Sum RSS in MB for root_pid and all its descendants.
+
+    Returns:
+        (total_mb, process_count) — total RSS and number of live processes found.
+    """
+    pids: set[int] = set()
+    frontier = [root_pid]
+    while frontier:
+        pid = frontier.pop()
+        if pid in pids:
+            continue
+        pids.add(pid)
+        frontier.extend(_get_child_pids(pid))
+
+    total = 0.0
+    count = 0
+    for pid in pids:
+        rss = _read_rss_mb(pid)
+        if rss is not None:
+            total += rss
+            count += 1
+    return total, count
+
+
+async def _query_vram() -> str | None:
+    """Query per-GPU VRAM usage via nvidia-smi.
+
+    Returns a formatted string like "GPU0: 1,234/16,384 MB, GPU1: 1,234/16,384 MB",
+    or None if nvidia-smi is unavailable or times out.
+    """
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "nvidia-smi",
+            "--query-gpu=index,memory.used,memory.total",
+            "--format=csv,noheader,nounits",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5.0)
+        parts = []
+        for line in stdout.decode().strip().splitlines():
+            cols = [c.strip() for c in line.split(",")]
+            if len(cols) == 3:
+                parts.append(f"GPU{cols[0]}: {int(cols[1]):,}/{int(cols[2]):,} MB")
+        return ", ".join(parts) if parts else None
+    except Exception:
+        return None
+
+
 class JobExecutor:
     """Executes training and inference jobs with progress monitoring.
 
@@ -795,7 +861,7 @@ class JobExecutor:
             process = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
+                stderr=asyncio.subprocess.PIPE,
                 cwd=working_dir,
                 env={**os.environ, "PYTHONUNBUFFERED": "1"},
                 start_new_session=True,
@@ -844,8 +910,35 @@ class JobExecutor:
 
             watchdog_task = asyncio.create_task(_subprocess_watchdog())
 
-            # Memory monitor: log worker + training subprocess RSS every 30 s
-            # so OOM kills can be correlated with what was growing.
+            # Stderr forwarder: log all stderr at ERROR level so NCCL/CUDA
+            # errors surface in worker logs even when stdout is at DEBUG.
+            async def _stream_stderr():
+                assert process.stderr is not None
+                async for raw_line in process.stderr:
+                    line = raw_line.decode(errors="replace").rstrip()
+                    if not line:
+                        continue
+                    logging.error(f"[JOB {job_id}] [stderr] {line}")
+                    if channel.readyState == "open" and any(
+                        kw in line
+                        for kw in (
+                            "NCCL",
+                            "CUDA error",
+                            "RuntimeError",
+                            "Traceback",
+                            "Error:",
+                            "error:",
+                            "Killed",
+                            "Segmentation fault",
+                            "OOM",
+                            "out of memory",
+                        )
+                    ):
+                        channel.send(f"[stderr] {line}\n")
+
+            stderr_task = asyncio.create_task(_stream_stderr())
+
+            # Memory monitor: log worker + full process tree RSS + VRAM every 30 s.
             worker_pid = os.getpid()
             logging.info(
                 f"[JOB {job_id}] Memory at job start — "
@@ -859,12 +952,15 @@ class JobExecutor:
                     if process.returncode is not None:
                         break
                     w_mb = _read_rss_mb(worker_pid)
-                    s_mb = _read_rss_mb(process.pid)
+                    total_mb, n_procs = _read_process_tree_rss_mb(process.pid)
+                    vram = await _query_vram()
+                    vram_part = f", VRAM [{vram}]" if vram else ""
                     logging.info(
                         f"[JOB {job_id}] Memory — "
                         f"worker: {w_mb:.0f} MB, "
-                        f"subprocess (training): {s_mb:.0f} MB"
-                        if w_mb is not None and s_mb is not None
+                        f"subprocess tree ({n_procs} procs): {total_mb:.0f} MB"
+                        f"{vram_part}"
+                        if w_mb is not None
                         else f"[JOB {job_id}] Memory read unavailable (non-Linux?)"
                     )
 
@@ -972,6 +1068,12 @@ class JobExecutor:
                         channel.send(f"[log-stream error] {e}\n")
 
             await stream_logs_with_progress()
+            # Drain any remaining stderr — crash output (e.g. NCCL errors,
+            # Python tracebacks) often arrives just after stdout EOF.
+            try:
+                await asyncio.wait_for(stderr_task, timeout=5.0)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                stderr_task.cancel()
             watchdog_task.cancel()
             memory_monitor_task.cancel()
             logging.info(
