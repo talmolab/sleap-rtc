@@ -32,6 +32,21 @@ if TYPE_CHECKING:
 SEP = re.compile(rb"[\r\n]")
 
 
+def _read_rss_mb(pid: int) -> float | None:
+    """Read resident set size in MB for a process from /proc/<pid>/status.
+
+    Returns None if the file is unreadable (process exited, non-Linux, etc.).
+    """
+    try:
+        with open(f"/proc/{pid}/status") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    return int(line.split()[1]) / 1024
+    except OSError:
+        pass
+    return None
+
+
 class JobExecutor:
     """Executes training and inference jobs with progress monitoring.
 
@@ -829,6 +844,32 @@ class JobExecutor:
 
             watchdog_task = asyncio.create_task(_subprocess_watchdog())
 
+            # Memory monitor: log worker + training subprocess RSS every 30 s
+            # so OOM kills can be correlated with what was growing.
+            worker_pid = os.getpid()
+            logging.info(
+                f"[JOB {job_id}] Memory at job start — "
+                f"worker: {_read_rss_mb(worker_pid) or '?':.0f} MB, "
+                f"subprocess: {_read_rss_mb(process.pid) or '?':.0f} MB"
+            )
+
+            async def _memory_monitor():
+                while process.returncode is None:
+                    await asyncio.sleep(30)
+                    if process.returncode is not None:
+                        break
+                    w_mb = _read_rss_mb(worker_pid)
+                    s_mb = _read_rss_mb(process.pid)
+                    logging.info(
+                        f"[JOB {job_id}] Memory — "
+                        f"worker: {w_mb:.0f} MB, "
+                        f"subprocess (training): {s_mb:.0f} MB"
+                        if w_mb is not None and s_mb is not None
+                        else f"[JOB {job_id}] Memory read unavailable (non-Linux?)"
+                    )
+
+            memory_monitor_task = asyncio.create_task(_memory_monitor())
+
             # Stream logs with progress extraction
             async def stream_logs_with_progress():
                 """Stream logs and extract progress information."""
@@ -930,6 +971,11 @@ class JobExecutor:
 
             await stream_logs_with_progress()
             watchdog_task.cancel()
+            memory_monitor_task.cancel()
+            logging.info(
+                f"[JOB {job_id}] Memory at job end — "
+                f"worker: {_read_rss_mb(worker_pid) or '?':.0f} MB"
+            )
             logging.info(
                 f"[JOB {job_id}] Stdout stream ended — waiting for PID {process.pid} to exit"
             )
