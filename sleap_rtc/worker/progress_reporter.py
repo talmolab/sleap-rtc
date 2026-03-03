@@ -122,7 +122,7 @@ class ProgressReporter:
 
             if msg:
                 try:
-                    logging.info(f"Sending progress report to client: {msg}")
+                    logging.debug(f"Sending progress report to client: {msg}")
                     channel.send(f"PROGRESS_REPORT::{msg}")
                 except Exception as e:
                     logging.error(f"Failed to send ZMQ progress: {e}")
