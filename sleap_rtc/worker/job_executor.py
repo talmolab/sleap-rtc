@@ -910,31 +910,46 @@ class JobExecutor:
 
             watchdog_task = asyncio.create_task(_subprocess_watchdog())
 
-            # Stderr forwarder: log all stderr at ERROR level so NCCL/CUDA
-            # errors surface in worker logs even when stdout is at DEBUG.
+            # Stderr forwarder: classify stderr lines by severity so tqdm
+            # diagnostic noise doesn't flood the terminal as ERROR.
+            #
+            # tqdm's TMonitor fires "Timeout (0:00:30)!" + a full thread dump
+            # to stderr whenever the main thread is blocked for >30 s (e.g.
+            # slow VAST I/O between epochs).  These are informational — log
+            # them at DEBUG.  Only genuine error keywords get ERROR level.
+            _TQDM_NOISE = (
+                "Timeout (0:00:30)!",
+                "Thread 0x",
+                "  <no Python frame>",
+                "  File ",
+                "_bootstrap_inner",
+                "_bootstrap",
+            )
+            _FATAL_KEYWORDS = (
+                "NCCL",
+                "CUDA error",
+                "RuntimeError",
+                "Traceback (most recent call last)",
+                "Killed",
+                "Segmentation fault",
+                "OOM",
+                "out of memory",
+            )
+
             async def _stream_stderr():
                 assert process.stderr is not None
                 async for raw_line in process.stderr:
                     line = raw_line.decode(errors="replace").rstrip()
                     if not line:
                         continue
-                    logging.error(f"[JOB {job_id}] [stderr] {line}")
-                    if channel.readyState == "open" and any(
-                        kw in line
-                        for kw in (
-                            "NCCL",
-                            "CUDA error",
-                            "RuntimeError",
-                            "Traceback",
-                            "Error:",
-                            "error:",
-                            "Killed",
-                            "Segmentation fault",
-                            "OOM",
-                            "out of memory",
-                        )
-                    ):
-                        channel.send(f"[stderr] {line}\n")
+                    if any(line.startswith(pat) or pat in line for pat in _TQDM_NOISE):
+                        logging.debug(f"[JOB {job_id}] [stderr] {line}")
+                    elif any(kw in line for kw in _FATAL_KEYWORDS):
+                        logging.error(f"[JOB {job_id}] [stderr] {line}")
+                        if channel.readyState == "open":
+                            channel.send(f"[stderr] {line}\n")
+                    else:
+                        logging.warning(f"[JOB {job_id}] [stderr] {line}")
 
             stderr_task = asyncio.create_task(_stream_stderr())
 
