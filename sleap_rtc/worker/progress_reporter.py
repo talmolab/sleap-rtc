@@ -105,20 +105,28 @@ class ProgressReporter:
         self.running = True
         loop = asyncio.get_event_loop()
 
-        def recv_msg():
-            """Receive message from ZMQ socket in non-blocking way.
+        def recv_latest():
+            """Drain all buffered ZMQ messages and return the most recent.
+
+            Consuming the full queue every poll cycle prevents the backlog
+            from growing when sleap-nn publishes faster than we drain (e.g.
+            fast GPUs).  Only the latest message is forwarded so the client
+            sees the current state rather than a burst of stale updates.
 
             Returns:
-                Message string if available, None otherwise.
+                Most recent message string, or None if the queue was empty.
             """
+            latest = None
             try:
-                return self.progress_socket.recv_string(flags=zmq.NOBLOCK)
+                while True:
+                    latest = self.progress_socket.recv_string(flags=zmq.NOBLOCK)
             except zmq.Again:
-                return None
+                pass
+            return latest
 
         while self.running:
-            # Receive progress message from trainer
-            msg = await loop.run_in_executor(None, recv_msg)
+            # Drain the full ZMQ queue; forward only the latest message.
+            msg = await loop.run_in_executor(None, recv_latest)
 
             if msg:
                 try:

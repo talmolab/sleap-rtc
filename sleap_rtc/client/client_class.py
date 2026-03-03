@@ -1276,7 +1276,7 @@ class RTCClient:
 
             elif "PROGRESS_REPORT::" in message:
                 # Progress report received from worker.
-                logging.info(message)
+                logging.debug(message)
                 _, progress = message.split("PROGRESS_REPORT::", 1)
 
                 # Update LossViewer window with received progress report.
@@ -1391,12 +1391,7 @@ class RTCClient:
 
             else:
                 # Unhandled string message - likely raw training/inference output
-                # Print directly to console for user visibility
-                if message.startswith("\r"):
-                    # Carriage return for progress bar updates
-                    print(message, end="", flush=True)
-                else:
-                    print(message, end="", flush=True)
+                print(message, end="", flush=True)
 
         elif isinstance(message, bytes):
             if message == b"KEEP_ALIVE":
@@ -1405,7 +1400,7 @@ class RTCClient:
 
             elif b"PROGRESS_REPORT::" in message:
                 # Progress report received from worker as bytes.
-                logging.info(message.decode())
+                logging.debug(message.decode())
                 _, progress = message.decode().split("PROGRESS_REPORT::", 1)
 
                 # Update LossViewer window with received progress report.
