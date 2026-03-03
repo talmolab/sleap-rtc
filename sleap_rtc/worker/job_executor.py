@@ -997,6 +997,13 @@ class JobExecutor:
                             channel.send(f"[stderr] {line}\n")
                     else:
                         logging.warning(f"[JOB {job_id}] [stderr] {line}")
+                        # Forward to client (progress bars, logging output).
+                        # tqdm writes \r-separated updates then \n at epoch end;
+                        # async readline accumulates them into one string, so
+                        # take the last \r-segment (final progress bar state).
+                        display_line = line.rsplit("\r", 1)[-1].strip()
+                        if display_line and channel.readyState == "open":
+                            channel.send(display_line + "\n")
 
             stderr_task = asyncio.create_task(_stream_stderr())
 
