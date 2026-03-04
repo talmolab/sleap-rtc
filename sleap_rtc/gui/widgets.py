@@ -1228,6 +1228,10 @@ class SlpPathDialog(QDialog):
         translated = get_config().translate_path(local_path)
         if translated:
             self._path_edit.setText(translated)
+            self._error_label.setText(
+                "<b>Note:</b> Using saved path mapping. You can edit below if needed."
+            )
+            self._error_label.setStyleSheet("color: #27ae60;")
 
     def _setup_ui(self, local_path: str, error_message: str):
         """Build the dialog UI."""
@@ -1389,6 +1393,10 @@ class SlpPathDialog(QDialog):
         if not text.strip():
             self._error_label.setText(f"<b>Error:</b> {self._error_message}")
             self._error_label.setStyleSheet("color: #c0392b;")
+        else:
+            # Hide the error once the user has provided a path
+            self._error_label.setText("")
+            self._error_label.setStyleSheet("")
 
     def _on_accept(self):
         """Accept the dialog with the entered path."""
