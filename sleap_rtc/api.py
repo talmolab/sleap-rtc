@@ -1680,17 +1680,12 @@ async def _run_training_async(
                             final_train_loss = train_loss
                         if val_loss is not None:
                             final_val_loss = val_loss
-
-                        if progress_callback:
-                            progress_callback(
-                                ProgressEvent(
-                                    event_type="epoch_end",
-                                    epoch=epoch,
-                                    train_loss=train_loss,
-                                    val_loss=val_loss,
-                                    model_type=model_type or None,
-                                )
-                            )
+                        # Don't call progress_callback here — MSG_JOB_PROGRESS
+                        # fires once per stdout pattern match (including per-batch
+                        # \r lines), so calling it would spam the terminal with
+                        # ~100 "Epoch N - train_loss=X" lines per epoch.  The
+                        # terminal already receives raw tqdm output via on_log,
+                        # and LossViewer gets epoch data via on_raw_progress (ZMQ).
                     except json.JSONDecodeError:
                         # Raw progress output - just forward as-is
                         pass
@@ -2113,9 +2108,7 @@ async def _run_inference_async(
                         raise ConfigurationError(f"Job rejected: {error_json}")
 
                 elif response.startswith(MSG_JOB_PROGRESS):
-                    # Forward progress if callback provided
-                    if progress_callback:
-                        progress_callback(ProgressEvent(event_type="epoch_end"))
+                    pass  # Progress tracked via on_raw_progress (ZMQ) and on_log
 
                 elif response.startswith(MSG_JOB_COMPLETE):
                     parts = response.split(MSG_SEPARATOR, 1)
