@@ -1843,6 +1843,7 @@ class PathResolutionDialog(QDialog):
         self._browse_target_path: str | None = (
             None  # original_path of row being browsed
         )
+        self._cascading = False  # guard against recursive cascade fills
         self._setup_ui()
 
     def _setup_ui(self):
@@ -1958,8 +1959,16 @@ class PathResolutionDialog(QDialog):
 
                 path_edit = QLineEdit()
                 path_edit.setPlaceholderText("Enter worker path...")
-                if video.suggestions:
+
+                # Priority: saved mapping > worker suggestion > empty
+                from sleap_rtc.config import get_config as _get_cfg
+
+                prefill = _get_cfg().translate_path(video.original_path)
+                if prefill:
+                    path_edit.setText(prefill)
+                elif video.suggestions:
                     path_edit.setText(video.suggestions[0])
+
                 path_edit.textChanged.connect(self._on_path_changed)
                 self._path_edit_to_row[path_edit] = row
                 path_layout.addWidget(path_edit)
@@ -1978,7 +1987,7 @@ class PathResolutionDialog(QDialog):
         self._table.resizeRowsToContents()
 
     def _on_path_changed(self):
-        """Handle path text changes and update row status."""
+        """Handle path text changes, update row status, and cascade-fill siblings."""
         edit = self.sender()
         if edit is not None:
             row = self._path_edit_to_row.get(edit)
@@ -1992,6 +2001,33 @@ class PathResolutionDialog(QDialog):
                     else:
                         status_item.setText("✗ Missing")
                         status_item.setForeground(Qt.red)
+
+            # Cascade: when one path is entered, auto-fill other empty paths
+            # that live in the same directory (e.g. all videos in one folder).
+            if not self._cascading:
+                path = edit.text().strip()
+                if path:
+                    from pathlib import Path
+
+                    worker_dir = str(Path(path).parent)
+                    self._cascading = True
+                    try:
+                        for video in self._path_results:
+                            if not video.found:
+                                other_edit = self._path_widgets.get(
+                                    video.original_path
+                                )
+                                if (
+                                    other_edit is not None
+                                    and other_edit is not edit
+                                    and not other_edit.text().strip()
+                                ):
+                                    other_edit.setText(
+                                        f"{worker_dir}/{video.filename}"
+                                    )
+                    finally:
+                        self._cascading = False
+
         self._update_status()
 
     def _on_browse_path(self, row: int):
