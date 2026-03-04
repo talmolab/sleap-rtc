@@ -985,31 +985,78 @@ class JobExecutor:
 
             async def _stream_stderr():
                 assert process.stderr is not None
-                async for raw_line in process.stderr:
-                    line = raw_line.decode(errors="replace").rstrip()
-                    if not line:
-                        continue
-                    if any(line.startswith(pat) or pat in line for pat in _TQDM_NOISE):
-                        logging.debug(f"[JOB {job_id}] [stderr] {line}")
-                    elif any(kw in line for kw in _FATAL_KEYWORDS):
-                        logging.error(f"[JOB {job_id}] [stderr] {line}")
-                        if channel.readyState == "open":
-                            channel.send(f"[stderr] {line}\n")
-                    else:
-                        logging.warning(f"[JOB {job_id}] [stderr] {line}")
-                        # Only forward tqdm-style lines (those with embedded \r
-                        # overwrite sequences).  Pure \n-terminated lines come
-                        # from Python logging and appear once per DDP rank —
-                        # forwarding them would produce N duplicates (one per
-                        # GPU) because Lightning spawns rank 1+ via
-                        # subprocess.Popen with no stdout/stderr redirection,
-                        # so all ranks share the same pipe.  tqdm lines DO
-                        # coalesce: async readline accumulates all \r updates
-                        # up to the final \n, and rsplit gives one copy.
-                        if "\r" in line and channel.readyState == "open":
-                            display_line = line.rsplit("\r", 1)[-1].strip()
-                            if display_line:
-                                channel.send(display_line + "\n")
+                buf = b""
+                try:
+                    while True:
+                        chunk = await process.stderr.read(512)
+                        if not chunk:
+                            # EOF — flush any remaining buffered content
+                            if buf:
+                                line = buf.decode(errors="replace").rstrip()
+                                if line and not any(
+                                    line.startswith(pat) or pat in line
+                                    for pat in _TQDM_NOISE
+                                ):
+                                    if any(kw in line for kw in _FATAL_KEYWORDS):
+                                        logging.error(
+                                            f"[JOB {job_id}] [stderr] {line}"
+                                        )
+                                        if channel.readyState == "open":
+                                            channel.send(f"[stderr] {line}\n")
+                                    else:
+                                        logging.warning(
+                                            f"[JOB {job_id}] [stderr] {line}"
+                                        )
+                            break
+
+                        buf += chunk
+
+                        while True:
+                            match = SEP.search(buf)
+                            if not match:
+                                if len(buf) > 64 * 1024:
+                                    buf = b""
+                                break
+
+                            sep = buf[match.start() : match.end()]
+                            payload = buf[: match.start()]
+                            buf = buf[match.end() :]
+
+                            text = payload.decode(errors="replace")
+                            if not text:
+                                continue
+
+                            if sep == b"\r":
+                                # tqdm batch-level update — forward as CR:: so
+                                # the client can overwrite the previous terminal
+                                # line and show a live progress bar.  Only rank 0
+                                # writes tqdm (Lightning disables TQDMProgressBar
+                                # on non-zero ranks), so no DDP duplication here.
+                                logging.debug(f"[JOB {job_id}] [stderr] {text}")
+                                if channel.readyState == "open":
+                                    channel.send(f"CR::{text}")
+                            else:  # \n
+                                line = text.rstrip()
+                                if not line:
+                                    continue
+                                if any(
+                                    line.startswith(pat) or pat in line
+                                    for pat in _TQDM_NOISE
+                                ):
+                                    logging.debug(f"[JOB {job_id}] [stderr] {line}")
+                                elif any(kw in line for kw in _FATAL_KEYWORDS):
+                                    logging.error(f"[JOB {job_id}] [stderr] {line}")
+                                    if channel.readyState == "open":
+                                        channel.send(f"[stderr] {line}\n")
+                                else:
+                                    # \n-terminated stderr lines come from Python
+                                    # logging and appear once per DDP rank — don't
+                                    # forward to avoid N duplicates on multi-GPU.
+                                    logging.warning(
+                                        f"[JOB {job_id}] [stderr] {line}"
+                                    )
+                except Exception as e:
+                    logging.exception(f"[JOB {job_id}] Stderr stream error: {e}")
 
             stderr_task = asyncio.create_task(_stream_stderr())
 
@@ -1120,8 +1167,10 @@ class JobExecutor:
                                 pending_cr = ""
                                 if channel.readyState == "open":
                                     channel.send(text + "\n")
-                            else:  # \r — hold, keep only latest
+                            else:  # \r — forward as CR:: for live progress display
                                 pending_cr = text
+                                if channel.readyState == "open":
+                                    channel.send(f"CR::{text}")
 
                             # Extract progress info for training jobs
                             if job_type == "train":

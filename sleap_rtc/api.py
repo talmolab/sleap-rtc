@@ -1824,9 +1824,15 @@ async def _run_training_async(
                     break  # Terminal inference message — close channel
 
                 else:
-                    # Unrecognized message — raw training log line from worker
-                    if on_log:
-                        on_log(response)
+                    if response.startswith("CR::"):
+                        # \r-terminated progress update — overwrite the current
+                        # terminal line to emulate tqdm's animated progress bar.
+                        if on_log:
+                            on_log("\r" + response[4:])
+                    else:
+                        # Raw training log line from worker
+                        if on_log:
+                            on_log(response)
 
     finally:
         if pc:
