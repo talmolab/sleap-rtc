@@ -997,13 +997,19 @@ class JobExecutor:
                             channel.send(f"[stderr] {line}\n")
                     else:
                         logging.warning(f"[JOB {job_id}] [stderr] {line}")
-                        # Forward to client (progress bars, logging output).
-                        # tqdm writes \r-separated updates then \n at epoch end;
-                        # async readline accumulates them into one string, so
-                        # take the last \r-segment (final progress bar state).
-                        display_line = line.rsplit("\r", 1)[-1].strip()
-                        if display_line and channel.readyState == "open":
-                            channel.send(display_line + "\n")
+                        # Only forward tqdm-style lines (those with embedded \r
+                        # overwrite sequences).  Pure \n-terminated lines come
+                        # from Python logging and appear once per DDP rank —
+                        # forwarding them would produce N duplicates (one per
+                        # GPU) because Lightning spawns rank 1+ via
+                        # subprocess.Popen with no stdout/stderr redirection,
+                        # so all ranks share the same pipe.  tqdm lines DO
+                        # coalesce: async readline accumulates all \r updates
+                        # up to the final \n, and rsplit gives one copy.
+                        if "\r" in line and channel.readyState == "open":
+                            display_line = line.rsplit("\r", 1)[-1].strip()
+                            if display_line:
+                                channel.send(display_line + "\n")
 
             stderr_task = asyncio.create_task(_stream_stderr())
 
