@@ -40,6 +40,7 @@ from qtpy.QtWidgets import (
     QSplitter,
     QSizePolicy,
     QProgressBar,
+    QMessageBox,
 )
 
 if TYPE_CHECKING:
@@ -292,35 +293,53 @@ class WorkerSetupDialog(QDialog):
         setup_label = QLabel("<b>Quick Setup (on your GPU machine):</b>")
         layout.addWidget(setup_label)
 
-        # Step 1: Login and register mount path
+        # Step 1: Install sleap-rtc
         step1_layout = QVBoxLayout()
-        step1_label = QLabel("1. Login and register your data mount path:")
+        step1_label = QLabel("1. Install sleap-rtc (one time):")
         step1_layout.addWidget(step1_label)
 
-        login_cmd = QLabel("   <code>uvx sleap-rtc login</code>")
+        install_cmd = QLabel(
+            "   <code>uv tool install --python 3.11 sleap-rtc"
+            " --with &quot;sleap-nn[torch]&quot;"
+            " --with-executables-from sleap-nn"
+            " --torch-backend auto</code>"
+        )
+        install_cmd.setTextFormat(Qt.RichText)
+        install_cmd.setStyleSheet("background-color: #f0f0f0; padding: 4px;")
+        install_cmd.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        install_cmd.setWordWrap(True)
+        step1_layout.addWidget(install_cmd)
+        layout.addLayout(step1_layout)
+
+        # Step 2: Login and register mount path
+        step2_layout = QVBoxLayout()
+        step2_label = QLabel("2. Login and register your data mount path:")
+        step2_layout.addWidget(step2_label)
+
+        login_cmd = QLabel("   <code>sleap-rtc login</code>")
         login_cmd.setTextFormat(Qt.RichText)
         login_cmd.setStyleSheet("background-color: #f0f0f0; padding: 4px;")
         login_cmd.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        step1_layout.addWidget(login_cmd)
+        step2_layout.addWidget(login_cmd)
 
         mount_desc = QLabel(
             "   Then register the path where your training data is mounted:"
         )
         mount_desc.setWordWrap(True)
-        step1_layout.addWidget(mount_desc)
+        step2_layout.addWidget(mount_desc)
 
         mount_cmd = QLabel(
-            "   <code>uvx sleap-rtc config add-mount /path/to/your/data/</code>"
+            "   <code>sleap-rtc config add-mount /path/to/your/data/ &quot;Your Mount Name&quot;</code>"
         )
         mount_cmd.setTextFormat(Qt.RichText)
         mount_cmd.setStyleSheet("background-color: #f0f0f0; padding: 4px;")
         mount_cmd.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        step1_layout.addWidget(mount_cmd)
-        layout.addLayout(step1_layout)
+        step2_layout.addWidget(mount_cmd)
+        layout.addLayout(step2_layout)
 
-        # Step 2: Get API key from dashboard
+        # Step 3: Get API key from dashboard
         step3_layout = QVBoxLayout()
-        step3_label = QLabel("2. Generate an API key from the dashboard:")
+        step3_label = QLabel("3. Generate an API key from the dashboard:")
         step3_layout.addWidget(step3_label)
 
         dashboard_layout = QHBoxLayout()
@@ -344,13 +363,13 @@ class WorkerSetupDialog(QDialog):
         step3_layout.addLayout(dashboard_layout)
         layout.addLayout(step3_layout)
 
-        # Step 3: Start the worker with room secret
+        # Step 4: Start the worker with room secret
         step4_layout = QVBoxLayout()
-        step4_label = QLabel("3. Start the worker:")
+        step4_label = QLabel("4. Start the worker:")
         step4_layout.addWidget(step4_label)
 
         # Build worker command with room secret if available
-        worker_cmd_parts = ["uvx sleap-rtc worker", "--api-key YOUR_API_KEY"]
+        worker_cmd_parts = ["sleap-rtc worker", "--api-key YOUR_API_KEY"]
         worker_cmd_parts.append('--name "My GPU Server"')
         if self._room_secret:
             worker_cmd_parts.append(f"--room-secret {self._room_secret}")
@@ -404,17 +423,20 @@ class WorkerSetupDialog(QDialog):
     def _on_copy_commands(self):
         """Copy setup commands to clipboard."""
         # Build worker command
-        worker_cmd_parts = ["uvx sleap-rtc worker", "--api-key YOUR_API_KEY"]
+        worker_cmd_parts = ["sleap-rtc worker", "--api-key YOUR_API_KEY"]
         worker_cmd_parts.append('--name "My GPU Server"')
         if self._room_secret:
             worker_cmd_parts.append(f"--room-secret {self._room_secret}")
         worker_cmd = " ".join(worker_cmd_parts)
 
-        commands = f"""# Login to sleap-rtc
-uvx sleap-rtc login
+        commands = f"""# Install sleap-rtc (one time)
+uv tool install --python 3.11 sleap-rtc --with "sleap-nn[torch]" --with-executables-from sleap-nn --torch-backend auto
+
+# Login to sleap-rtc
+sleap-rtc login
 
 # Register the path where your training data is mounted
-uvx sleap-rtc config add-mount /path/to/your/data/
+sleap-rtc config add-mount /path/to/your/data/ "Your Mount Name"
 
 # Start the worker (replace YOUR_API_KEY with your API key from the dashboard)
 {worker_cmd}
@@ -1207,6 +1229,10 @@ class SlpPathDialog(QDialog):
         translated = get_config().translate_path(local_path)
         if translated:
             self._path_edit.setText(translated)
+            self._error_label.setText(
+                "<b>Note:</b> Using saved path mapping. You can edit below if needed."
+            )
+            self._error_label.setStyleSheet("color: #27ae60;")
 
     def _setup_ui(self, local_path: str, error_message: str):
         """Build the dialog UI."""
@@ -1368,6 +1394,10 @@ class SlpPathDialog(QDialog):
         if not text.strip():
             self._error_label.setText(f"<b>Error:</b> {self._error_message}")
             self._error_label.setStyleSheet("color: #c0392b;")
+        else:
+            # Hide the error once the user has provided a path
+            self._error_label.setText("")
+            self._error_label.setStyleSheet("")
 
     def _on_accept(self):
         """Accept the dialog with the entered path."""
@@ -1814,6 +1844,10 @@ class PathResolutionDialog(QDialog):
         self._browse_target_path: str | None = (
             None  # original_path of row being browsed
         )
+        self._cascading = False  # guard against recursive cascade fills
+        # Injectable confirm callable for cascade fill — override in tests to
+        # avoid modal dialogs in headless environments.
+        self._cascade_confirm = QMessageBox.question
         self._setup_ui()
 
     def _setup_ui(self):
@@ -1929,8 +1963,20 @@ class PathResolutionDialog(QDialog):
 
                 path_edit = QLineEdit()
                 path_edit.setPlaceholderText("Enter worker path...")
-                if video.suggestions:
+
+                # Priority: saved mapping > worker suggestion > empty
+                from sleap_rtc.config import get_config as _get_cfg
+
+                prefill = _get_cfg().translate_path(video.original_path)
+                if prefill:
+                    path_edit.setText(prefill)
+                elif video.suggestions:
                     path_edit.setText(video.suggestions[0])
+
+                if path_edit.text().strip():
+                    status_item.setText("✓ Resolved")
+                    status_item.setForeground(Qt.darkGreen)
+
                 path_edit.textChanged.connect(self._on_path_changed)
                 self._path_edit_to_row[path_edit] = row
                 path_layout.addWidget(path_edit)
@@ -1949,7 +1995,7 @@ class PathResolutionDialog(QDialog):
         self._table.resizeRowsToContents()
 
     def _on_path_changed(self):
-        """Handle path text changes and update row status."""
+        """Handle path text changes, update row status, and cascade-fill siblings."""
         edit = self.sender()
         if edit is not None:
             row = self._path_edit_to_row.get(edit)
@@ -1963,6 +2009,49 @@ class PathResolutionDialog(QDialog):
                     else:
                         status_item.setText("✗ Missing")
                         status_item.setForeground(Qt.red)
+
+            # Cascade: when one path is entered, offer to fill other empty
+            # paths using the same worker directory (mirrors SLEAP's missing-
+            # files dialog which confirms before applying prefix changes).
+            if not self._cascading:
+                path = edit.text().strip()
+                if path:
+                    from pathlib import Path
+
+                    worker_dir = str(Path(path).parent)
+
+                    # Collect other missing videos with no path yet
+                    candidates = [
+                        (video, other_edit)
+                        for video in self._path_results
+                        if not video.found
+                        for other_edit in [self._path_widgets.get(video.original_path)]
+                        if other_edit is not None
+                        and other_edit is not edit
+                        and not other_edit.text().strip()
+                    ]
+
+                    if candidates:
+                        names = "\n".join(
+                            f"  \u2022 {v.filename}" for v, _ in candidates
+                        )
+                        response = self._cascade_confirm(
+                            self,
+                            "Auto-fill other paths?",
+                            f"Other missing videos can be resolved using the "
+                            f"same folder:\n\n  {worker_dir}\n\n"
+                            f"Apply to:\n{names}",
+                            QMessageBox.Yes | QMessageBox.No,
+                            QMessageBox.Yes,
+                        )
+                        if response == QMessageBox.Yes:
+                            self._cascading = True
+                            try:
+                                for video, other_edit in candidates:
+                                    other_edit.setText(f"{worker_dir}/{video.filename}")
+                            finally:
+                                self._cascading = False
+
         self._update_status()
 
     def _on_browse_path(self, row: int):

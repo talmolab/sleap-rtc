@@ -32,6 +32,134 @@ if TYPE_CHECKING:
 SEP = re.compile(rb"[\r\n]")
 
 
+def _read_rss_mb(pid: int) -> float | None:
+    """Read resident set size in MB for a process from /proc/<pid>/status.
+
+    Returns None if the file is unreadable (process exited, non-Linux, etc.).
+    """
+    try:
+        with open(f"/proc/{pid}/status") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    return int(line.split()[1]) / 1024
+    except OSError:
+        pass
+    return None
+
+
+def _read_private_dirty_mb(pid: int) -> float | None:
+    """Read Private_Dirty pages in MB from /proc/<pid>/smaps_rollup.
+
+    Private_Dirty is the memory that is truly private to this process —
+    heap allocations, written stack pages, modified data.  Unlike RSS it
+    does NOT count read-only shared-library pages that are shared with
+    sibling processes, so summing this across the process tree gives a
+    much more accurate picture of actual physical memory consumed.
+
+    Returns None if smaps_rollup is unavailable (kernel < 4.14, non-Linux).
+    """
+    try:
+        with open(f"/proc/{pid}/smaps_rollup") as f:
+            for line in f:
+                if line.startswith("Private_Dirty:"):
+                    return int(line.split()[1]) / 1024
+    except OSError:
+        pass
+    return None
+
+
+def _read_cgroup_memory_mb() -> float | None:
+    """Read actual container memory usage from the cgroup memory controller.
+
+    This is the number the OOM killer uses — physical pages counted once
+    regardless of how many processes share them.  Tries cgroup v2 first
+    (/sys/fs/cgroup/memory.current), then falls back to cgroup v1
+    (/sys/fs/cgroup/memory/memory.usage_in_bytes).
+
+    Returns None if neither path is readable (non-Linux, no cgroup mount).
+    """
+    for path in (
+        "/sys/fs/cgroup/memory.current",
+        "/sys/fs/cgroup/memory/memory.usage_in_bytes",
+    ):
+        try:
+            with open(path) as f:
+                return int(f.read().strip()) / (1024 * 1024)
+        except OSError:
+            pass
+    return None
+
+
+def _get_child_pids(pid: int) -> list[int]:
+    """Get direct child PIDs from /proc/{pid}/task/*/children."""
+    children = []
+    try:
+        for tid_dir in Path(f"/proc/{pid}/task").iterdir():
+            try:
+                with open(tid_dir / "children") as f:
+                    for cpid_str in f.read().split():
+                        children.append(int(cpid_str))
+            except OSError:
+                pass
+    except OSError:
+        pass
+    return children
+
+
+def _iter_process_tree(root_pid: int) -> set[int]:
+    """Return the set of root_pid and all its descendant PIDs."""
+    pids: set[int] = set()
+    frontier = [root_pid]
+    while frontier:
+        pid = frontier.pop()
+        if pid in pids:
+            continue
+        pids.add(pid)
+        frontier.extend(_get_child_pids(pid))
+    return pids
+
+
+def _read_process_tree_rss_mb(root_pid: int) -> tuple[float, int]:
+    """Sum RSS in MB for root_pid and all its descendants.
+
+    Returns:
+        (total_mb, process_count) — total RSS and number of live processes found.
+    """
+    total = 0.0
+    count = 0
+    for pid in _iter_process_tree(root_pid):
+        rss = _read_rss_mb(pid)
+        if rss is not None:
+            total += rss
+            count += 1
+    return total, count
+
+
+async def _query_vram() -> str | None:
+    """Query per-GPU VRAM usage via nvidia-smi.
+
+    Returns a formatted string like "GPU0: 1,234/16,384 MB, GPU1: 1,234/16,384 MB",
+    or None if nvidia-smi is unavailable or times out.
+    """
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "nvidia-smi",
+            "--query-gpu=index,memory.used,memory.total",
+            "--format=csv,noheader,nounits",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5.0)
+        parts = []
+        for line in stdout.decode().strip().splitlines():
+            cols = [c.strip() for c in line.split(",")]
+            if len(cols) == 3:
+                parts.append(f"GPU{cols[0]}: {int(cols[1]):,}/{int(cols[2]):,} MB")
+        return ", ".join(parts) if parts else None
+    except Exception:
+        return None
+
+
 class JobExecutor:
     """Executes training and inference jobs with progress monitoring.
 
@@ -263,15 +391,16 @@ class JobExecutor:
                 assert process.stdout is not None
                 logging.info(f"Process started with PID: {process.pid}")
 
-                async def stream_logs(
-                    emit_on_cr=True, read_size=512, max_flush=64 * 1024
-                ):
+                async def stream_logs(read_size=512, max_flush=64 * 1024):
                     buf = b""
+                    pending_cr = ""
                     try:
                         while True:
                             chunk = await process.stdout.read(read_size)
                             if not chunk:
                                 # process ended; flush any remaining text
+                                if pending_cr:
+                                    channel.send(pending_cr + "\n")
                                 if buf:
                                     channel.send(buf.decode(errors="replace") + "\n")
                                 break
@@ -281,11 +410,10 @@ class JobExecutor:
                             while True:
                                 m = SEP.search(buf)
                                 if not m:
-                                    # If tqdm keeps extending one long line, flush
+                                    # If tqdm keeps extending one long line, hold as
+                                    # pending and clear the buffer
                                     if len(buf) > max_flush:
-                                        text = buf.decode(errors="replace")
-                                        if emit_on_cr and text:
-                                            channel.send("\r" + text)
+                                        pending_cr = buf.decode(errors="replace")
                                         buf = b""
                                     break
 
@@ -298,10 +426,13 @@ class JobExecutor:
                                     continue
 
                                 if sep == b"\n":
+                                    # \n supersedes any pending \r line (tqdm
+                                    # emits \r...\n for each batch; discard the
+                                    # \r version to avoid duplicate sends)
+                                    pending_cr = ""
                                     channel.send(text + "\n")
-                                else:  # sep == b'\r'
-                                    if emit_on_cr:
-                                        channel.send("\r" + text)
+                                else:  # sep == b'\r' — hold, keep only latest
+                                    pending_cr = text
 
                     except Exception as e:
                         logging.exception("stream_logs failed: %s", e)
@@ -777,7 +908,7 @@ class JobExecutor:
             process = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
+                stderr=asyncio.subprocess.PIPE,
                 cwd=working_dir,
                 env={**os.environ, "PYTHONUNBUFFERED": "1"},
                 start_new_session=True,
@@ -826,6 +957,151 @@ class JobExecutor:
 
             watchdog_task = asyncio.create_task(_subprocess_watchdog())
 
+            # Stderr forwarder: classify stderr lines by severity so tqdm
+            # diagnostic noise doesn't flood the terminal as ERROR.
+            #
+            # tqdm's TMonitor fires "Timeout (0:00:30)!" + a full thread dump
+            # to stderr whenever the main thread is blocked for >30 s (e.g.
+            # slow VAST I/O between epochs).  These are informational — log
+            # them at DEBUG.  Only genuine error keywords get ERROR level.
+            _TQDM_NOISE = (
+                "Timeout (0:00:30)!",
+                "Thread 0x",
+                "  <no Python frame>",
+                "  File ",
+                "_bootstrap_inner",
+                "_bootstrap",
+            )
+            _FATAL_KEYWORDS = (
+                "NCCL",
+                "CUDA error",
+                "RuntimeError",
+                "Traceback (most recent call last)",
+                "Killed",
+                "Segmentation fault",
+                "OOM",
+                "out of memory",
+            )
+
+            async def _stream_stderr():
+                assert process.stderr is not None
+                buf = b""
+                try:
+                    while True:
+                        chunk = await process.stderr.read(512)
+                        if not chunk:
+                            # EOF — flush any remaining buffered content
+                            if buf:
+                                line = buf.decode(errors="replace").rstrip()
+                                if line and not any(
+                                    line.startswith(pat) or pat in line
+                                    for pat in _TQDM_NOISE
+                                ):
+                                    if any(kw in line for kw in _FATAL_KEYWORDS):
+                                        logging.error(f"[JOB {job_id}] [stderr] {line}")
+                                        if channel.readyState == "open":
+                                            channel.send(f"[stderr] {line}\n")
+                                    else:
+                                        logging.warning(
+                                            f"[JOB {job_id}] [stderr] {line}"
+                                        )
+                            break
+
+                        buf += chunk
+
+                        while True:
+                            match = SEP.search(buf)
+                            if not match:
+                                if len(buf) > 64 * 1024:
+                                    buf = b""
+                                break
+
+                            sep = buf[match.start() : match.end()]
+                            payload = buf[: match.start()]
+                            buf = buf[match.end() :]
+
+                            text = payload.decode(errors="replace")
+                            if not text:
+                                continue
+
+                            if sep == b"\r":
+                                # tqdm batch-level update — forward as CR:: so
+                                # the client can overwrite the previous terminal
+                                # line and show a live progress bar.  Only rank 0
+                                # writes tqdm (Lightning disables TQDMProgressBar
+                                # on non-zero ranks), so no DDP duplication here.
+                                logging.debug(f"[JOB {job_id}] [stderr] {text}")
+                                if channel.readyState == "open":
+                                    channel.send(f"CR::{text}")
+                            else:  # \n
+                                line = text.rstrip()
+                                if not line:
+                                    continue
+                                if any(
+                                    line.startswith(pat) or pat in line
+                                    for pat in _TQDM_NOISE
+                                ):
+                                    logging.debug(f"[JOB {job_id}] [stderr] {line}")
+                                elif any(kw in line for kw in _FATAL_KEYWORDS):
+                                    logging.error(f"[JOB {job_id}] [stderr] {line}")
+                                    if channel.readyState == "open":
+                                        channel.send(f"[stderr] {line}\n")
+                                else:
+                                    # \n-terminated stderr lines come from Python
+                                    # logging and appear once per DDP rank — don't
+                                    # forward to avoid N duplicates on multi-GPU.
+                                    logging.warning(f"[JOB {job_id}] [stderr] {line}")
+                except Exception as e:
+                    logging.exception(f"[JOB {job_id}] Stderr stream error: {e}")
+
+            stderr_task = asyncio.create_task(_stream_stderr())
+
+            # Memory monitor: log worker + full process tree RSS + VRAM every 30 s.
+            worker_pid = os.getpid()
+            _w = _read_rss_mb(worker_pid)
+            _p = _read_rss_mb(process.pid)
+            logging.info(
+                f"[JOB {job_id}] Memory at job start — "
+                f"worker: {f'{_w:.0f}' if _w is not None else '?'} MB, "
+                f"subprocess: {f'{_p:.0f}' if _p is not None else '?'} MB"
+            )
+
+            async def _memory_monitor():
+                while process.returncode is None:
+                    await asyncio.sleep(30)
+                    if process.returncode is not None:
+                        break
+                    w_mb = _read_rss_mb(worker_pid)
+                    rss_total_mb, n_procs = _read_process_tree_rss_mb(process.pid)
+                    # Private_Dirty: sum of truly private pages across the
+                    # process tree — excludes shared library pages so this
+                    # is a much better estimate of actual physical RAM used
+                    # by the training job (avoids the ×N double-counting of
+                    # shared .so pages that inflates the RSS sum).
+                    private_total_mb = sum(
+                        v
+                        for pid in _iter_process_tree(process.pid)
+                        if (v := _read_private_dirty_mb(pid)) is not None
+                    )
+                    cgroup_mb = _read_cgroup_memory_mb()
+                    vram = await _query_vram()
+                    cgroup_part = (
+                        f", cgroup actual: {cgroup_mb:.0f} MB" if cgroup_mb else ""
+                    )
+                    vram_part = f", VRAM [{vram}]" if vram else ""
+                    logging.info(
+                        f"[JOB {job_id}] Memory — "
+                        f"worker: {w_mb:.0f} MB, "
+                        f"subprocess RSS sum ({n_procs} procs): {rss_total_mb:.0f} MB "
+                        f"(private only: {private_total_mb:.0f} MB)"
+                        f"{cgroup_part}"
+                        f"{vram_part}"
+                        if w_mb is not None
+                        else f"[JOB {job_id}] Memory read unavailable (non-Linux?)"
+                    )
+
+            memory_monitor_task = asyncio.create_task(_memory_monitor())
+
             # Stream logs with progress extraction
             async def stream_logs_with_progress():
                 """Stream logs and extract progress information."""
@@ -840,6 +1116,7 @@ class JobExecutor:
                 current_loss = None
                 current_val_loss = None
 
+                pending_cr = ""
                 try:
                     while True:
                         chunk = await process.stdout.read(512)
@@ -849,6 +1126,8 @@ class JobExecutor:
                                 f"[JOB {job_id}] EOF on stdout from PID {process.pid} — "
                                 f"subprocess has closed stdout (returncode={process.returncode!r})"
                             )
+                            if pending_cr and channel.readyState == "open":
+                                channel.send(pending_cr + "\n")
                             if buf:
                                 line = buf.decode(errors="replace")
                                 logging.info(f"[JOB {job_id}] {line}")
@@ -861,11 +1140,9 @@ class JobExecutor:
                         while True:
                             match = SEP.search(buf)
                             if not match:
-                                # Flush long lines
+                                # Hold long lines as pending rather than flushing mid-line
                                 if len(buf) > 64 * 1024:
-                                    text = buf.decode(errors="replace")
-                                    if channel.readyState == "open":
-                                        channel.send("\r" + text)
+                                    pending_cr = buf.decode(errors="replace")
                                     buf = b""
                                 break
 
@@ -877,14 +1154,21 @@ class JobExecutor:
                             if not text:
                                 continue
 
-                            # Log and send log line to client
-                            logging.info(f"[JOB {job_id}] {text}")
+                            # Log and send log line to client (debug only —
+                            # avoids flooding the terminal with every training
+                            # output line at INFO level)
+                            logging.debug(f"[JOB {job_id}] {text}")
                             if sep == b"\n":
+                                # \n supersedes any pending \r line (tqdm
+                                # emits \r...\n for each batch; discard the
+                                # \r version to avoid duplicate sends)
+                                pending_cr = ""
                                 if channel.readyState == "open":
                                     channel.send(text + "\n")
-                            else:  # \r for progress bars
+                            else:  # \r — forward as CR:: for live progress display
+                                pending_cr = text
                                 if channel.readyState == "open":
-                                    channel.send("\r" + text)
+                                    channel.send(f"CR::{text}")
 
                             # Extract progress info for training jobs
                             if job_type == "train":
@@ -922,7 +1206,19 @@ class JobExecutor:
                         channel.send(f"[log-stream error] {e}\n")
 
             await stream_logs_with_progress()
+            # Drain any remaining stderr — crash output (e.g. NCCL errors,
+            # Python tracebacks) often arrives just after stdout EOF.
+            try:
+                await asyncio.wait_for(stderr_task, timeout=5.0)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                stderr_task.cancel()
             watchdog_task.cancel()
+            memory_monitor_task.cancel()
+            _w = _read_rss_mb(worker_pid)
+            logging.info(
+                f"[JOB {job_id}] Memory at job end — "
+                f"worker: {f'{_w:.0f}' if _w is not None else '?'} MB"
+            )
             logging.info(
                 f"[JOB {job_id}] Stdout stream ended — waiting for PID {process.pid} to exit"
             )

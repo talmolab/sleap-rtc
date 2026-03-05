@@ -105,24 +105,33 @@ class ProgressReporter:
         self.running = True
         loop = asyncio.get_event_loop()
 
-        def recv_msg():
-            """Receive message from ZMQ socket in non-blocking way.
+        def recv_all():
+            """Drain all buffered ZMQ messages and return them all.
+
+            Consuming the full queue every poll cycle prevents the backlog
+            from growing when sleap-nn publishes faster than we drain (e.g.
+            fast GPUs).  All messages are returned so the LossViewer receives
+            every batch_end event and every scatter dot is plotted correctly.
 
             Returns:
-                Message string if available, None otherwise.
+                List of message strings (possibly empty).
             """
+            messages = []
             try:
-                return self.progress_socket.recv_string(flags=zmq.NOBLOCK)
+                while True:
+                    messages.append(self.progress_socket.recv_string(flags=zmq.NOBLOCK))
             except zmq.Again:
-                return None
+                pass
+            return messages
 
         while self.running:
-            # Receive progress message from trainer
-            msg = await loop.run_in_executor(None, recv_msg)
+            # Drain the full ZMQ queue and forward every message so the
+            # LossViewer sees all batch_end scatter dots, not just the last.
+            msgs = await loop.run_in_executor(None, recv_all)
 
-            if msg:
+            for msg in msgs:
                 try:
-                    logging.info(f"Sending progress report to client: {msg}")
+                    logging.debug(f"Sending progress report to client: {msg}")
                     channel.send(f"PROGRESS_REPORT::{msg}")
                 except Exception as e:
                     logging.error(f"Failed to send ZMQ progress: {e}")
@@ -196,7 +205,7 @@ class ProgressReporter:
             self.running = False
             self.listener_task.cancel()
             await asyncio.wait({self.listener_task}, timeout=2.0)
-        # Brief yield so the executor thread has time to return from recv_msg.
+        # Brief yield so the executor thread has time to return from recv_all.
         await asyncio.sleep(0.1)
 
         # Drain and discard all messages still buffered in the ZMQ socket.

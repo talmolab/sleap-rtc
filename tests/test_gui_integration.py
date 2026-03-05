@@ -248,9 +248,7 @@ class TestWidgetVisibility:
         mock_prefs.set("enable_experimental_features", False)
 
         # Simulate SLEAP's logic for showing/hiding the widget
-        show_remote_training = (
-            mock_prefs.get("enable_experimental_features", False)
-        )
+        show_remote_training = mock_prefs.get("enable_experimental_features", False)
 
         assert show_remote_training is False
 
@@ -258,9 +256,7 @@ class TestWidgetVisibility:
         """Widget should be visible when experimental features enabled."""
         mock_prefs.set("enable_experimental_features", True)
 
-        show_remote_training = (
-            mock_prefs.get("enable_experimental_features", False)
-        )
+        show_remote_training = mock_prefs.get("enable_experimental_features", False)
 
         assert show_remote_training is True
 
@@ -274,14 +270,15 @@ class TestWidgetVisibility:
 
         # Both conditions must be true
         show_remote_training = (
-            mock_prefs.get("enable_experimental_features", False)
-            and is_available()
+            mock_prefs.get("enable_experimental_features", False) and is_available()
         )
 
         assert show_remote_training is False
 
     @patch("sleap_rtc.api.is_available")
-    def test_widget_visible_when_all_conditions_met(self, mock_is_available, mock_prefs):
+    def test_widget_visible_when_all_conditions_met(
+        self, mock_is_available, mock_prefs
+    ):
         """Widget should be visible when all conditions are met."""
         mock_prefs.set("enable_experimental_features", True)
         mock_is_available.return_value = True
@@ -289,8 +286,7 @@ class TestWidgetVisibility:
         from sleap_rtc.api import is_available
 
         show_remote_training = (
-            mock_prefs.get("enable_experimental_features", False)
-            and is_available()
+            mock_prefs.get("enable_experimental_features", False) and is_available()
         )
 
         assert show_remote_training is True
@@ -523,12 +519,14 @@ class TestProgressForwarding:
             if on_progress:
                 on_progress(ProgressEvent(event_type="train_begin", total_epochs=10))
                 for i in range(1, 11):
-                    on_progress(ProgressEvent(
-                        event_type="epoch_end",
-                        epoch=i,
-                        total_epochs=10,
-                        train_loss=1.0 / i,
-                    ))
+                    on_progress(
+                        ProgressEvent(
+                            event_type="epoch_end",
+                            epoch=i,
+                            total_epochs=10,
+                            train_loss=1.0 / i,
+                        )
+                    )
                 on_progress(ProgressEvent(event_type="train_end", success=True))
             return TrainingResult(job_id="test", success=True)
 
@@ -864,7 +862,9 @@ class TestDocumentation:
         #     QMessageBox.critical(self, "Error", result.error)
         pass
 
-    @pytest.mark.xfail(reason="ZMQ send_string called unexpected number of times; needs investigation")
+    @pytest.mark.xfail(
+        reason="ZMQ send_string called unexpected number of times; needs investigation"
+    )
     def test_example_progress_forwarding(self, mock_zmq):
         """Example: How to use progress forwarding with LossViewer.
 
@@ -896,12 +896,14 @@ class TestDocumentation:
         from sleap_rtc.gui.runners import RemoteProgressBridge
 
         with RemoteProgressBridge(publish_port=9001) as bridge:
-            bridge.on_progress(ProgressEvent(
-                event_type="epoch_end",
-                epoch=1,
-                train_loss=0.5,
-                val_loss=0.6,
-            ))
+            bridge.on_progress(
+                ProgressEvent(
+                    event_type="epoch_end",
+                    epoch=1,
+                    train_loss=0.5,
+                    val_loss=0.6,
+                )
+            )
 
         # Verify message was published
         mock_socket.send_string.assert_called_once()
@@ -1018,7 +1020,12 @@ class TestRemoteFileBrowser:
 
         entries = [
             {"name": "videos", "type": "directory", "size": 0, "modified": 1700000000},
-            {"name": "labels.slp", "type": "file", "size": 1024, "modified": 1700000100},
+            {
+                "name": "labels.slp",
+                "type": "file",
+                "size": 1024,
+                "modified": 1700000100,
+            },
         ]
         browser._handle_response(self._list_response("/mnt/data", entries))
 
@@ -1050,19 +1057,28 @@ class TestRemoteFileBrowser:
 
         # Simulate navigating 3 levels deep
         browser._handle_response(
-            self._list_response("/mnt/data", [
-                {"name": "a", "type": "directory", "size": 0, "modified": 0},
-            ])
+            self._list_response(
+                "/mnt/data",
+                [
+                    {"name": "a", "type": "directory", "size": 0, "modified": 0},
+                ],
+            )
         )
         browser._handle_response(
-            self._list_response("/mnt/data/a", [
-                {"name": "b", "type": "directory", "size": 0, "modified": 0},
-            ])
+            self._list_response(
+                "/mnt/data/a",
+                [
+                    {"name": "b", "type": "directory", "size": 0, "modified": 0},
+                ],
+            )
         )
         browser._handle_response(
-            self._list_response("/mnt/data/a/b", [
-                {"name": "c.txt", "type": "file", "size": 100, "modified": 0},
-            ])
+            self._list_response(
+                "/mnt/data/a/b",
+                [
+                    {"name": "c.txt", "type": "file", "size": 100, "modified": 0},
+                ],
+            )
         )
 
         # Now 4 columns: mount, /mnt/data, /mnt/data/a, /mnt/data/a/b
@@ -1081,7 +1097,12 @@ class TestRemoteFileBrowser:
         browser._handle_response(self._mounts_response(mounts))
 
         entries = [
-            {"name": "labels.slp", "type": "file", "size": 2048, "modified": 1700000000},
+            {
+                "name": "labels.slp",
+                "type": "file",
+                "size": 2048,
+                "modified": 1700000000,
+            },
         ]
         browser._handle_response(self._list_response("/mnt/data", entries))
 
@@ -1281,7 +1302,9 @@ class TestRemoteFileBrowser:
         # "Load more..." removed, 5 new entries added
         assert col.count() == 25
         # No "Load more..." at end
-        assert col.item(col.count() - 1).data(Qt.ItemDataRole.UserRole + 1) != "load_more"
+        assert (
+            col.item(col.count() - 1).data(Qt.ItemDataRole.UserRole + 1) != "load_more"
+        )
 
     # --- Preview ---
 
@@ -1291,7 +1314,12 @@ class TestRemoteFileBrowser:
         browser._handle_response(self._mounts_response(mounts))
 
         entries = [
-            {"name": "labels.slp", "type": "file", "size": 1048576, "modified": 1700000000},
+            {
+                "name": "labels.slp",
+                "type": "file",
+                "size": 1048576,
+                "modified": 1700000000,
+            },
         ]
         browser._handle_response(self._list_response("/mnt/data", entries))
 
@@ -1366,9 +1394,7 @@ class TestRemoteFileBrowser:
         """Multiple extensions in filter should all be selectable."""
         from sleap_rtc.gui.widgets import RemoteFileBrowser
 
-        browser = RemoteFileBrowser(
-            send_fn=send_fn, file_filter="*.mp4,*.avi,*.mov"
-        )
+        browser = RemoteFileBrowser(send_fn=send_fn, file_filter="*.mp4,*.avi,*.mov")
         mounts = [{"path": "/mnt/data", "label": "Data"}]
         browser._handle_response(self._mounts_response(mounts))
 
@@ -1501,6 +1527,21 @@ class TestPathResolutionDialogBrowser:
     @pytest.fixture
     def send_fn(self):
         return MagicMock()
+
+    @pytest.fixture(autouse=True)
+    def suppress_cascade_confirm(self, monkeypatch):
+        """Suppress the cascade-fill QMessageBox in all tests in this class.
+
+        _on_path_changed shows a modal confirmation dialog when a path is filled
+        and other empty sibling rows exist. In headless CI this hangs. Patch it
+        at the module level so any dialog created in a test is unaffected.
+        """
+        from qtpy.QtWidgets import QMessageBox
+
+        monkeypatch.setattr(
+            "sleap_rtc.gui.widgets.QMessageBox.question",
+            lambda *a, **kw: QMessageBox.No,
+        )
 
     @pytest.fixture
     def missing_videos(self):
