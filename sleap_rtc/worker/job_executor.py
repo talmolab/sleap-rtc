@@ -998,9 +998,7 @@ class JobExecutor:
                                     for pat in _TQDM_NOISE
                                 ):
                                     if any(kw in line for kw in _FATAL_KEYWORDS):
-                                        logging.error(
-                                            f"[JOB {job_id}] [stderr] {line}"
-                                        )
+                                        logging.error(f"[JOB {job_id}] [stderr] {line}")
                                         if channel.readyState == "open":
                                             channel.send(f"[stderr] {line}\n")
                                     else:
@@ -1052,9 +1050,7 @@ class JobExecutor:
                                     # \n-terminated stderr lines come from Python
                                     # logging and appear once per DDP rank — don't
                                     # forward to avoid N duplicates on multi-GPU.
-                                    logging.warning(
-                                        f"[JOB {job_id}] [stderr] {line}"
-                                    )
+                                    logging.warning(f"[JOB {job_id}] [stderr] {line}")
                 except Exception as e:
                     logging.exception(f"[JOB {job_id}] Stderr stream error: {e}")
 

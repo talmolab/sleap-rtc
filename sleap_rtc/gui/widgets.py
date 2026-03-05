@@ -40,6 +40,7 @@ from qtpy.QtWidgets import (
     QSplitter,
     QSizePolicy,
     QProgressBar,
+    QMessageBox,
 )
 
 if TYPE_CHECKING:
@@ -1844,6 +1845,9 @@ class PathResolutionDialog(QDialog):
             None  # original_path of row being browsed
         )
         self._cascading = False  # guard against recursive cascade fills
+        # Injectable confirm callable for cascade fill — override in tests to
+        # avoid modal dialogs in headless environments.
+        self._cascade_confirm = QMessageBox.question
         self._setup_ui()
 
     def _setup_ui(self):
@@ -2013,7 +2017,6 @@ class PathResolutionDialog(QDialog):
                 path = edit.text().strip()
                 if path:
                     from pathlib import Path
-                    from qtpy.QtWidgets import QMessageBox
 
                     worker_dir = str(Path(path).parent)
 
@@ -2022,9 +2025,7 @@ class PathResolutionDialog(QDialog):
                         (video, other_edit)
                         for video in self._path_results
                         if not video.found
-                        for other_edit in [
-                            self._path_widgets.get(video.original_path)
-                        ]
+                        for other_edit in [self._path_widgets.get(video.original_path)]
                         if other_edit is not None
                         and other_edit is not edit
                         and not other_edit.text().strip()
@@ -2034,7 +2035,7 @@ class PathResolutionDialog(QDialog):
                         names = "\n".join(
                             f"  \u2022 {v.filename}" for v, _ in candidates
                         )
-                        response = QMessageBox.question(
+                        response = self._cascade_confirm(
                             self,
                             "Auto-fill other paths?",
                             f"Other missing videos can be resolved using the "
@@ -2047,9 +2048,7 @@ class PathResolutionDialog(QDialog):
                             self._cascading = True
                             try:
                                 for video, other_edit in candidates:
-                                    other_edit.setText(
-                                        f"{worker_dir}/{video.filename}"
-                                    )
+                                    other_edit.setText(f"{worker_dir}/{video.filename}")
                             finally:
                                 self._cascading = False
 

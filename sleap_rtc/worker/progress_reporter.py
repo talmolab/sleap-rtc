@@ -119,9 +119,7 @@ class ProgressReporter:
             messages = []
             try:
                 while True:
-                    messages.append(
-                        self.progress_socket.recv_string(flags=zmq.NOBLOCK)
-                    )
+                    messages.append(self.progress_socket.recv_string(flags=zmq.NOBLOCK))
             except zmq.Again:
                 pass
             return messages
