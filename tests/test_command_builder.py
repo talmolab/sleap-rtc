@@ -120,9 +120,7 @@ class TestBuildTrainCommand:
 
         cmd = builder.build_train_command(spec)
 
-        assert (
-            "trainer_config.resume_ckpt_path=/vast/models/checkpoint.ckpt" in cmd
-        )
+        assert "trainer_config.resume_ckpt_path=/vast/models/checkpoint.ckpt" in cmd
 
     def test_zmq_ports_default(self):
         """Test default ZMQ ports are included."""
@@ -132,8 +130,13 @@ class TestBuildTrainCommand:
         cmd = builder.build_train_command(spec)
 
         # + prefix is required for Hydra to append keys not in schema
-        assert f"++trainer_config.zmq.controller_port={DEFAULT_ZMQ_PORTS['controller']}" in cmd
-        assert f"++trainer_config.zmq.publish_port={DEFAULT_ZMQ_PORTS['publish']}" in cmd
+        assert (
+            f"++trainer_config.zmq.controller_port={DEFAULT_ZMQ_PORTS['controller']}"
+            in cmd
+        )
+        assert (
+            f"++trainer_config.zmq.publish_port={DEFAULT_ZMQ_PORTS['publish']}" in cmd
+        )
 
     def test_zmq_ports_custom(self):
         """Test custom ZMQ ports are used."""
@@ -362,7 +365,9 @@ class TestBuildCommandGeneric:
         builder = CommandBuilder()
         spec = TrainJobSpec(config_path="/vast/config.yaml")
 
-        cmd = builder.build_command(spec, zmq_ports={"controller": 5000, "publish": 5001})
+        cmd = builder.build_command(
+            spec, zmq_ports={"controller": 5000, "publish": 5001}
+        )
 
         # + prefix is required for Hydra to append keys not in schema
         assert "++trainer_config.zmq.controller_port=5000" in cmd

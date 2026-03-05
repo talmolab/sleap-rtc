@@ -8,7 +8,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from sleap_rtc.config import MountConfig
 from sleap_rtc.jobs.spec import TrainJobSpec
-from sleap_rtc.protocol import MSG_JOB_SUBMIT, MSG_JOB_ACCEPTED, MSG_JOB_REJECTED, MSG_SEPARATOR
+from sleap_rtc.protocol import (
+    MSG_JOB_SUBMIT,
+    MSG_JOB_ACCEPTED,
+    MSG_JOB_REJECTED,
+    MSG_SEPARATOR,
+)
 from sleap_rtc.worker.worker_class import RTCWorkerClient
 
 
@@ -22,7 +27,9 @@ def _mock_pipeline_reporter():
     """
     mock_reporter = MagicMock()
     mock_reporter.async_cleanup = AsyncMock()
-    with patch("sleap_rtc.worker.worker_class.ProgressReporter", return_value=mock_reporter):
+    with patch(
+        "sleap_rtc.worker.worker_class.ProgressReporter", return_value=mock_reporter
+    ):
         yield
 
 
@@ -57,14 +64,18 @@ def mock_channel():
 
 def build_submit_message(spec_dict, job_id="test-job-1"):
     """Build a JOB_SUBMIT message from a spec dict."""
-    return f"{MSG_JOB_SUBMIT}{MSG_SEPARATOR}{job_id}{MSG_SEPARATOR}{json.dumps(spec_dict)}"
+    return (
+        f"{MSG_JOB_SUBMIT}{MSG_SEPARATOR}{job_id}{MSG_SEPARATOR}{json.dumps(spec_dict)}"
+    )
 
 
 class TestConfigContentHandling:
     """Tests for config_content in handle_job_submit."""
 
     @pytest.mark.asyncio
-    async def test_config_content_writes_temp_file(self, worker, mock_channel, temp_mount):
+    async def test_config_content_writes_temp_file(
+        self, worker, mock_channel, temp_mount
+    ):
         """Test that config_content is written to a temp YAML file."""
         config_yaml = "model_config:\n  backbone: unet\n"
         labels_path = str(temp_mount / "labels.slp")
@@ -87,7 +98,9 @@ class TestConfigContentHandling:
         worker.job_executor.execute_from_spec.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_config_content_temp_file_cleaned_up(self, worker, mock_channel, temp_mount):
+    async def test_config_content_temp_file_cleaned_up(
+        self, worker, mock_channel, temp_mount
+    ):
         """Test that temp config file is cleaned up after execution."""
         config_yaml = "model_config:\n  backbone: unet\n"
         labels_path = str(temp_mount / "labels.slp")
@@ -105,11 +118,14 @@ class TestConfigContentHandling:
         async def capture_temp_files(channel, cmd, job_id, job_type="train", **kwargs):
             """Capture temp files in working_dir during execution."""
             import glob
+
             temp_files_during_exec.extend(
                 glob.glob(os.path.join(str(temp_mount), "rtc_config_*.yaml"))
             )
 
-        worker.job_executor.execute_from_spec = AsyncMock(side_effect=capture_temp_files)
+        worker.job_executor.execute_from_spec = AsyncMock(
+            side_effect=capture_temp_files
+        )
 
         await worker.handle_job_submit(mock_channel, message)
 
@@ -121,7 +137,9 @@ class TestConfigContentHandling:
             assert not os.path.exists(f), f"Temp file not cleaned up: {f}"
 
     @pytest.mark.asyncio
-    async def test_config_content_cleanup_on_execution_error(self, worker, mock_channel, temp_mount):
+    async def test_config_content_cleanup_on_execution_error(
+        self, worker, mock_channel, temp_mount
+    ):
         """Test that temp file is cleaned up even when execution fails."""
         config_yaml = "model_config:\n  backbone: unet\n"
         labels_path = str(temp_mount / "labels.slp")
@@ -147,11 +165,14 @@ class TestConfigContentHandling:
 
         # Check no rtc_config_ temp files are left in working_dir
         import glob
+
         remaining = glob.glob(os.path.join(str(temp_mount), "rtc_config_*.yaml"))
         assert len(remaining) == 0, f"Temp files not cleaned up: {remaining}"
 
     @pytest.mark.asyncio
-    async def test_config_content_file_has_correct_content(self, worker, mock_channel, temp_mount):
+    async def test_config_content_file_has_correct_content(
+        self, worker, mock_channel, temp_mount
+    ):
         """Test that the temp file contains the exact config_content."""
         config_yaml = "model_config:\n  backbone: unet\n  num_layers: 3\n"
         labels_path = str(temp_mount / "labels.slp")
@@ -224,5 +245,115 @@ class TestConfigContentHandling:
 
             # Check that path_mappings were logged
             info_calls = [str(c) for c in mock_logging.info.call_args_list]
-            mapping_logs = [c for c in info_calls if "path_mappings" in c.lower() or "Path mappings" in c]
+            mapping_logs = [
+                c
+                for c in info_calls
+                if "path_mappings" in c.lower() or "Path mappings" in c
+            ]
             assert len(mapping_logs) >= 1
+
+
+class TestResolvedSlpWriting:
+    """Tests for writing a resolved SLP with corrected video paths during job submission."""
+
+    @pytest.mark.asyncio
+    async def test_video_mappings_trigger_resolved_slp(
+        self, worker, mock_channel, temp_mount
+    ):
+        """When video path mappings are present, a resolved SLP is written and train cmd uses it."""
+        config_yaml = "model_config:\n  backbone: unet\n"
+        slp_path = str(temp_mount / "labels.slp")
+        resolved_slp = str(temp_mount / "resolved_labels.slp")
+        # Create the resolved file so the JobValidator doesn't reject it
+        (temp_mount / "resolved_labels.slp").write_text("resolved slp")
+
+        spec_dict = {
+            "type": "train",
+            "config_content": config_yaml,
+            "labels_path": slp_path,
+            "path_mappings": {
+                "/Volumes/data/labels.slp": slp_path,
+                "/Volumes/data/vid.mp4": str(temp_mount / "vid.mp4"),
+            },
+        }
+        message = build_submit_message(spec_dict)
+
+        mock_fm = MagicMock()
+        mock_fm.write_slp_with_new_paths.return_value = {
+            "output_path": resolved_slp,
+            "videos_updated": 1,
+        }
+        worker.file_manager = mock_fm
+
+        await worker.handle_job_submit(mock_channel, message)
+
+        mock_fm.write_slp_with_new_paths.assert_called_once()
+        call_kwargs = mock_fm.write_slp_with_new_paths.call_args
+        assert call_kwargs.kwargs["slp_path"] == slp_path
+        filename_map = call_kwargs.kwargs["filename_map"]
+        # SLP mapping must be excluded; only video mapping present
+        assert "/Volumes/data/labels.slp" not in filename_map
+        assert "/Volumes/data/vid.mp4" in filename_map
+
+        # execute_from_spec should have received a cmd referencing the resolved SLP
+        # Signature: execute_from_spec(channel, cmd, job_id, ...)
+        call_args = worker.job_executor.execute_from_spec.call_args
+        cmd = call_args.args[1]
+        assert any(resolved_slp in tok for tok in cmd)
+
+    @pytest.mark.asyncio
+    async def test_no_video_mappings_no_resolved_slp(
+        self, worker, mock_channel, temp_mount
+    ):
+        """When only an SLP mapping is present (no video mappings), no resolved SLP is written."""
+        config_yaml = "model_config:\n  backbone: unet\n"
+        slp_path = str(temp_mount / "labels.slp")
+
+        spec_dict = {
+            "type": "train",
+            "config_content": config_yaml,
+            "labels_path": slp_path,
+            "path_mappings": {
+                "/Volumes/data/labels.slp": slp_path,
+            },
+        }
+        message = build_submit_message(spec_dict)
+
+        mock_fm = MagicMock()
+        worker.file_manager = mock_fm
+
+        await worker.handle_job_submit(mock_channel, message)
+
+        mock_fm.write_slp_with_new_paths.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_write_slp_error_falls_back_to_original(
+        self, worker, mock_channel, temp_mount
+    ):
+        """When write_slp_with_new_paths fails, the original labels_path is used in the cmd."""
+        config_yaml = "model_config:\n  backbone: unet\n"
+        slp_path = str(temp_mount / "labels.slp")
+
+        spec_dict = {
+            "type": "train",
+            "config_content": config_yaml,
+            "labels_path": slp_path,
+            "path_mappings": {
+                "/Volumes/data/labels.slp": slp_path,
+                "/Volumes/data/vid.mp4": str(temp_mount / "vid.mp4"),
+            },
+        }
+        message = build_submit_message(spec_dict)
+
+        mock_fm = MagicMock()
+        mock_fm.write_slp_with_new_paths.return_value = {
+            "error": "sleap-io not available"
+        }
+        worker.file_manager = mock_fm
+
+        await worker.handle_job_submit(mock_channel, message)
+
+        # Should fall back: cmd references original slp_path, not a resolved path
+        call_args = worker.job_executor.execute_from_spec.call_args
+        cmd = call_args.args[1]
+        assert any(slp_path in tok for tok in cmd)
