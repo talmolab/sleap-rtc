@@ -120,9 +120,7 @@ class TestBuildTrainCommand:
 
         cmd = builder.build_train_command(spec)
 
-        assert (
-            "trainer_config.resume_ckpt_path=/vast/models/checkpoint.ckpt" in cmd
-        )
+        assert "trainer_config.resume_ckpt_path=/vast/models/checkpoint.ckpt" in cmd
 
     def test_zmq_ports_default(self):
         """Test default ZMQ ports are included."""
@@ -132,8 +130,13 @@ class TestBuildTrainCommand:
         cmd = builder.build_train_command(spec)
 
         # + prefix is required for Hydra to append keys not in schema
-        assert f"++trainer_config.zmq.controller_port={DEFAULT_ZMQ_PORTS['controller']}" in cmd
-        assert f"++trainer_config.zmq.publish_port={DEFAULT_ZMQ_PORTS['publish']}" in cmd
+        assert (
+            f"++trainer_config.zmq.controller_port={DEFAULT_ZMQ_PORTS['controller']}"
+            in cmd
+        )
+        assert (
+            f"++trainer_config.zmq.publish_port={DEFAULT_ZMQ_PORTS['publish']}" in cmd
+        )
 
     def test_zmq_ports_custom(self):
         """Test custom ZMQ ports are used."""
@@ -177,6 +180,124 @@ class TestBuildTrainCommand:
         assert "trainer_config.optimizer.lr=0.0001" in cmd
         assert "trainer_config.run_name=exp1" in cmd
         assert "trainer_config.resume_ckpt_path=/vast/models/ckpt.ckpt" in cmd
+
+
+class TestBuildTrainCommandVideoPathMap:
+    """Tests for --video-path-map passthrough in train commands."""
+
+    def test_no_path_mappings_no_video_path_map_args(self):
+        """No path_mappings → no --video-path-map in command."""
+        builder = CommandBuilder()
+        spec = TrainJobSpec(config_path="/vast/config.yaml")
+
+        cmd = builder.build_train_command(spec)
+
+        assert "--video-path-map" not in cmd
+
+    def test_empty_path_mappings_no_video_path_map_args(self):
+        """Empty path_mappings dict → no --video-path-map in command."""
+        builder = CommandBuilder()
+        spec = TrainJobSpec(
+            config_path="/vast/config.yaml",
+            path_mappings={},
+        )
+
+        cmd = builder.build_train_command(spec)
+
+        assert "--video-path-map" not in cmd
+
+    def test_single_video_mapping_added(self):
+        """Single video path mapping produces one --video-path-map OLD NEW pair."""
+        builder = CommandBuilder()
+        spec = TrainJobSpec(
+            config_path="/vast/config.yaml",
+            path_mappings={"/Volumes/data/vid.mp4": "/root/data/vid.mp4"},
+        )
+
+        cmd = builder.build_train_command(spec)
+
+        assert "--video-path-map" in cmd
+        idx = cmd.index("--video-path-map")
+        assert cmd[idx + 1] == "/Volumes/data/vid.mp4"
+        assert cmd[idx + 2] == "/root/data/vid.mp4"
+
+    def test_multiple_video_mappings_all_added(self):
+        """Multiple video path mappings all produce --video-path-map pairs."""
+        builder = CommandBuilder()
+        spec = TrainJobSpec(
+            config_path="/vast/config.yaml",
+            path_mappings={
+                "/Volumes/data/vid1.mp4": "/root/data/vid1.mp4",
+                "/Volumes/data/vid2.mp4": "/root/data/vid2.mp4",
+            },
+        )
+
+        cmd = builder.build_train_command(spec)
+
+        assert cmd.count("--video-path-map") == 2
+        assert "/Volumes/data/vid1.mp4" in cmd
+        assert "/root/data/vid1.mp4" in cmd
+        assert "/Volumes/data/vid2.mp4" in cmd
+        assert "/root/data/vid2.mp4" in cmd
+
+    def test_slp_mapping_is_skipped(self):
+        """The SLP file mapping (new_path == labels_path) is excluded from --video-path-map."""
+        builder = CommandBuilder()
+        spec = TrainJobSpec(
+            config_path="/vast/config.yaml",
+            labels_path="/root/data/labels.slp",
+            path_mappings={
+                "/Volumes/data/labels.slp": "/root/data/labels.slp",
+                "/Volumes/data/vid.mp4": "/root/data/vid.mp4",
+            },
+        )
+
+        cmd = builder.build_train_command(spec)
+
+        # Only the video mapping should appear, not the SLP one
+        assert cmd.count("--video-path-map") == 1
+        idx = cmd.index("--video-path-map")
+        assert cmd[idx + 1] == "/Volumes/data/vid.mp4"
+        assert cmd[idx + 2] == "/root/data/vid.mp4"
+        assert "/Volumes/data/labels.slp" not in cmd
+        # labels_path appears only inside the Hydra override, not as a bare path-map arg
+        assert not any(s == "/root/data/labels.slp" for s in cmd)
+
+    def test_tif_sequence_mappings_added(self):
+        """TIF image sequence paths are passed as --video-path-map (the main bug fix)."""
+        builder = CommandBuilder()
+        spec = TrainJobSpec(
+            config_path="/vast/config.yaml",
+            labels_path="/root/data/labels.slp",
+            path_mappings={
+                "/Volumes/data/labels.slp": "/root/data/labels.slp",
+                "/Volumes/data/frames/001.tif": "/root/data/frames/001.tif",
+                "/Volumes/data/frames/002.tif": "/root/data/frames/002.tif",
+            },
+        )
+
+        cmd = builder.build_train_command(spec)
+
+        assert cmd.count("--video-path-map") == 2
+        assert "/Volumes/data/frames/001.tif" in cmd
+        assert "/root/data/frames/001.tif" in cmd
+        assert "/Volumes/data/frames/002.tif" in cmd
+        assert "/root/data/frames/002.tif" in cmd
+
+    def test_video_path_map_ordering(self):
+        """--video-path-map pairs appear as consecutive OLD NEW triplets in the command."""
+        builder = CommandBuilder()
+        spec = TrainJobSpec(
+            config_path="/vast/config.yaml",
+            path_mappings={"/old/vid.mp4": "/new/vid.mp4"},
+        )
+
+        cmd = builder.build_train_command(spec)
+
+        idx = cmd.index("--video-path-map")
+        assert cmd[idx] == "--video-path-map"
+        assert cmd[idx + 1] == "/old/vid.mp4"
+        assert cmd[idx + 2] == "/new/vid.mp4"
 
 
 class TestBuildTrackCommand:
@@ -362,7 +483,9 @@ class TestBuildCommandGeneric:
         builder = CommandBuilder()
         spec = TrainJobSpec(config_path="/vast/config.yaml")
 
-        cmd = builder.build_command(spec, zmq_ports={"controller": 5000, "publish": 5001})
+        cmd = builder.build_command(
+            spec, zmq_ports={"controller": 5000, "publish": 5001}
+        )
 
         # + prefix is required for Hydra to append keys not in schema
         assert "++trainer_config.zmq.controller_port=5000" in cmd
