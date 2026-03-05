@@ -43,15 +43,17 @@ class TestStopEarlySendsSignal:
     def test_stop_command_kills_process_group_with_sigint(self):
         """send_control_message('{"command":"stop"}') must SIGINT the whole process group."""
         executor = self._make_executor()
-        with patch("os.killpg") as mock_killpg, \
-             patch("os.getpgid", return_value=99999):
+        with patch("os.killpg") as mock_killpg, patch("os.getpgid", return_value=99999):
             executor.send_control_message('{"command": "stop"}')
             mock_killpg.assert_called_once_with(99999, signal.SIGINT)
 
     def test_stop_command_still_forwards_zmq_message(self):
         """ZMQ forwarding must not be skipped when the process group is signalled."""
         executor = self._make_executor()
-        with patch("os.killpg", create=True), patch("os.getpgid", return_value=99999, create=True):
+        with (
+            patch("os.killpg", create=True),
+            patch("os.getpgid", return_value=99999, create=True),
+        ):
             executor.send_control_message('{"command": "stop"}')
         executor._progress_reporter.send_control_message.assert_called_once_with(
             '{"command": "stop"}'
@@ -92,8 +94,7 @@ class TestStopRunningJob:
     def test_stop_running_job_kills_process_group_with_sigint(self):
         """stop_running_job must send SIGINT to the process group, not just the PID."""
         executor = self._make_executor()
-        with patch("os.killpg") as mock_killpg, \
-             patch("os.getpgid", return_value=99999):
+        with patch("os.killpg") as mock_killpg, patch("os.getpgid", return_value=99999):
             executor.stop_running_job()
         mock_killpg.assert_called_once_with(99999, signal.SIGINT)
 
@@ -101,8 +102,7 @@ class TestStopRunningJob:
     def test_cancel_running_job_kills_process_group_with_sigterm(self):
         """cancel_running_job must send SIGTERM to the process group, not just the PID."""
         executor = self._make_executor()
-        with patch("os.killpg") as mock_killpg, \
-             patch("os.getpgid", return_value=99999):
+        with patch("os.killpg") as mock_killpg, patch("os.getpgid", return_value=99999):
             executor.cancel_running_job()
         mock_killpg.assert_called_once_with(99999, signal.SIGTERM)
 
@@ -124,6 +124,8 @@ class TestStopRequestedFlag:
         proc.returncode = returncode
         proc.stdout = AsyncMock()
         proc.stdout.read = AsyncMock(return_value=b"")
+        proc.stderr = AsyncMock()
+        proc.stderr.read = AsyncMock(return_value=b"")
         proc.wait = AsyncMock()
         return proc
 
@@ -139,25 +141,32 @@ class TestStopRequestedFlag:
         mock_reporter = MagicMock()
 
         # Simulate stop command arriving before process exits
-        with patch("os.killpg", create=True), patch("os.getpgid", return_value=99999, create=True):
+        with (
+            patch("os.killpg", create=True),
+            patch("os.getpgid", return_value=99999, create=True),
+        ):
             executor.send_control_message('{"command": "stop"}')
 
-        with patch("asyncio.create_subprocess_exec",
-                   new=AsyncMock(return_value=self._make_process(1))):
+        with patch(
+            "asyncio.create_subprocess_exec",
+            new=AsyncMock(return_value=self._make_process(1)),
+        ):
             await executor.execute_from_spec(
-                mock_channel, ["sleap-nn", "train"], "job_1",
+                mock_channel,
+                ["sleap-nn", "train"],
+                "job_1",
                 job_type="train",
                 zmq_ports={"controller": 9000, "publish": 9001},
                 progress_reporter=mock_reporter,
             )
 
         sent = [str(c) for c in mock_channel.send.call_args_list]
-        assert any(MSG_JOB_COMPLETE in s for s in sent), (
-            f"Expected JOB_COMPLETE but got: {sent}"
-        )
-        assert not any(MSG_JOB_FAILED in s for s in sent), (
-            f"JOB_FAILED must not be sent after a requested stop: {sent}"
-        )
+        assert any(
+            MSG_JOB_COMPLETE in s for s in sent
+        ), f"Expected JOB_COMPLETE but got: {sent}"
+        assert not any(
+            MSG_JOB_FAILED in s for s in sent
+        ), f"JOB_FAILED must not be sent after a requested stop: {sent}"
 
     @pytest.mark.asyncio
     async def test_exit_code_1_without_stop_sends_job_failed(self):
@@ -168,19 +177,23 @@ class TestStopRequestedFlag:
         mock_channel = MagicMock()
         mock_channel.readyState = "open"
 
-        with patch("asyncio.create_subprocess_exec",
-                   new=AsyncMock(return_value=self._make_process(1))):
+        with patch(
+            "asyncio.create_subprocess_exec",
+            new=AsyncMock(return_value=self._make_process(1)),
+        ):
             await executor.execute_from_spec(
-                mock_channel, ["sleap-nn", "train"], "job_1",
+                mock_channel,
+                ["sleap-nn", "train"],
+                "job_1",
                 job_type="train",
                 zmq_ports={"controller": 9000, "publish": 9001},
                 progress_reporter=MagicMock(),
             )
 
         sent = [str(c) for c in mock_channel.send.call_args_list]
-        assert any(MSG_JOB_FAILED in s for s in sent), (
-            f"Expected JOB_FAILED for genuine failure: {sent}"
-        )
+        assert any(
+            MSG_JOB_FAILED in s for s in sent
+        ), f"Expected JOB_FAILED for genuine failure: {sent}"
 
     @pytest.mark.asyncio
     async def test_stop_flag_resets_for_next_job(self):
@@ -195,13 +208,20 @@ class TestStopRequestedFlag:
         mock_reporter = MagicMock()
 
         # Model 1: stop requested, exits with 1
-        with patch("os.killpg", create=True), patch("os.getpgid", return_value=99999, create=True):
+        with (
+            patch("os.killpg", create=True),
+            patch("os.getpgid", return_value=99999, create=True),
+        ):
             executor.send_control_message('{"command": "stop"}')
 
-        with patch("asyncio.create_subprocess_exec",
-                   new=AsyncMock(return_value=self._make_process(1))):
+        with patch(
+            "asyncio.create_subprocess_exec",
+            new=AsyncMock(return_value=self._make_process(1)),
+        ):
             await executor.execute_from_spec(
-                mock_channel, ["sleap-nn", "train"], "job_1",
+                mock_channel,
+                ["sleap-nn", "train"],
+                "job_1",
                 job_type="train",
                 zmq_ports={"controller": 9000, "publish": 9001},
                 progress_reporter=mock_reporter,
@@ -209,19 +229,23 @@ class TestStopRequestedFlag:
 
         # Model 2: no stop requested, exits with 1 (genuine failure)
         mock_channel.send.reset_mock()
-        with patch("asyncio.create_subprocess_exec",
-                   new=AsyncMock(return_value=self._make_process(1))):
+        with patch(
+            "asyncio.create_subprocess_exec",
+            new=AsyncMock(return_value=self._make_process(1)),
+        ):
             await executor.execute_from_spec(
-                mock_channel, ["sleap-nn", "train"], "job_2",
+                mock_channel,
+                ["sleap-nn", "train"],
+                "job_2",
                 job_type="train",
                 zmq_ports={"controller": 9000, "publish": 9001},
                 progress_reporter=mock_reporter,
             )
 
         sent = [str(c) for c in mock_channel.send.call_args_list]
-        assert any(MSG_JOB_FAILED in s for s in sent), (
-            f"Model 2 genuine failure must send JOB_FAILED: {sent}"
-        )
+        assert any(
+            MSG_JOB_FAILED in s for s in sent
+        ), f"Model 2 genuine failure must send JOB_FAILED: {sent}"
 
 
 class TestWatchdogSigintFallback:
@@ -270,22 +294,28 @@ class TestWatchdogSigintFallback:
         mock_channel.readyState = "open"
 
         # Patch asyncio.sleep so the 30-second watchdog cycle fires immediately.
-        with patch("os.killpg", side_effect=fake_killpg), \
-             patch("os.getpgid", return_value=99999), \
-             patch("sleap_rtc.worker.job_executor._WATCHDOG_INTERVAL_SECS", 0), \
-             patch("asyncio.create_subprocess_exec",
-                   new=AsyncMock(return_value=linger_process)):
+        with (
+            patch("os.killpg", side_effect=fake_killpg),
+            patch("os.getpgid", return_value=99999),
+            patch("sleap_rtc.worker.job_executor._WATCHDOG_INTERVAL_SECS", 0),
+            patch(
+                "asyncio.create_subprocess_exec",
+                new=AsyncMock(return_value=linger_process),
+            ),
+        ):
             executor._stop_requested = True
             await executor.execute_from_spec(
-                mock_channel, ["sleep", "999"], "job_1",
+                mock_channel,
+                ["sleep", "999"],
+                "job_1",
                 job_type="train",
                 zmq_ports={"controller": 9000, "publish": 9001},
                 progress_reporter=MagicMock(),
             )
 
-        assert any(sig == signal.SIGINT for _, sig in sigint_calls), (
-            "Watchdog must send SIGINT when stop was requested and process lingers"
-        )
+        assert any(
+            sig == signal.SIGINT for _, sig in sigint_calls
+        ), "Watchdog must send SIGINT when stop was requested and process lingers"
 
 
 class TestSubprocessNewSession:
@@ -305,14 +335,18 @@ class TestSubprocessNewSession:
         mock_channel = MagicMock()
         mock_channel.readyState = "open"
 
-        with patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=mock_process)) as mock_exec:
+        with patch(
+            "asyncio.create_subprocess_exec", new=AsyncMock(return_value=mock_process)
+        ) as mock_exec:
             await executor.execute_from_spec(
-                mock_channel, ["echo", "done"], "job_1",
+                mock_channel,
+                ["echo", "done"],
+                "job_1",
                 job_type="train",
                 zmq_ports={"controller": 9000, "publish": 9001},
                 progress_reporter=MagicMock(),
             )
             _, kwargs = mock_exec.call_args
-            assert kwargs.get("start_new_session") is True, (
-                "subprocess must be started in its own session so killpg is safe"
-            )
+            assert (
+                kwargs.get("start_new_session") is True
+            ), "subprocess must be started in its own session so killpg is safe"

@@ -1058,10 +1058,12 @@ class JobExecutor:
 
             # Memory monitor: log worker + full process tree RSS + VRAM every 30 s.
             worker_pid = os.getpid()
+            _w = _read_rss_mb(worker_pid)
+            _p = _read_rss_mb(process.pid)
             logging.info(
                 f"[JOB {job_id}] Memory at job start — "
-                f"worker: {_read_rss_mb(worker_pid) or '?':.0f} MB, "
-                f"subprocess: {_read_rss_mb(process.pid) or '?':.0f} MB"
+                f"worker: {f'{_w:.0f}' if _w is not None else '?'} MB, "
+                f"subprocess: {f'{_p:.0f}' if _p is not None else '?'} MB"
             )
 
             async def _memory_monitor():
@@ -1212,9 +1214,10 @@ class JobExecutor:
                 stderr_task.cancel()
             watchdog_task.cancel()
             memory_monitor_task.cancel()
+            _w = _read_rss_mb(worker_pid)
             logging.info(
                 f"[JOB {job_id}] Memory at job end — "
-                f"worker: {_read_rss_mb(worker_pid) or '?':.0f} MB"
+                f"worker: {f'{_w:.0f}' if _w is not None else '?'} MB"
             )
             logging.info(
                 f"[JOB {job_id}] Stdout stream ended — waiting for PID {process.pid} to exit"
