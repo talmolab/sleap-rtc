@@ -101,22 +101,6 @@ class CommandBuilder:
         )
         cmd.append(f"++trainer_config.zmq.publish_port={ports.get('publish', 9001)}")
 
-        # Pass video path mappings to sleap-nn so it can remap video paths
-        # inside the SLP file before opening videos.  Without this, sleap-nn
-        # reads the original (client-side) paths from the SLP and gets
-        # FileNotFoundError — especially for TIF image sequences where the
-        # sleap-io make_video() fallback is disabled.
-        #
-        # sleap-nn forwards --video-path-map through a temp YAML file when
-        # spawning a DDP subprocess (--video-config), so multi-GPU is safe.
-        if spec.path_mappings:
-            for old_path, new_path in spec.path_mappings.items():
-                # Skip the SLP file mapping — that is already handled by
-                # train_labels_path and does not need video remapping.
-                if old_path == spec.labels_path or new_path == spec.labels_path:
-                    continue
-                cmd.extend(["--video-path-map", old_path, new_path])
-
         return cmd
 
     def build_train_commands(

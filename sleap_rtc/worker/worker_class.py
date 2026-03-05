@@ -2152,6 +2152,39 @@ class RTCWorkerClient:
                 if spec.val_labels_path and spec.val_labels_path in mappings:
                     spec.val_labels_path = mappings[spec.val_labels_path]
 
+                # Build video-only filename_map (exclude the SLP file mapping itself)
+                # and write a resolved SLP so sleap-nn never sees stale video paths.
+                # write_slp_with_new_paths uses open_videos=False, avoiding ~14s/video
+                # OpenCV timeouts on non-existent NFS paths.
+                for slp_attr in ("labels_path", "val_labels_path"):
+                    slp_path = getattr(spec, slp_attr, None)
+                    if not slp_path:
+                        continue
+                    video_mappings = {
+                        old: new
+                        for old, new in mappings.items()
+                        if old != slp_path and new != slp_path
+                    }
+                    if video_mappings and self.file_manager:
+                        output_dir = str(Path(slp_path).parent)
+                        result = self.file_manager.write_slp_with_new_paths(
+                            slp_path=slp_path,
+                            output_dir=output_dir,
+                            filename_map=video_mappings,
+                        )
+                        if "error" not in result:
+                            resolved_slp = result["output_path"]
+                            logging.info(
+                                f"Wrote resolved SLP with {result['videos_updated']} "
+                                f"video paths updated: {resolved_slp}"
+                            )
+                            setattr(spec, slp_attr, resolved_slp)
+                        else:
+                            logging.warning(
+                                f"Failed to write resolved SLP for {slp_attr}: "
+                                f"{result['error']}. Falling back to original SLP."
+                            )
+
             # If spec has config_contents, write each to a temp file and set config_paths
             temp_config_paths: list[str] = []
             if isinstance(spec, TrainJobSpec) and getattr(
