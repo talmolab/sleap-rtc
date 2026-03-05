@@ -623,7 +623,7 @@ class TestWriteSlpWithNewPaths:
 
             # Verify sleap_io calls
             mock_sio.load_file.assert_called_once_with(str(slp_file), open_videos=False)
-            mock_labels.replace_filenames.assert_called_once_with(filename_map=filename_map)
+            mock_labels.replace_filenames.assert_called_once_with(filename_map=filename_map, open_videos=False)
             mock_labels.save.assert_called_once()
 
             # Check output path format
