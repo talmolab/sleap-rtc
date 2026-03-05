@@ -1969,6 +1969,10 @@ class PathResolutionDialog(QDialog):
                 elif video.suggestions:
                     path_edit.setText(video.suggestions[0])
 
+                if path_edit.text().strip():
+                    status_item.setText("✓ Resolved")
+                    status_item.setForeground(Qt.darkGreen)
+
                 path_edit.textChanged.connect(self._on_path_changed)
                 self._path_edit_to_row[path_edit] = row
                 path_layout.addWidget(path_edit)
