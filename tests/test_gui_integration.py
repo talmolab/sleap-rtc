@@ -1528,6 +1528,21 @@ class TestPathResolutionDialogBrowser:
     def send_fn(self):
         return MagicMock()
 
+    @pytest.fixture(autouse=True)
+    def suppress_cascade_confirm(self, monkeypatch):
+        """Suppress the cascade-fill QMessageBox in all tests in this class.
+
+        _on_path_changed shows a modal confirmation dialog when a path is filled
+        and other empty sibling rows exist. In headless CI this hangs. Patch it
+        at the module level so any dialog created in a test is unaffected.
+        """
+        from qtpy.QtWidgets import QMessageBox
+
+        monkeypatch.setattr(
+            "sleap_rtc.gui.widgets.QMessageBox.question",
+            lambda *a, **kw: QMessageBox.No,
+        )
+
     @pytest.fixture
     def missing_videos(self):
         return [
@@ -1580,13 +1595,9 @@ class TestPathResolutionDialogBrowser:
 
     def test_file_selected_fills_target_row(self, qapp, missing_videos, send_fn):
         """Selecting a file in browser should fill the target row's path."""
-        from qtpy.QtWidgets import QMessageBox
-
         from sleap_rtc.gui.widgets import PathResolutionDialog
 
         dialog = PathResolutionDialog(missing_videos, send_fn=send_fn)
-        # Suppress cascade-fill confirmation dialog in headless test environment.
-        dialog._cascade_confirm = lambda *a, **kw: QMessageBox.No
 
         # Browse for first row
         dialog._on_browse_path(0)
@@ -1601,13 +1612,9 @@ class TestPathResolutionDialogBrowser:
 
     def test_browse_different_rows(self, qapp, missing_videos, send_fn):
         """Browsing different rows should target the correct path edit."""
-        from qtpy.QtWidgets import QMessageBox
-
         from sleap_rtc.gui.widgets import PathResolutionDialog
 
         dialog = PathResolutionDialog(missing_videos, send_fn=send_fn)
-        # Suppress cascade-fill confirmation dialog in headless test environment.
-        dialog._cascade_confirm = lambda *a, **kw: QMessageBox.No
 
         # Browse for row 1 (video2.avi)
         dialog._on_browse_path(1)
