@@ -1058,11 +1058,19 @@ class FileManager:
 
         # Apply filename replacements
         try:
-            labels.replace_filenames(filename_map=filename_map)
+            labels.replace_filenames(filename_map=filename_map, open_videos=False)
         except Exception as e:
             return {
                 "error": f"Failed to replace filenames: {e}",
             }
+
+        # Workaround for sleap-io bug: replace_filename sets
+        # backend_metadata["filename"] to a list for image sequences, but
+        # make_video expects it to be a string (with "filenames" as the list).
+        for video in labels.videos:
+            if isinstance(video.filename, list) and video.backend_metadata:
+                video.backend_metadata["filename"] = video.filename[0]
+                video.backend_metadata["filenames"] = video.filename
 
         # Use custom filename if provided, otherwise generate default
         if output_filename:
