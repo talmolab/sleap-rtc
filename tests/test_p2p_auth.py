@@ -201,7 +201,8 @@ class TestFetchAuthorizedKeysCache:
 
     async def test_stale_cache_triggers_http(self, worker):
         worker._authorized_public_keys = [{"public_key": "abc"}]
-        worker._auth_keys_last_fetched = 0.0  # Long ago (epoch)
+        # Set last_fetched to guaranteed-stale value regardless of system uptime
+        worker._auth_keys_last_fetched = time.monotonic() - worker._AUTH_KEYS_TTL - 1
 
         mock_response = AsyncMock()
         mock_response.status = 200
