@@ -1358,7 +1358,7 @@ def key_create(name, save):
 @click.option("--yes", "-y", is_flag=True, help="Skip confirmation.")
 def key_revoke(key_id, yes):
     """Revoke an account key by its ID."""
-    from sleap_rtc.auth.credentials import get_account_key, get_jwt
+    from sleap_rtc.auth.credentials import get_account_key, get_jwt, remove_account_key
     from sleap_rtc.config import get_config
 
     if not yes and not click.confirm(
@@ -1385,6 +1385,10 @@ def key_revoke(key_id, yes):
         sys.exit(1)
 
     click.echo(f"Key {key_id[:20]}... revoked.")
+
+    if get_account_key() == key_id:
+        remove_account_key()
+        click.echo("Removed from local credentials (was your saved key).")
 
 
 @key.command(name="show")

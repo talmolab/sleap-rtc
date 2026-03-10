@@ -311,6 +311,14 @@ def save_account_key(key: str) -> None:
     logger.debug("Saved account key to credentials")
 
 
+def remove_account_key() -> None:
+    """Remove the stored account key from credentials."""
+    creds = get_credentials()
+    creds.pop("account_key", None)
+    save_credentials(creds)
+    logger.debug("Removed account key from credentials")
+
+
 def get_default_room() -> Optional[str]:
     """Get the default room ID, preferring SLEAP_RTC_DEFAULT_ROOM env var.
 
