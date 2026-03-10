@@ -3256,24 +3256,23 @@ class RTCWorkerClient:
             # Authentication: API key required
             if not api_key:
                 logging.error(
-                    "No API key provided. Workers require an API key. "
-                    "Create one with: sleap-rtc token create --room <id> --name <name>"
+                    "No account key found. Workers require an account key.\n"
+                    "  1. sleap-rtc login              # log in and generate a keypair\n"
+                    "  2. sleap-rtc key create --save  # create and save an account key\n"
+                    "  3. sleap-rtc worker             # start the worker\n"
+                    "Or set: SLEAP_RTC_ACCOUNT_KEY=slp_acct_xxx..."
                 )
                 return
 
-            logging.info("Using API key authentication...")
+            logging.info("Using account key authentication...")
 
-            # Load room secret for P2P PSK authentication
+            # Load room secret for P2P PSK authentication (legacy backward compat)
             # Priority: CLI flag > env var > filesystem > config
             self._room_secret = resolve_secret(
                 room_id or "default", cli_secret=room_secret
             )
             if self._room_secret:
                 logging.info("P2P PSK authentication enabled (room secret configured)")
-            else:
-                logging.info(
-                    "P2P PSK authentication disabled (no room secret configured)"
-                )
 
             # Generate a worker peer ID based on API key prefix
             peer_id = f"worker-{api_key[4:12]}-{socket.gethostname()[:8]}"
