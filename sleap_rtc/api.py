@@ -495,27 +495,21 @@ def list_workers(room_id: str) -> list[Worker]:
         RoomNotFoundError: If room does not exist or user lacks access.
     """
     import asyncio
-    from sleap_rtc.auth.credentials import get_valid_jwt, get_room_secret
+    from sleap_rtc.auth.credentials import get_valid_jwt
     from sleap_rtc.config import get_config
 
     jwt = get_valid_jwt()
     if jwt is None:
         raise AuthenticationError("Not logged in. Call login() first.")
 
-    room_secret = get_room_secret(room_id)
-    if room_secret is None:
-        raise RoomNotFoundError(
-            f"No access to room '{room_id}'. You may need to join the room first."
-        )
-
     config = get_config()
 
     # Run async worker discovery in sync context
-    return asyncio.run(_discover_workers_async(config, jwt, room_id, room_secret))
+    return asyncio.run(_discover_workers_async(config, jwt, room_id))
 
 
 async def _discover_workers_async(
-    config, jwt: str, room_id: str, room_secret: str
+    config, jwt: str, room_id: str
 ) -> list[Worker]:
     """Async implementation of worker discovery.
 
@@ -538,7 +532,6 @@ async def _discover_workers_async(
                 "type": "register",
                 "peer_id": peer_id,
                 "room_id": room_id,
-                "token": room_secret,
                 "role": "client",
                 "jwt": jwt,
                 "metadata": {
@@ -675,28 +668,27 @@ def check_video_paths(
 async def _authenticate_channel(
     data_channel,
     response_queue: "asyncio.Queue",
-    room_secret: str,
+    room_secret: str | None = None,
     timeout: float = 15.0,
 ) -> None:
-    """Complete PSK authentication handshake on a data channel.
+    """Complete P2P authentication handshake on a data channel.
 
     After a data channel opens, the worker sends an AUTH_CHALLENGE with a nonce.
-    This function handles the full handshake:
+    This function handles the full handshake using Ed25519-first auth:
     1. Receives AUTH_CHALLENGE with nonce
-    2. Computes HMAC-SHA256(secret, nonce) and sends AUTH_RESPONSE
+    2. Signs nonce with stored Ed25519 private key (or falls back to PSK HMAC)
     3. Waits for AUTH_SUCCESS
 
     Args:
         data_channel: The open WebRTC data channel.
         response_queue: Queue that receives all messages from the channel.
-        room_secret: The shared room secret for HMAC computation.
+        room_secret: Optional PSK for HMAC fallback (legacy, backward compat).
         timeout: Max seconds to wait for each auth message.
 
     Raises:
         ConfigurationError: If authentication fails or times out.
     """
     import asyncio
-    from sleap_rtc.auth.psk import compute_hmac
     from sleap_rtc.protocol import (
         MSG_AUTH_CHALLENGE,
         MSG_AUTH_RESPONSE,
@@ -720,9 +712,33 @@ async def _authenticate_channel(
         raise ConfigurationError("Invalid AUTH_CHALLENGE format")
     nonce = parts[1]
 
-    # Compute HMAC and send response
-    hmac_response = compute_hmac(room_secret, nonce)
-    data_channel.send(f"{MSG_AUTH_RESPONSE}{MSG_SEPARATOR}{hmac_response}")
+    # Build auth response: Ed25519 first, PSK fallback, then "missing"
+    auth_payload = None
+
+    # Path A: Ed25519 — sign with stored private key
+    from sleap_rtc.auth.credentials import get_private_key_b64
+
+    priv_b64 = get_private_key_b64()
+    if priv_b64:
+        try:
+            from sleap_rtc.auth.keypair import private_key_from_b64, sign_nonce
+
+            private_key = private_key_from_b64(priv_b64)
+            auth_payload = sign_nonce(private_key, nonce)
+        except Exception:
+            pass  # Fall through to PSK
+
+    # Path B: PSK (room_secret configured) — backward compat
+    if auth_payload is None and room_secret:
+        from sleap_rtc.auth.psk import compute_hmac
+
+        auth_payload = compute_hmac(room_secret, nonce)
+
+    # Path C: No credentials
+    if auth_payload is None:
+        auth_payload = "missing"
+
+    data_channel.send(f"{MSG_AUTH_RESPONSE}{MSG_SEPARATOR}{auth_payload}")
 
     # Wait for AUTH_SUCCESS or AUTH_FAILURE
     try:
@@ -755,7 +771,7 @@ async def _check_video_paths_async(
     import uuid
     import websockets
     from aiortc import RTCPeerConnection, RTCSessionDescription
-    from sleap_rtc.auth.credentials import get_valid_jwt, get_room_secret
+    from sleap_rtc.auth.credentials import get_valid_jwt
     from sleap_rtc.config import get_config
     from sleap_rtc.protocol import (
         MSG_USE_WORKER_PATH,
@@ -768,12 +784,6 @@ async def _check_video_paths_async(
     jwt = get_valid_jwt()
     if jwt is None:
         raise AuthenticationError("Not logged in. Call login() first.")
-
-    room_secret = get_room_secret(room_id)
-    if room_secret is None:
-        raise RoomNotFoundError(
-            f"No access to room '{room_id}'. You may need to join the room first."
-        )
 
     config = get_config()
     peer_id = f"api-pathcheck-{uuid.uuid4().hex[:8]}"
@@ -792,7 +802,6 @@ async def _check_video_paths_async(
                 "type": "register",
                 "peer_id": peer_id,
                 "room_id": room_id,
-                "token": room_secret,
                 "role": "client",
                 "jwt": jwt,
                 "metadata": {
@@ -907,7 +916,7 @@ async def _check_video_paths_async(
             await asyncio.wait_for(channel_open.wait(), timeout=10.0)
 
             # Authenticate with worker via PSK
-            await _authenticate_channel(data_channel, response_queue, room_secret)
+            await _authenticate_channel(data_channel, response_queue)
 
             # Thread-safe send wrapper for callbacks that may run in
             # executor threads (Qt dialogs).  Shared by on_path_rejected
@@ -1429,7 +1438,7 @@ async def _run_training_async(
     import uuid
     import websockets
     from aiortc import RTCPeerConnection, RTCSessionDescription
-    from sleap_rtc.auth.credentials import get_valid_jwt, get_room_secret
+    from sleap_rtc.auth.credentials import get_valid_jwt
     from sleap_rtc.config import get_config
     from sleap_rtc.protocol import (
         MSG_JOB_SUBMIT,
@@ -1445,12 +1454,6 @@ async def _run_training_async(
     jwt = get_valid_jwt()
     if jwt is None:
         raise AuthenticationError("Not logged in. Call login() first.")
-
-    room_secret = get_room_secret(room_id)
-    if room_secret is None:
-        raise RoomNotFoundError(
-            f"No access to room '{room_id}'. You may need to join the room first."
-        )
 
     config = get_config()
     peer_id = f"api-train-{uuid.uuid4().hex[:8]}"
@@ -1503,7 +1506,6 @@ async def _run_training_async(
                 "type": "register",
                 "peer_id": peer_id,
                 "room_id": room_id,
-                "token": room_secret,
                 "role": "client",
                 "jwt": jwt,
                 "metadata": {
@@ -1601,7 +1603,7 @@ async def _run_training_async(
             await asyncio.wait_for(channel_open.wait(), timeout=30.0)
 
             # Authenticate with worker via PSK
-            await _authenticate_channel(data_channel, response_queue, room_secret)
+            await _authenticate_channel(data_channel, response_queue)
 
             # Expose thread-safe send function for bidirectional communication
             if on_channel_ready:
@@ -1927,7 +1929,7 @@ async def _run_inference_async(
     import uuid
     import websockets
     from aiortc import RTCPeerConnection, RTCSessionDescription
-    from sleap_rtc.auth.credentials import get_valid_jwt, get_room_secret
+    from sleap_rtc.auth.credentials import get_valid_jwt
     from sleap_rtc.config import get_config
     from sleap_rtc.protocol import (
         MSG_JOB_SUBMIT,
@@ -1943,12 +1945,6 @@ async def _run_inference_async(
     jwt = get_valid_jwt()
     if jwt is None:
         raise AuthenticationError("Not logged in. Call login() first.")
-
-    room_secret = get_room_secret(room_id)
-    if room_secret is None:
-        raise RoomNotFoundError(
-            f"No access to room '{room_id}'. You may need to join the room first."
-        )
 
     config = get_config()
     peer_id = f"api-infer-{uuid.uuid4().hex[:8]}"
@@ -1979,7 +1975,6 @@ async def _run_inference_async(
                 "type": "register",
                 "peer_id": peer_id,
                 "room_id": room_id,
-                "token": room_secret,
                 "role": "client",
                 "jwt": jwt,
                 "metadata": {
@@ -2069,7 +2064,7 @@ async def _run_inference_async(
             await asyncio.wait_for(channel_open.wait(), timeout=30.0)
 
             # Authenticate with worker via PSK
-            await _authenticate_channel(data_channel, response_queue, room_secret)
+            await _authenticate_channel(data_channel, response_queue)
 
             # Submit job
             spec_json = spec.to_json()

@@ -287,13 +287,6 @@ class TestListWorkers:
             with pytest.raises(AuthenticationError, match="Not logged in"):
                 list_workers("room-1")
 
-    def test_list_workers_no_room_access(self, mock_jwt):
-        """Should raise RoomNotFoundError when no room secret."""
-        with patch("sleap_rtc.auth.credentials.get_valid_jwt", return_value=mock_jwt):
-            with patch("sleap_rtc.auth.credentials.get_room_secret", return_value=None):
-                with pytest.raises(RoomNotFoundError, match="No access to room"):
-                    list_workers("room-1")
-
     def test_list_workers_success(self, mock_jwt, mock_config):
         """Should return list of Worker objects."""
         # This test mocks the async WebSocket flow
@@ -309,14 +302,13 @@ class TestListWorkers:
         ]
 
         with patch("sleap_rtc.auth.credentials.get_valid_jwt", return_value=mock_jwt):
-            with patch("sleap_rtc.auth.credentials.get_room_secret", return_value="secret"):
-                with patch("sleap_rtc.config.get_config", return_value=mock_config):
-                    with patch("asyncio.run", return_value=mock_workers):
-                        workers = list_workers("room-1")
-                        assert len(workers) == 1
-                        assert workers[0].name == "GPU Worker 1"
-                        assert workers[0].status == "available"
-                        assert workers[0].gpu_name == "RTX 4090"
+            with patch("sleap_rtc.config.get_config", return_value=mock_config):
+                with patch("asyncio.run", return_value=mock_workers):
+                    workers = list_workers("room-1")
+                    assert len(workers) == 1
+                    assert workers[0].name == "GPU Worker 1"
+                    assert workers[0].status == "available"
+                    assert workers[0].gpu_name == "RTX 4090"
 
 
 # =============================================================================
@@ -522,12 +514,6 @@ class TestCheckVideoPaths:
             with pytest.raises(AuthenticationError, match="Not logged in"):
                 check_video_paths("/data/project.slp", "room-1")
 
-    def test_check_video_paths_no_room_access(self, mock_jwt):
-        """Should raise RoomNotFoundError when no room secret."""
-        with patch("sleap_rtc.auth.credentials.get_valid_jwt", return_value=mock_jwt):
-            with patch("sleap_rtc.auth.credentials.get_room_secret", return_value=None):
-                with pytest.raises(RoomNotFoundError, match="No access to room"):
-                    check_video_paths("/data/project.slp", "room-1")
 
     def test_check_video_paths_success(self, mock_jwt, mock_config):
         """Should return PathCheckResult on success."""
@@ -882,12 +868,6 @@ class TestRunTraining:
             with pytest.raises(AuthenticationError, match="Not logged in"):
                 run_training("/config.yaml", "room-1")
 
-    def test_run_training_no_room_access(self, mock_jwt):
-        """Should raise RoomNotFoundError when no room secret."""
-        with patch("sleap_rtc.auth.credentials.get_valid_jwt", return_value=mock_jwt):
-            with patch("sleap_rtc.auth.credentials.get_room_secret", return_value=None):
-                with pytest.raises(RoomNotFoundError, match="No access to room"):
-                    run_training("/config.yaml", "room-1")
 
     def test_run_training_success(self, mock_jwt, mock_config):
         """Should return TrainingResult on success."""
@@ -955,12 +935,6 @@ class TestRunInference:
             with pytest.raises(AuthenticationError, match="Not logged in"):
                 run_inference("/data.slp", ["/model1"], "room-1")
 
-    def test_run_inference_no_room_access(self, mock_jwt):
-        """Should raise RoomNotFoundError when no room secret."""
-        with patch("sleap_rtc.auth.credentials.get_valid_jwt", return_value=mock_jwt):
-            with patch("sleap_rtc.auth.credentials.get_room_secret", return_value=None):
-                with pytest.raises(RoomNotFoundError, match="No access to room"):
-                    run_inference("/data.slp", ["/model1"], "room-1")
 
     def test_run_inference_success(self, mock_jwt, mock_config):
         """Should return InferenceResult on success."""

@@ -252,7 +252,6 @@ class WorkerSetupDialog(QDialog):
         self,
         room_name: str = "",
         room_id: str = "",
-        room_secret: str = "",
         parent: QWidget | None = None,
     ):
         super().__init__(parent)
@@ -260,7 +259,6 @@ class WorkerSetupDialog(QDialog):
         self.setMinimumWidth(600)
         self._room_name = room_name
         self._room_id = room_id
-        self._room_secret = room_secret
         self._setup_ui()
 
     def _setup_ui(self):
@@ -363,33 +361,19 @@ class WorkerSetupDialog(QDialog):
         step3_layout.addLayout(dashboard_layout)
         layout.addLayout(step3_layout)
 
-        # Step 4: Start the worker with room secret
+        # Step 4: Start the worker
         step4_layout = QVBoxLayout()
         step4_label = QLabel("4. Start the worker:")
         step4_layout.addWidget(step4_label)
 
-        # Build worker command with room secret if available
-        worker_cmd_parts = ["sleap-rtc worker", "--api-key YOUR_API_KEY"]
-        worker_cmd_parts.append('--name "My GPU Server"')
-        if self._room_secret:
-            worker_cmd_parts.append(f"--room-secret {self._room_secret}")
-
-        worker_cmd_str = " ".join(worker_cmd_parts)
+        # Build worker command using account key pattern
+        worker_cmd_str = 'sleap-rtc worker --account-key YOUR_ACCOUNT_KEY --name "My GPU Server"'
         self._worker_cmd = QLabel(f"   <code>{worker_cmd_str}</code>")
         self._worker_cmd.setTextFormat(Qt.RichText)
         self._worker_cmd.setStyleSheet("background-color: #f0f0f0; padding: 4px;")
         self._worker_cmd.setWordWrap(True)
         self._worker_cmd.setTextInteractionFlags(Qt.TextSelectableByMouse)
         step4_layout.addWidget(self._worker_cmd)
-
-        if self._room_secret:
-            secret_note = QLabel(
-                "   <i>Note: The room secret enables secure P2P communication. "
-                "The server never sees it.</i>"
-            )
-            secret_note.setTextFormat(Qt.RichText)
-            secret_note.setStyleSheet("color: #666;")
-            step4_layout.addWidget(secret_note)
 
         layout.addLayout(step4_layout)
 
@@ -422,12 +406,7 @@ class WorkerSetupDialog(QDialog):
 
     def _on_copy_commands(self):
         """Copy setup commands to clipboard."""
-        # Build worker command
-        worker_cmd_parts = ["sleap-rtc worker", "--api-key YOUR_API_KEY"]
-        worker_cmd_parts.append('--name "My GPU Server"')
-        if self._room_secret:
-            worker_cmd_parts.append(f"--room-secret {self._room_secret}")
-        worker_cmd = " ".join(worker_cmd_parts)
+        worker_cmd = 'sleap-rtc worker --account-key YOUR_ACCOUNT_KEY --name "My GPU Server"'
 
         commands = f"""# Install sleap-rtc (one time)
 uv tool install --python 3.11 sleap-rtc --with "sleap-nn[torch]" --with-executables-from sleap-nn --torch-backend auto
@@ -438,7 +417,7 @@ sleap-rtc login
 # Register the path where your training data is mounted
 sleap-rtc config add-mount /path/to/your/data/ "Your Mount Name"
 
-# Start the worker (replace YOUR_API_KEY with your API key from the dashboard)
+# Start the worker (replace YOUR_ACCOUNT_KEY with your account key ID)
 {worker_cmd}
 """
         clipboard = QApplication.clipboard()
@@ -3124,13 +3103,9 @@ class RemoteTrainingWidget(QGroupBox):
             self._room_combo.addItem("No rooms available", None)
         else:
             for i, room in enumerate(rooms):
-                has_secret = _has_room_secret(room.id)
-                if has_secret:
-                    display_text = f"{room.name} ({room.role})"
-                    if first_ready_room_index < 0:
-                        first_ready_room_index = i
-                else:
-                    display_text = f"{room.name} ({room.role}) [needs setup]"
+                display_text = f"{room.name} ({room.role})"
+                if first_ready_room_index < 0:
+                    first_ready_room_index = i
                 self._room_combo.addItem(display_text, room.id)
                 # Check if this is the pending selection
                 if (
@@ -3139,7 +3114,7 @@ class RemoteTrainingWidget(QGroupBox):
                 ):
                     select_index = i
 
-            # Default to first room with secret, or first room if none have secrets
+            # Default to first room
             if first_ready_room_index >= 0 and not self._pending_room_selection:
                 select_index = first_ready_room_index
 
@@ -3241,32 +3216,21 @@ class RemoteTrainingWidget(QGroupBox):
 
     def _show_worker_setup_dialog(self):
         """Show the worker setup dialog to help user set up a worker."""
-        # Get the current room info from the combo box
         room_name = ""
         room_id = ""
-        room_secret = ""
         current_index = self._room_combo.currentIndex()
         if current_index >= 0:
             display_text = self._room_combo.currentText()
             room_id = self._room_combo.itemData(current_index) or ""
 
-            # Extract room name (format is "name (role)" or "name (role) [needs setup]")
-            if " [needs setup]" in display_text:
-                display_text = display_text.replace(" [needs setup]", "")
             if " (" in display_text:
                 room_name = display_text.rsplit(" (", 1)[0]
             else:
                 room_name = display_text
 
-            # Get room secret if available
-            from sleap_rtc.auth.credentials import get_room_secret
-
-            room_secret = get_room_secret(room_id) or ""
-
         dialog = WorkerSetupDialog(
             room_name=room_name,
             room_id=room_id,
-            room_secret=room_secret,
             parent=self,
         )
         dialog.exec()
@@ -3376,13 +3340,7 @@ class RemoteTrainingWidget(QGroupBox):
         room_id = self._room_combo.itemData(index)
         if room_id:
             self.room_changed.emit(room_id)
-
-            # Check if room has a local secret before trying to connect
-            if _has_room_secret(room_id):
-                self._load_workers(room_id)
-            else:
-                # Show setup dialog for rooms without secrets
-                self._show_room_setup_dialog(room_id)
+            self._load_workers(room_id)
         else:
             self._workers = []
             self._worker_combo.clear()
