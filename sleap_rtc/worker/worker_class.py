@@ -1719,11 +1719,13 @@ class RTCWorkerClient:
 
                     # Update stored room credentials (especially important for API key auth
                     # where room_id/token come from server)
-                    if room_id and token:
+                    if room_id:
                         self.room_id = room_id
-                        self.room_token = token
                         if self.state_manager:
                             self.state_manager.room_id = room_id
+                    if token:
+                        self.room_token = token
+                        if self.state_manager:
                             self.state_manager.room_token = token
 
                     # Extract discovery info from signaling server (Phase 6)
