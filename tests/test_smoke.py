@@ -107,6 +107,7 @@ class TestCLIEntryPoint:
         assert "create" in result.output
         assert "revoke" in result.output
         assert "show" in result.output
+        assert "use" in result.output
 
     def test_key_list_help(self):
         """sleap-rtc key list --help must exit 0."""
@@ -124,6 +125,12 @@ class TestCLIEntryPoint:
         """sleap-rtc key revoke --help must exit 0."""
         runner = CliRunner()
         result = runner.invoke(cli, ["key", "revoke", "--help"])
+        assert result.exit_code == 0
+
+    def test_key_use_help(self):
+        """sleap-rtc key use --help must exit 0."""
+        runner = CliRunner()
+        result = runner.invoke(cli, ["key", "use", "--help"])
         assert result.exit_code == 0
 
     def test_worker_account_key_option(self):

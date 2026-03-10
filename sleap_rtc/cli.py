@@ -1400,6 +1400,27 @@ def key_revoke(key_id, yes):
         click.echo("Removed from local credentials (was your saved key).")
 
 
+@key.command(name="use")
+@click.argument("key_id")
+def key_use(key_id):
+    """Save an existing account key as the local default."""
+    from sleap_rtc.auth.credentials import get_account_key, save_account_key
+
+    existing = get_account_key()
+    if existing:
+        if existing == key_id:
+            click.echo(f"Key {key_id[:20]}... is already your saved key.")
+            return
+        if not click.confirm(
+            f"This will replace your current saved key ({existing[:20]}...). Continue?"
+        ):
+            click.echo("Cancelled.")
+            return
+
+    save_account_key(key_id)
+    click.echo(f"Key {key_id[:20]}... saved to ~/.sleap-rtc/credentials.json")
+
+
 @key.command(name="show")
 def key_show():
     """Show the currently stored account key (with confirmation)."""
