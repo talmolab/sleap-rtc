@@ -1319,9 +1319,8 @@ def key_list(full):
         return
 
     for k in keys:
-        status = "revoked" if k.get("revoked_at") else "active"
         key_id = k["key_id"] if full else f"{k['key_id'][:30]}..."
-        click.echo(f"  {key_id}  [{k.get('name', 'unnamed')}]  {status}")
+        click.echo(f"  {key_id}  [{k.get('name', 'unnamed')}]")
 
 
 @key.command(name="create")
