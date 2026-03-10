@@ -335,30 +335,21 @@ class WorkerSetupDialog(QDialog):
         step2_layout.addWidget(mount_cmd)
         layout.addLayout(step2_layout)
 
-        # Step 3: Get API key from dashboard
+        # Step 3: Create or save an account key
         step3_layout = QVBoxLayout()
-        step3_label = QLabel("3. Generate an API key from the dashboard:")
+        step3_label = QLabel("3. Create and save an account key:")
         step3_layout.addWidget(step3_label)
 
-        dashboard_layout = QHBoxLayout()
-        dashboard_layout.addSpacing(20)
-        self._open_dashboard_button = QPushButton("Open Dashboard")
-        self._open_dashboard_button.clicked.connect(self._on_open_dashboard)
-        dashboard_layout.addWidget(self._open_dashboard_button)
-        # Separator
-        separator_label = QLabel("|")
-        separator_label.setStyleSheet("color: #999; margin: 0 8px;")
-        dashboard_layout.addWidget(separator_label)
-        # Show the actual dashboard URL as a clickable link
-        from sleap_rtc.auth.github import get_dashboard_url
-
-        dashboard_url = get_dashboard_url()
-        url_label = QLabel(f'<a href="{dashboard_url}">{dashboard_url}</a>')
-        url_label.setOpenExternalLinks(True)
-        url_label.setStyleSheet("color: #0066cc;")
-        dashboard_layout.addWidget(url_label)
-        dashboard_layout.addStretch()
-        step3_layout.addLayout(dashboard_layout)
+        key_cmd = QLabel(
+            "   <code>sleap-rtc key create --save</code>"
+            "&nbsp;&nbsp;<span style='color:#666;'>"
+            "(or: <code>sleap-rtc key use slp_acct_xxx...</code> if you have one)</span>"
+        )
+        key_cmd.setTextFormat(Qt.RichText)
+        key_cmd.setStyleSheet("background-color: #f0f0f0; padding: 4px;")
+        key_cmd.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        key_cmd.setWordWrap(True)
+        step3_layout.addWidget(key_cmd)
         layout.addLayout(step3_layout)
 
         # Step 4: Start the worker
@@ -411,13 +402,16 @@ class WorkerSetupDialog(QDialog):
         commands = f"""# Install sleap-rtc (one time)
 uv tool install --python 3.11 sleap-rtc --with "sleap-nn[torch]" --with-executables-from sleap-nn --torch-backend auto
 
-# Login to sleap-rtc
+# Login to sleap-rtc (generates keypair automatically)
 sleap-rtc login
 
 # Register the path where your training data is mounted
 sleap-rtc config add-mount /path/to/your/data/ "Your Mount Name"
 
-# Start the worker (replace YOUR_ACCOUNT_KEY with your account key ID)
+# Create and save an account key (or: sleap-rtc key use slp_acct_xxx...)
+sleap-rtc key create --save
+
+# Start the worker
 {worker_cmd}
 """
         clipboard = QApplication.clipboard()

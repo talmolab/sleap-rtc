@@ -3259,8 +3259,8 @@ class RTCWorkerClient:
                     "No account key found. Workers require an account key.\n"
                     "  1. sleap-rtc login              # log in and generate a keypair\n"
                     "  2. sleap-rtc key create --save  # create and save an account key\n"
-                    "  3. sleap-rtc worker             # start the worker\n"
-                    "Or set: SLEAP_RTC_ACCOUNT_KEY=slp_acct_xxx..."
+                    "     (or: sleap-rtc key use slp_acct_xxx...  # if you have one already)\n"
+                    "  3. sleap-rtc worker             # start the worker"
                 )
                 return
 
