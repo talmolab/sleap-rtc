@@ -1256,7 +1256,8 @@ def key():
 
 
 @key.command(name="list")
-def key_list():
+@click.option("--full", is_flag=True, help="Show full key IDs.")
+def key_list(full):
     """List all account keys for your account."""
     from sleap_rtc.auth.credentials import get_account_key, get_jwt
     from sleap_rtc.config import get_config
@@ -1285,7 +1286,8 @@ def key_list():
 
     for k in keys:
         status = "revoked" if k.get("revoked_at") else "active"
-        click.echo(f"  {k['key_id'][:30]}...  [{k.get('name', 'unnamed')}]  {status}")
+        key_id = k["key_id"] if full else f"{k['key_id'][:30]}..."
+        click.echo(f"  {key_id}  [{k.get('name', 'unnamed')}]  {status}")
 
 
 @key.command(name="create")
