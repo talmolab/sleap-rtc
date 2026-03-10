@@ -355,7 +355,9 @@ class RTCWorkerClient:
 
         # Handle "missing" response (client has no credentials)
         if received_value == "missing":
-            logging.warning(f"Client {channel_label} has no auth credentials configured")
+            logging.warning(
+                f"Client {channel_label} has no auth credentials configured"
+            )
             self._auth_failure(channel, "missing")
             return
 

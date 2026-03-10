@@ -115,7 +115,9 @@ class TestSaveRoomSecret:
         assert data["room_secrets"]["room-2"] == "secret2"
         assert data["room_secrets"]["room-3"] == "secret3"
 
-    @pytest.mark.skipif(sys.platform == "win32", reason="Unix permission bits not supported on Windows")
+    @pytest.mark.skipif(
+        sys.platform == "win32", reason="Unix permission bits not supported on Windows"
+    )
     def test_sets_restrictive_permissions(self, temp_credentials_dir):
         """Should set file permissions to 600 (owner read/write only)."""
         credentials.save_room_secret("room-123", "secret123")

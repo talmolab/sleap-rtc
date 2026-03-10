@@ -169,7 +169,11 @@ def login(timeout):
         save_private_key_b64,
     )
     from sleap_rtc.auth.github import github_login
-    from sleap_rtc.auth.keypair import generate_keypair, private_key_to_b64, public_key_to_b64
+    from sleap_rtc.auth.keypair import (
+        generate_keypair,
+        private_key_to_b64,
+        public_key_to_b64,
+    )
     from sleap_rtc.config import get_config
 
     if is_logged_in():
@@ -1281,9 +1285,7 @@ def key_list():
 
     for k in keys:
         status = "revoked" if k.get("revoked_at") else "active"
-        click.echo(
-            f"  {k['key_id'][:30]}...  [{k.get('name', 'unnamed')}]  {status}"
-        )
+        click.echo(f"  {k['key_id'][:30]}...  [{k.get('name', 'unnamed')}]  {status}")
 
 
 @key.command(name="create")
@@ -1455,7 +1457,11 @@ def worker(api_key, account_key, room, working_dir, name, verbose, room_secret):
     """
     # Check for credential file if no explicit auth provided
     if not api_key and not account_key and not room:
-        from sleap_rtc.auth.credentials import get_account_key, get_credentials, get_default_room
+        from sleap_rtc.auth.credentials import (
+            get_account_key,
+            get_credentials,
+            get_default_room,
+        )
 
         # Try account key first (new architecture)
         stored_account_key = get_account_key()

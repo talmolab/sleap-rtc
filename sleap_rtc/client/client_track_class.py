@@ -403,7 +403,9 @@ sleap-nn track \\
             return
 
         # No credentials — tell worker
-        logging.warning("No auth credentials configured, sending AUTH_RESPONSE::missing")
+        logging.warning(
+            "No auth credentials configured, sending AUTH_RESPONSE::missing"
+        )
         self._auth_failed_reason = "No auth credentials configured"
         self._auth_event.set()
         self.data_channel.send(f"{MSG_AUTH_RESPONSE}::missing")

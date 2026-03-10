@@ -1146,7 +1146,9 @@ class RTCClient:
             return
 
         # No credentials — tell worker
-        logging.warning("No auth credentials configured, sending AUTH_RESPONSE::missing")
+        logging.warning(
+            "No auth credentials configured, sending AUTH_RESPONSE::missing"
+        )
         self.data_channel.send(format_message(MSG_AUTH_RESPONSE, "missing"))
 
     def _handle_auth_success(self) -> None:
