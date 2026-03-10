@@ -3365,6 +3365,8 @@ class RTCWorkerClient:
 
                 # API key authentication
                 registration_msg["api_key"] = api_key
+                if room_id:
+                    registration_msg["room_id"] = room_id
                 logging.info("Registering with API key authentication")
 
                 await self.websocket.send(json.dumps(registration_msg))
