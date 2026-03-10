@@ -266,6 +266,11 @@ class RTCWorkerClient:
         # PSK P2P authentication (zero-trust layer)
         self._room_secret: Optional[str] = None  # Set via CLI flag, env var, or config
         self._pending_auth: dict[str, str] = {}  # channel_label -> nonce
+
+        # Ed25519 P2P authentication (new auth architecture)
+        self._authorized_public_keys: list[dict] = []  # Fetched from server
+        self._auth_keys_last_fetched: float = 0.0  # Monotonic timestamp
+        self._AUTH_KEYS_TTL: float = 300.0  # Refresh every 5 minutes
         self._authenticated_channels: set[str] = (
             set()
         )  # Set of authenticated channel labels
@@ -321,12 +326,14 @@ class RTCWorkerClient:
     ) -> None:
         """Handle AUTH_RESPONSE message from client.
 
-        Verifies the HMAC against the pending nonce and marks the channel as
-        authenticated on success, or closes the connection on failure.
+        Supports two authentication paths:
+        - Path A (PSK): If room_secret is configured, verifies HMAC-SHA256.
+        - Path B (Ed25519): Otherwise, fetches authorized public keys from the
+          server and verifies the Ed25519 signature.
 
         Args:
             channel: The data channel that sent the response.
-            message: The AUTH_RESPONSE message (format: AUTH_RESPONSE::{hmac}).
+            message: The AUTH_RESPONSE message (format: AUTH_RESPONSE::{value}).
         """
         channel_label = channel.label
 
@@ -337,30 +344,57 @@ class RTCWorkerClient:
             )
             return
 
-        # Parse the HMAC from the message
+        # Parse the value from the message
         parts = message.split(MSG_SEPARATOR, 1)
         if len(parts) != 2:
             logging.warning(f"Invalid AUTH_RESPONSE format from {channel_label}")
             self._auth_failure(channel, "invalid")
             return
 
-        received_hmac = parts[1]
+        received_value = parts[1]
 
-        # Handle "missing" response (client has no secret)
-        if received_hmac == "missing":
-            logging.warning(f"Client {channel_label} has no room secret configured")
+        # Handle "missing" response (client has no credentials)
+        if received_value == "missing":
+            logging.warning(
+                f"Client {channel_label} has no auth credentials configured"
+            )
             self._auth_failure(channel, "missing")
             return
 
         # Get the nonce we sent
         nonce = self._pending_auth[channel_label]
 
-        # Verify the HMAC
-        if verify_hmac(self._room_secret, nonce, received_hmac):
-            self._auth_success(channel)
-        else:
-            logging.warning(f"Invalid HMAC from {channel_label}")
-            self._auth_failure(channel, "invalid")
+        # Path A: PSK (room_secret configured) — backward compat
+        if self._room_secret:
+            if verify_hmac(self._room_secret, nonce, received_value):
+                self._auth_success(channel)
+            else:
+                logging.warning(f"Invalid HMAC from {channel_label}")
+                self._auth_failure(channel, "invalid")
+            return
+
+        # Path B: Ed25519 — try all authorized public keys
+        from sleap_rtc.auth.keypair import public_key_from_b64, verify_signature
+
+        await self._fetch_authorized_keys()
+
+        for key_entry in self._authorized_public_keys:
+            pub_b64 = key_entry.get("public_key", "")
+            try:
+                public_key = public_key_from_b64(pub_b64)
+                if verify_signature(public_key, nonce, received_value):
+                    self._auth_success(channel)
+                    logging.info(
+                        f"[AUTH] Ed25519 auth OK: key from "
+                        f"{key_entry.get('username', '?')} "
+                        f"({key_entry.get('device_name', '?')})"
+                    )
+                    return
+            except Exception:
+                continue  # Malformed key — try next
+
+        logging.warning(f"[AUTH] Ed25519 verification failed for {channel_label}")
+        self._auth_failure(channel, "invalid")
 
     def _auth_success(self, channel: RTCDataChannel) -> None:
         """Mark a channel as authenticated and clean up pending state.
@@ -410,6 +444,51 @@ class RTCWorkerClient:
 
         # Note: We don't close the channel here as aiortc doesn't support channel.close()
         # The client should disconnect after receiving AUTH_FAILURE
+
+    async def _fetch_authorized_keys(self) -> None:
+        """Fetch authorized Ed25519 public keys for this room from the server.
+
+        Results are cached for 5 minutes (_AUTH_KEYS_TTL). A stale or empty
+        cache is refreshed on every call until a successful fetch.
+        """
+        import aiohttp
+
+        now = time.monotonic()
+        if (
+            now - self._auth_keys_last_fetched < self._AUTH_KEYS_TTL
+            and self._authorized_public_keys
+        ):
+            return  # Cache still valid
+
+        room_id = self.room_id
+        if not room_id:
+            logging.warning("[AUTH] Cannot fetch authorized keys: room_id not set yet")
+            return
+
+        config = get_config()
+        auth_header = self.api_key or ""
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    f"{config.get_http_url()}/api/rooms/{room_id}/authorized-keys",
+                    headers={"Authorization": f"Bearer {auth_header}"},
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        self._authorized_public_keys = data.get("authorized_keys", [])
+                        self._auth_keys_last_fetched = now
+                        logging.info(
+                            f"[AUTH] Fetched {len(self._authorized_public_keys)} "
+                            "authorized keys for room"
+                        )
+                    else:
+                        logging.warning(
+                            f"[AUTH] Could not fetch authorized keys: HTTP {resp.status}"
+                        )
+        except Exception as e:
+            logging.warning(f"[AUTH] Could not fetch authorized keys: {e}")
 
     # ===== RTCPeerConnection Factory Methods =====
 
@@ -1640,11 +1719,13 @@ class RTCWorkerClient:
 
                     # Update stored room credentials (especially important for API key auth
                     # where room_id/token come from server)
-                    if room_id and token:
+                    if room_id:
                         self.room_id = room_id
-                        self.room_token = token
                         if self.state_manager:
                             self.state_manager.room_id = room_id
+                    if token:
+                        self.room_token = token
+                        if self.state_manager:
                             self.state_manager.room_token = token
 
                     # Extract discovery info from signaling server (Phase 6)
@@ -3286,6 +3367,8 @@ class RTCWorkerClient:
 
                 # API key authentication
                 registration_msg["api_key"] = api_key
+                if room_id:
+                    registration_msg["room_id"] = room_id
                 logging.info("Registering with API key authentication")
 
                 await self.websocket.send(json.dumps(registration_msg))

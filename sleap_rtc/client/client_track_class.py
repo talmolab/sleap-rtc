@@ -360,9 +360,10 @@ sleap-nn track \\
                 self.predictions_data.extend(message)
 
     def _handle_auth_challenge(self, message: str) -> None:
-        """Handle PSK authentication challenge from worker.
+        """Handle AUTH_CHALLENGE message from worker.
 
-        Computes HMAC response and sends AUTH_RESPONSE.
+        Responds with an Ed25519 signature if a private key is stored, falls
+        back to PSK HMAC if a room secret is configured, or sends "missing".
 
         Args:
             message: The AUTH_CHALLENGE message containing the nonce.
@@ -376,19 +377,38 @@ sleap-nn track \\
             self._auth_event.set()
             return
 
-        if not self._room_secret:
-            logging.error("Received AUTH_CHALLENGE but no room secret configured")
-            self._auth_failed_reason = "No room secret configured"
-            self._auth_event.set()
+        if self.data_channel is None or self.data_channel.readyState != "open":
             return
 
-        # Compute HMAC response
-        response_hmac = compute_hmac(self._room_secret, nonce)
+        # Path A: Ed25519 (new architecture) — sign with stored private key
+        from sleap_rtc.auth.credentials import get_private_key_b64
+        from sleap_rtc.auth.keypair import private_key_from_b64, sign_nonce
 
-        # Send AUTH_RESPONSE
-        if self.data_channel and self.data_channel.readyState == "open":
+        priv_b64 = get_private_key_b64()
+        if priv_b64:
+            try:
+                private_key = private_key_from_b64(priv_b64)
+                signature = sign_nonce(private_key, nonce)
+                self.data_channel.send(f"{MSG_AUTH_RESPONSE}::{signature}")
+                logging.info("Sent Ed25519 AUTH_RESPONSE to worker")
+                return
+            except Exception as e:
+                logging.warning(f"Ed25519 signing failed, falling back to PSK: {e}")
+
+        # Path B: PSK (room_secret configured) — backward compat
+        if self._room_secret:
+            response_hmac = compute_hmac(self._room_secret, nonce)
             self.data_channel.send(f"{MSG_AUTH_RESPONSE}::{response_hmac}")
-            logging.debug("Sent AUTH_RESPONSE")
+            logging.info("Sent PSK AUTH_RESPONSE to worker")
+            return
+
+        # No credentials — tell worker
+        logging.warning(
+            "No auth credentials configured, sending AUTH_RESPONSE::missing"
+        )
+        self._auth_failed_reason = "No auth credentials configured"
+        self._auth_event.set()
+        self.data_channel.send(f"{MSG_AUTH_RESPONSE}::missing")
 
     def _handle_auth_success(self) -> None:
         """Handle successful PSK authentication."""
