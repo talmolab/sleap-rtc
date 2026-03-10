@@ -1239,6 +1239,50 @@ def room_set_default(room_id):
 # =============================================================================
 
 
+def _key_request(method, url, **kwargs):
+    """Make an authenticated request for key commands.
+
+    Tries the stored account key first. If the server returns 401 (e.g. the
+    key was revoked externally), clears the bad key, warns the user, and
+    retries with the JWT so the command still succeeds.
+
+    Returns the Response, or raises SystemExit on unrecoverable failure.
+    """
+    from sleap_rtc.auth.credentials import get_account_key, get_jwt, remove_account_key
+
+    account_key = get_account_key()
+    jwt = get_jwt()
+    auth = account_key or jwt
+
+    if not auth:
+        click.echo("Not logged in. Run: sleap-rtc login")
+        sys.exit(1)
+
+    headers = kwargs.pop("headers", {})
+    headers["Authorization"] = f"Bearer {auth}"
+
+    try:
+        resp = requests.request(method, url, headers=headers, **kwargs)
+    except requests.RequestException as e:
+        logger.error(f"Request failed: {e}")
+        sys.exit(1)
+
+    if resp.status_code == 401 and account_key and jwt:
+        click.echo(
+            f"Warning: saved account key ({account_key[:20]}...) was rejected "
+            "(revoked or expired). Falling back to JWT and clearing the bad key."
+        )
+        remove_account_key()
+        headers["Authorization"] = f"Bearer {jwt}"
+        try:
+            resp = requests.request(method, url, headers=headers, **kwargs)
+        except requests.RequestException as e:
+            logger.error(f"Request failed: {e}")
+            sys.exit(1)
+
+    return resp
+
+
 @cli.group()
 def key():
     """Manage account keys for headless/container authentication.
@@ -1259,21 +1303,11 @@ def key():
 @click.option("--full", is_flag=True, help="Show full key IDs.")
 def key_list(full):
     """List all account keys for your account."""
-    from sleap_rtc.auth.credentials import get_account_key, get_jwt
     from sleap_rtc.config import get_config
 
-    auth = get_account_key() or get_jwt()
-    if not auth:
-        click.echo("Not logged in. Run: sleap-rtc login")
-        sys.exit(1)
-
     config = get_config()
+    resp = _key_request("GET", f"{config.get_http_url()}/api/auth/account-keys", timeout=10)
     try:
-        resp = requests.get(
-            f"{config.get_http_url()}/api/auth/account-keys",
-            headers={"Authorization": f"Bearer {auth}"},
-            timeout=10,
-        )
         resp.raise_for_status()
     except requests.RequestException as e:
         logger.error(f"Request failed: {e}")
@@ -1301,22 +1335,15 @@ def key_list(full):
 )
 def key_create(name, save):
     """Create a new account key."""
-    from sleap_rtc.auth.credentials import get_account_key, get_jwt, save_account_key
+    from sleap_rtc.auth.credentials import get_account_key, save_account_key
     from sleap_rtc.config import get_config
 
-    auth = get_account_key() or get_jwt()
-    if not auth:
-        click.echo("Not logged in. Run: sleap-rtc login")
-        sys.exit(1)
-
     config = get_config()
+    resp = _key_request(
+        "POST", f"{config.get_http_url()}/api/auth/account-keys",
+        json={"name": name}, timeout=10,
+    )
     try:
-        resp = requests.post(
-            f"{config.get_http_url()}/api/auth/account-keys",
-            headers={"Authorization": f"Bearer {auth}"},
-            json={"name": name},
-            timeout=10,
-        )
         resp.raise_for_status()
     except requests.RequestException as e:
         logger.error(f"Request failed: {e}")
@@ -1358,7 +1385,7 @@ def key_create(name, save):
 @click.option("--yes", "-y", is_flag=True, help="Skip confirmation.")
 def key_revoke(key_id, yes):
     """Revoke an account key by its ID."""
-    from sleap_rtc.auth.credentials import get_account_key, get_jwt, remove_account_key
+    from sleap_rtc.auth.credentials import get_account_key, remove_account_key
     from sleap_rtc.config import get_config
 
     is_saved_key = get_account_key() == key_id
@@ -1376,18 +1403,11 @@ def key_revoke(key_id, yes):
         click.echo("Cancelled.")
         return
 
-    auth = get_account_key() or get_jwt()
-    if not auth:
-        click.echo("Not logged in. Run: sleap-rtc login")
-        sys.exit(1)
-
     config = get_config()
+    resp = _key_request(
+        "DELETE", f"{config.get_http_url()}/api/auth/account-keys/{key_id}", timeout=10,
+    )
     try:
-        resp = requests.delete(
-            f"{config.get_http_url()}/api/auth/account-keys/{key_id}",
-            headers={"Authorization": f"Bearer {auth}"},
-            timeout=10,
-        )
         resp.raise_for_status()
     except requests.RequestException as e:
         logger.error(f"Request failed: {e}")
