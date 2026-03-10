@@ -1448,7 +1448,21 @@ def key_show():
     stored = get_account_key()
     if not stored:
         click.echo("No account key stored locally.")
-        click.echo("Run 'sleap-rtc login' or set SLEAP_RTC_ACCOUNT_KEY.")
+        from sleap_rtc.auth.credentials import get_jwt
+
+        if get_jwt():
+            click.echo(
+                "You're logged in. To set a key:\n"
+                "  sleap-rtc key list --full          # find an existing key ID\n"
+                "  sleap-rtc key use <key_id>         # save it as your default\n"
+                "  sleap-rtc key create --save        # or create a new one"
+            )
+        else:
+            click.echo(
+                "Run 'sleap-rtc login' to log in, then:\n"
+                "  sleap-rtc key create --save        # create and save a key\n"
+                "Or set SLEAP_RTC_ACCOUNT_KEY=<key_id> as an environment variable."
+            )
         return
 
     if click.confirm("Show your account key? (treat like a password)"):
