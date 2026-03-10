@@ -39,7 +39,7 @@ click.rich_click.COMMAND_GROUPS = {
     "sleap-rtc": [
         {
             "name": "Authentication",
-            "commands": ["login", "logout", "whoami"],
+            "commands": ["login", "logout", "whoami", "key"],
         },
         {
             "name": "Rooms & Tokens",
@@ -154,12 +154,23 @@ def login(timeout):
 
     Opens your browser to authenticate with GitHub via the SLEAP-RTC dashboard.
     After authorization, your credentials are saved locally for future CLI commands.
+    On first login, an account key and Ed25519 keypair are generated automatically.
 
     Example:
         sleap-rtc login
     """
-    from sleap_rtc.auth.credentials import save_jwt, is_logged_in, get_user
+    from sleap_rtc.auth.credentials import (
+        get_account_key,
+        get_private_key_b64,
+        get_user,
+        is_logged_in,
+        save_account_key,
+        save_jwt,
+        save_private_key_b64,
+    )
     from sleap_rtc.auth.github import github_login
+    from sleap_rtc.auth.keypair import generate_keypair, private_key_to_b64, public_key_to_b64
+    from sleap_rtc.config import get_config
 
     if is_logged_in():
         user = get_user()
@@ -172,8 +183,42 @@ def login(timeout):
         result = github_login(timeout=timeout)
         save_jwt(result["jwt"], result["user"])
 
+        # Store account key if server returned one (only on first login)
+        if result.get("account_key"):
+            save_account_key(result["account_key"])
+            click.echo("\nAccount key (save this — shown only once):")
+            click.echo(f"  {result['account_key']}")
+            click.echo(
+                f"\nStore it as: export SLEAP_RTC_ACCOUNT_KEY={result['account_key']}"
+            )
+
+        # Generate Ed25519 keypair if we don't have one yet
+        if not get_private_key_b64():
+            click.echo("\nGenerating Ed25519 keypair for P2P authentication...")
+            private_key, public_key = generate_keypair()
+            priv_b64 = private_key_to_b64(private_key)
+            pub_b64 = public_key_to_b64(public_key)
+            save_private_key_b64(priv_b64)
+
+            # Register public key with server
+            config = get_config()
+            auth = get_account_key() or result.get("jwt")
+            try:
+                resp = requests.post(
+                    f"{config.get_http_url()}/api/auth/public-keys",
+                    headers={"Authorization": f"Bearer {auth}"},
+                    json={"public_key": pub_b64, "device_name": "cli"},
+                    timeout=10,
+                )
+                if resp.status_code == 200:
+                    click.echo("Public key registered with server.")
+                else:
+                    click.echo(f"Warning: could not register public key: {resp.text}")
+            except Exception as e:
+                click.echo(f"Warning: could not register public key: {e}")
+
         user = result["user"]
-        click.echo(f"Logged in as {user.get('username', 'unknown')}")
+        click.echo(f"\nLogged in as {user.get('username', 'unknown')}")
         logger.info("Credentials saved to ~/.sleap-rtc/credentials.json")
 
     except Exception as e:
@@ -1170,6 +1215,161 @@ def room_join(code):
         sys.exit(1)
 
 
+@room.command(name="set-default")
+@click.argument("room_id")
+def room_set_default(room_id):
+    """Set a room as your default (used by worker when --room is not specified).
+
+    Example:
+        sleap-rtc room set-default room-abc123
+    """
+    from sleap_rtc.auth.credentials import save_default_room
+
+    save_default_room(room_id)
+    click.echo(f"Default room set to: {room_id}")
+    click.echo("Tip: workers started without --room will use this room.")
+
+
+# =============================================================================
+# Key Management
+# =============================================================================
+
+
+@cli.group()
+def key():
+    """Manage account keys for headless/container authentication.
+
+    Account keys (slp_acct_...) replace the JWT for all API calls.
+    They are long-lived, named, and revocable from the dashboard or CLI.
+
+    Examples:
+        sleap-rtc key list
+        sleap-rtc key create --name hpc-cluster
+        sleap-rtc key revoke slp_acct_xxx...
+        sleap-rtc key show
+    """
+    pass
+
+
+@key.command(name="list")
+def key_list():
+    """List all account keys for your account."""
+    from sleap_rtc.auth.credentials import get_account_key, get_jwt
+    from sleap_rtc.config import get_config
+
+    auth = get_account_key() or get_jwt()
+    if not auth:
+        click.echo("Not logged in. Run: sleap-rtc login")
+        sys.exit(1)
+
+    config = get_config()
+    try:
+        resp = requests.get(
+            f"{config.get_http_url()}/api/auth/account-keys",
+            headers={"Authorization": f"Bearer {auth}"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+    except requests.RequestException as e:
+        logger.error(f"Request failed: {e}")
+        sys.exit(1)
+
+    keys = resp.json().get("keys", [])
+    if not keys:
+        click.echo("No account keys found.")
+        return
+
+    for k in keys:
+        status = "revoked" if k.get("revoked_at") else "active"
+        click.echo(
+            f"  {k['key_id'][:30]}...  [{k.get('name', 'unnamed')}]  {status}"
+        )
+
+
+@key.command(name="create")
+@click.option(
+    "--name", "-n", default="unnamed", help="Name for this key (e.g. 'hpc-cluster')."
+)
+def key_create(name):
+    """Create a new account key."""
+    from sleap_rtc.auth.credentials import get_account_key, get_jwt
+    from sleap_rtc.config import get_config
+
+    auth = get_account_key() or get_jwt()
+    if not auth:
+        click.echo("Not logged in. Run: sleap-rtc login")
+        sys.exit(1)
+
+    config = get_config()
+    try:
+        resp = requests.post(
+            f"{config.get_http_url()}/api/auth/account-keys",
+            headers={"Authorization": f"Bearer {auth}"},
+            json={"name": name},
+            timeout=10,
+        )
+        resp.raise_for_status()
+    except requests.RequestException as e:
+        logger.error(f"Request failed: {e}")
+        sys.exit(1)
+
+    data = resp.json()
+    click.echo("\nNew account key created (save this — shown only once):")
+    click.echo(f"  {data['key_id']}")
+    click.echo(f"\nStore as: export SLEAP_RTC_ACCOUNT_KEY={data['key_id']}")
+
+
+@key.command(name="revoke")
+@click.argument("key_id")
+@click.option("--yes", "-y", is_flag=True, help="Skip confirmation.")
+def key_revoke(key_id, yes):
+    """Revoke an account key by its ID."""
+    from sleap_rtc.auth.credentials import get_account_key, get_jwt
+    from sleap_rtc.config import get_config
+
+    if not yes and not click.confirm(
+        f"Revoke key {key_id[:20]}...? This cannot be undone."
+    ):
+        click.echo("Cancelled.")
+        return
+
+    auth = get_account_key() or get_jwt()
+    if not auth:
+        click.echo("Not logged in. Run: sleap-rtc login")
+        sys.exit(1)
+
+    config = get_config()
+    try:
+        resp = requests.delete(
+            f"{config.get_http_url()}/api/auth/account-keys/{key_id}",
+            headers={"Authorization": f"Bearer {auth}"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+    except requests.RequestException as e:
+        logger.error(f"Request failed: {e}")
+        sys.exit(1)
+
+    click.echo(f"Key {key_id[:20]}... revoked.")
+
+
+@key.command(name="show")
+def key_show():
+    """Show the currently stored account key (with confirmation)."""
+    from sleap_rtc.auth.credentials import get_account_key
+
+    stored = get_account_key()
+    if not stored:
+        click.echo("No account key stored locally.")
+        click.echo("Run 'sleap-rtc login' or set SLEAP_RTC_ACCOUNT_KEY.")
+        return
+
+    if click.confirm("Show your account key? (treat like a password)"):
+        click.echo(f"\n  {stored}\n")
+    else:
+        click.echo("Cancelled.")
+
+
 def show_worker_help():
     """Display"""
     help_text = """
@@ -1226,36 +1426,64 @@ def show_worker_help():
     help="Show detailed logs including ICE state, keep-alive, and file transfers.",
 )
 @click.option(
+    "--account-key",
+    type=str,
+    envvar="SLEAP_RTC_ACCOUNT_KEY",
+    required=False,
+    help="Account key (slp_acct_...) for authentication. Can also use SLEAP_RTC_ACCOUNT_KEY env var.",
+)
+@click.option(
     "--room-secret",
     type=str,
     envvar="SLEAP_ROOM_SECRET",
     required=False,
     help="Room secret for P2P authentication. Can also use SLEAP_ROOM_SECRET env var.",
 )
-def worker(api_key, room, working_dir, name, verbose, room_secret):
+def worker(api_key, account_key, room, working_dir, name, verbose, room_secret):
     """Start the sleap-RTC worker node.
 
     Authentication:
 
-    API Key (recommended):
-       sleap-rtc worker --api-key slp_xxx...
+    Account Key (recommended for containers/HPC):
+       sleap-rtc worker --account-key slp_acct_xxx...
+       # or: export SLEAP_RTC_ACCOUNT_KEY=slp_acct_xxx...
 
-       Get an API key from: sleap-rtc token create --room ROOM --name NAME
+    API Key (legacy):
+       sleap-rtc worker --api-key slp_xxx...
 
     Or use --room with JWT authentication (requires login).
     """
     # Check for credential file if no explicit auth provided
-    if not api_key and not room:
-        from sleap_rtc.auth.credentials import get_credentials
+    if not api_key and not account_key and not room:
+        from sleap_rtc.auth.credentials import get_account_key, get_credentials, get_default_room
 
-        creds = get_credentials()
-        tokens = creds.get("tokens", {})
-        if tokens:
-            # Use first available token
-            first_room = next(iter(tokens))
-            api_key = tokens[first_room].get("api_key")
-            if api_key:
-                logger.info(f"Using API key from credentials for room: {first_room}")
+        # Try account key first (new architecture)
+        stored_account_key = get_account_key()
+        if stored_account_key:
+            account_key = stored_account_key
+            room = get_default_room()
+            if room:
+                logger.info(f"Using account key + default room: {room}")
+            else:
+                logger.info(
+                    "Using account key (no default room — use --room or "
+                    "'sleap-rtc room set-default')"
+                )
+        else:
+            # Fall back to legacy API key from credentials
+            creds = get_credentials()
+            tokens = creds.get("tokens", {})
+            if tokens:
+                first_room = next(iter(tokens))
+                api_key = tokens[first_room].get("api_key")
+                if api_key:
+                    logger.info(
+                        f"Using API key from credentials for room: {first_room}"
+                    )
+    elif account_key and not room:
+        from sleap_rtc.auth.credentials import get_default_room
+
+        room = get_default_room()
 
     # Validate authentication options
     has_api_key = api_key is not None
@@ -1282,7 +1510,7 @@ def worker(api_key, room, working_dir, name, verbose, room_secret):
         logger.info(f"Using working directory: {working_dir}")
 
     run_RTCworker(
-        api_key=api_key,
+        api_key=account_key or api_key,
         room_id=room,
         token=None,
         working_dir=working_dir,

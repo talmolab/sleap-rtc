@@ -98,6 +98,47 @@ class TestCLIEntryPoint:
         result = runner.invoke(cli, ["track", "--help"])
         assert result.exit_code == 0
 
+    def test_key_help(self):
+        """sleap-rtc key --help must exit 0 and list subcommands."""
+        runner = CliRunner()
+        result = runner.invoke(cli, ["key", "--help"])
+        assert result.exit_code == 0
+        assert "list" in result.output
+        assert "create" in result.output
+        assert "revoke" in result.output
+        assert "show" in result.output
+
+    def test_key_list_help(self):
+        """sleap-rtc key list --help must exit 0."""
+        runner = CliRunner()
+        result = runner.invoke(cli, ["key", "list", "--help"])
+        assert result.exit_code == 0
+
+    def test_key_create_help(self):
+        """sleap-rtc key create --help must exit 0."""
+        runner = CliRunner()
+        result = runner.invoke(cli, ["key", "create", "--help"])
+        assert result.exit_code == 0
+
+    def test_key_revoke_help(self):
+        """sleap-rtc key revoke --help must exit 0."""
+        runner = CliRunner()
+        result = runner.invoke(cli, ["key", "revoke", "--help"])
+        assert result.exit_code == 0
+
+    def test_worker_account_key_option(self):
+        """sleap-rtc worker --help must show --account-key option."""
+        runner = CliRunner()
+        result = runner.invoke(cli, ["worker", "--help"])
+        assert result.exit_code == 0
+        assert "account-key" in result.output
+
+    def test_room_set_default_help(self):
+        """sleap-rtc room set-default --help must exit 0."""
+        runner = CliRunner()
+        result = runner.invoke(cli, ["room", "set-default", "--help"])
+        assert result.exit_code == 0
+
 
 # ── Required data files ───────────────────────────────────────────────────────
 
