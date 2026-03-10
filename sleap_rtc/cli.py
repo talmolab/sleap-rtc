@@ -1292,9 +1292,14 @@ def key_list():
 @click.option(
     "--name", "-n", default="unnamed", help="Name for this key (e.g. 'hpc-cluster')."
 )
-def key_create(name):
+@click.option(
+    "--save",
+    is_flag=True,
+    help="Save the new key to ~/.sleap-rtc/credentials.json for automatic use.",
+)
+def key_create(name, save):
     """Create a new account key."""
-    from sleap_rtc.auth.credentials import get_account_key, get_jwt
+    from sleap_rtc.auth.credentials import get_account_key, get_jwt, save_account_key
     from sleap_rtc.config import get_config
 
     auth = get_account_key() or get_jwt()
@@ -1318,7 +1323,12 @@ def key_create(name):
     data = resp.json()
     click.echo("\nNew account key created (save this — shown only once):")
     click.echo(f"  {data['key_id']}")
-    click.echo(f"\nStore as: export SLEAP_RTC_ACCOUNT_KEY={data['key_id']}")
+
+    if save:
+        save_account_key(data["key_id"])
+        click.echo("\nKey saved to ~/.sleap-rtc/credentials.json")
+    else:
+        click.echo(f"\nStore as: export SLEAP_RTC_ACCOUNT_KEY={data['key_id']}")
 
 
 @key.command(name="revoke")
