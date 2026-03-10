@@ -1326,11 +1326,25 @@ def key_create(name, save):
 
     if save:
         existing = get_account_key()
-        if existing and not click.confirm(
-            f"\nYou already have a saved key ({existing[:20]}...). Replace it?"
-        ):
-            click.echo("Key created but not saved. Copy it from above.")
-            return
+        if existing:
+            if not click.confirm(
+                f"\nYou already have a saved key ({existing[:20]}...). Replace it?"
+            ):
+                click.echo("Key created but not saved. Copy it from above.")
+                return
+            if click.confirm(f"Also revoke the old key ({existing[:20]}...)?"):
+                try:
+                    resp_revoke = requests.delete(
+                        f"{config.get_http_url()}/api/auth/account-keys/{existing}",
+                        headers={"Authorization": f"Bearer {auth}"},
+                        timeout=10,
+                    )
+                    if resp_revoke.ok:
+                        click.echo(f"Old key ({existing[:20]}...) revoked.")
+                    else:
+                        click.echo(f"Warning: could not revoke old key: {resp_revoke.text}")
+                except requests.RequestException as e:
+                    click.echo(f"Warning: could not revoke old key: {e}")
         save_account_key(data["key_id"])
         click.echo("\nKey saved to ~/.sleap-rtc/credentials.json")
     else:
