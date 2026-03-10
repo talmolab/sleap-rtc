@@ -8,6 +8,8 @@ or mocked with aiohttp.
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import aiohttp  # ensure aiohttp is in sys.modules before patching
+
 import pytest
 
 from sleap_rtc.auth.keypair import (

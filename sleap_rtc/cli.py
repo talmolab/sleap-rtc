@@ -1306,7 +1306,9 @@ def key_list(full):
     from sleap_rtc.config import get_config
 
     config = get_config()
-    resp = _key_request("GET", f"{config.get_http_url()}/api/auth/account-keys", timeout=10)
+    resp = _key_request(
+        "GET", f"{config.get_http_url()}/api/auth/account-keys", timeout=10
+    )
     try:
         resp.raise_for_status()
     except requests.RequestException as e:
@@ -1339,8 +1341,10 @@ def key_create(name, save):
 
     config = get_config()
     resp = _key_request(
-        "POST", f"{config.get_http_url()}/api/auth/account-keys",
-        json={"name": name}, timeout=10,
+        "POST",
+        f"{config.get_http_url()}/api/auth/account-keys",
+        json={"name": name},
+        timeout=10,
     )
     try:
         resp.raise_for_status()
@@ -1370,7 +1374,9 @@ def key_create(name, save):
                     if resp_revoke.ok:
                         click.echo(f"Old key ({existing[:20]}...) revoked.")
                     else:
-                        click.echo(f"Warning: could not revoke old key: {resp_revoke.text}")
+                        click.echo(
+                            f"Warning: could not revoke old key: {resp_revoke.text}"
+                        )
                 except requests.RequestException as e:
                     click.echo(f"Warning: could not revoke old key: {e}")
         save_account_key(data["key_id"])
@@ -1404,7 +1410,9 @@ def key_revoke(key_id, yes):
 
     config = get_config()
     resp = _key_request(
-        "DELETE", f"{config.get_http_url()}/api/auth/account-keys/{key_id}", timeout=10,
+        "DELETE",
+        f"{config.get_http_url()}/api/auth/account-keys/{key_id}",
+        timeout=10,
     )
     try:
         resp.raise_for_status()
