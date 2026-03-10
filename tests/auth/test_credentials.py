@@ -1,4 +1,4 @@
-"""Unit tests for room secret credential storage."""
+"""Unit tests for credential storage."""
 
 import json
 import os
@@ -228,3 +228,69 @@ class TestRoomSecretIntegration:
         assert credentials.get_room_secret("room-1") == "secret-1"
         assert credentials.get_room_secret("room-2") is None
         assert credentials.get_room_secret("room-3") == "secret-3"
+
+
+class TestAccountKey:
+    """Tests for get_account_key() and save_account_key()."""
+
+    def test_returns_none_when_absent(self, temp_credentials_dir):
+        result = credentials.get_account_key()
+        assert result is None
+
+    def test_save_and_get_roundtrip(self, temp_credentials_dir):
+        credentials.save_account_key("slp_acct_testkey123")
+        assert credentials.get_account_key() == "slp_acct_testkey123"
+
+    def test_env_var_overrides_stored_key(self, temp_credentials_dir, monkeypatch):
+        credentials.save_account_key("slp_acct_stored")
+        monkeypatch.setenv("SLEAP_RTC_ACCOUNT_KEY", "slp_acct_envkey")
+        assert credentials.get_account_key() == "slp_acct_envkey"
+
+    def test_env_var_with_no_file(self, temp_credentials_dir, monkeypatch):
+        monkeypatch.setenv("SLEAP_RTC_ACCOUNT_KEY", "slp_acct_envonly")
+        assert credentials.get_account_key() == "slp_acct_envonly"
+
+    def test_preserves_other_credentials(self, temp_credentials_dir):
+        temp_credentials_dir.write_text(json.dumps({"jwt": "my_jwt"}))
+        credentials.save_account_key("slp_acct_new")
+        data = json.loads(temp_credentials_dir.read_text())
+        assert data["jwt"] == "my_jwt"
+        assert data["account_key"] == "slp_acct_new"
+
+
+class TestDefaultRoom:
+    """Tests for get_default_room() and save_default_room()."""
+
+    def test_returns_none_when_absent(self, temp_credentials_dir):
+        assert credentials.get_default_room() is None
+
+    def test_save_and_get_roundtrip(self, temp_credentials_dir):
+        credentials.save_default_room("room-abc123")
+        assert credentials.get_default_room() == "room-abc123"
+
+    def test_env_var_overrides_stored_room(self, temp_credentials_dir, monkeypatch):
+        credentials.save_default_room("room-stored")
+        monkeypatch.setenv("SLEAP_RTC_DEFAULT_ROOM", "room-from-env")
+        assert credentials.get_default_room() == "room-from-env"
+
+    def test_env_var_with_no_file(self, temp_credentials_dir, monkeypatch):
+        monkeypatch.setenv("SLEAP_RTC_DEFAULT_ROOM", "room-envonly")
+        assert credentials.get_default_room() == "room-envonly"
+
+
+class TestPrivateKeyB64:
+    """Tests for get_private_key_b64() and save_private_key_b64()."""
+
+    def test_returns_none_when_absent(self, temp_credentials_dir):
+        assert credentials.get_private_key_b64() is None
+
+    def test_save_and_get_roundtrip(self, temp_credentials_dir):
+        credentials.save_private_key_b64("fake_b64_private_key")
+        assert credentials.get_private_key_b64() == "fake_b64_private_key"
+
+    def test_preserves_other_credentials(self, temp_credentials_dir):
+        temp_credentials_dir.write_text(json.dumps({"account_key": "slp_acct_x"}))
+        credentials.save_private_key_b64("priv_key_b64")
+        data = json.loads(temp_credentials_dir.read_text())
+        assert data["account_key"] == "slp_acct_x"
+        assert data["private_key"] == "priv_key_b64"

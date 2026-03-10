@@ -2,19 +2,22 @@
 
 Stores credentials in ~/.sleap-rtc/credentials.json with the schema:
 {
-    "jwt": "eyJ...",
+    "jwt": "eyJ...",                   # Short-lived, browser-obtained (legacy)
+    "account_key": "slp_acct_xxx...", # Long-lived, used for all API calls
+    "private_key": "base64...",       # Ed25519 private key (for P2P auth)
     "user": {
         "id": "12345678",
         "username": "researcher1",
         "avatar_url": "https://..."
     },
-    "tokens": {
+    "default_room": "room-abc123",    # Optional default room
+    "tokens": {                        # Legacy per-room API keys (backward compat)
         "<room_id>": {
             "api_key": "slp_xxx...",
             "worker_name": "lab-gpu-1"
         }
     },
-    "room_secrets": {
+    "room_secrets": {                  # Legacy PSK secrets (backward compat)
         "<room_id>": "base64_encoded_secret..."
     }
 }
@@ -276,6 +279,83 @@ def save_room_secret(room_id: str, secret: str) -> None:
     creds["room_secrets"][room_id] = secret
     save_credentials(creds)
     logger.debug(f"Saved room secret for room {room_id}")
+
+
+# =============================================================================
+# Account Key Management (new auth architecture)
+# =============================================================================
+
+
+def get_account_key() -> Optional[str]:
+    """Get the account key, preferring SLEAP_RTC_ACCOUNT_KEY env var.
+
+    Returns:
+        Account key string (slp_acct_...) if available, None otherwise.
+    """
+    env_key = os.environ.get("SLEAP_RTC_ACCOUNT_KEY")
+    if env_key:
+        return env_key
+    creds = get_credentials()
+    return creds.get("account_key")
+
+
+def save_account_key(key: str) -> None:
+    """Save an account key to credentials.
+
+    Args:
+        key: Account key string (slp_acct_...).
+    """
+    creds = get_credentials()
+    creds["account_key"] = key
+    save_credentials(creds)
+    logger.debug("Saved account key to credentials")
+
+
+def get_default_room() -> Optional[str]:
+    """Get the default room ID, preferring SLEAP_RTC_DEFAULT_ROOM env var.
+
+    Returns:
+        Room ID string if set, None otherwise.
+    """
+    env_room = os.environ.get("SLEAP_RTC_DEFAULT_ROOM")
+    if env_room:
+        return env_room
+    creds = get_credentials()
+    return creds.get("default_room")
+
+
+def save_default_room(room_id: str) -> None:
+    """Save a default room ID to credentials.
+
+    Args:
+        room_id: Room ID to set as default.
+    """
+    creds = get_credentials()
+    creds["default_room"] = room_id
+    save_credentials(creds)
+    logger.debug(f"Saved default room: {room_id}")
+
+
+def get_private_key_b64() -> Optional[str]:
+    """Get the stored Ed25519 private key as base64.
+
+    Returns:
+        Base64-encoded private key bytes if stored, None otherwise.
+    """
+    creds = get_credentials()
+    return creds.get("private_key")
+
+
+def save_private_key_b64(private_key_b64: str) -> None:
+    """Save an Ed25519 private key (base64-encoded) to credentials.
+
+    Args:
+        private_key_b64: URL-safe base64-encoded private key bytes.
+    """
+    creds = get_credentials()
+    creds["private_key"] = private_key_b64
+    save_credentials(creds)
+    logger.debug("Saved private key to credentials")
 
 
 def remove_room_secret(room_id: str) -> bool:
