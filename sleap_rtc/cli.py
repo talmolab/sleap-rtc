@@ -1361,6 +1361,15 @@ def key_revoke(key_id, yes):
     from sleap_rtc.auth.credentials import get_account_key, get_jwt, remove_account_key
     from sleap_rtc.config import get_config
 
+    is_saved_key = get_account_key() == key_id
+    if is_saved_key and not yes:
+        click.echo(
+            f"Warning: {key_id[:20]}... is your currently saved key. "
+            "After revoking it, automated commands (worker, key list, etc.) "
+            "will fall back to your JWT until you save a new key with "
+            "'sleap-rtc key create --save'."
+        )
+
     if not yes and not click.confirm(
         f"Revoke key {key_id[:20]}...? This cannot be undone."
     ):
