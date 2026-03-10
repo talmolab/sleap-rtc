@@ -1325,6 +1325,12 @@ def key_create(name, save):
     click.echo(f"  {data['key_id']}")
 
     if save:
+        existing = get_account_key()
+        if existing and not click.confirm(
+            f"\nYou already have a saved key ({existing[:20]}...). Replace it?"
+        ):
+            click.echo("Key created but not saved. Copy it from above.")
+            return
         save_account_key(data["key_id"])
         click.echo("\nKey saved to ~/.sleap-rtc/credentials.json")
     else:
