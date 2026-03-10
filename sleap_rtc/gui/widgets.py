@@ -3196,7 +3196,7 @@ class RemoteTrainingWidget(QGroupBox):
         # Provide more helpful error messages
         error_lower = error.lower()
         if "no access" in error_lower or "room not found" in error_lower:
-            display_error = "Room secret may be incorrect or expired"
+            display_error = "Could not access room - check login and room membership"
         elif (
             "authentication" in error_lower
             or "401" in error_lower

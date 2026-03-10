@@ -2762,36 +2762,29 @@ class RTCWorkerClient:
             asyncio.create_task(self.keep_ice_alive(channel))
             logging.info(f"{channel.label} channel is open")
 
-            # P2P PSK authentication: send challenge if secret configured
-            if self._room_secret:
-                nonce = generate_nonce()
-                self._pending_auth[channel.label] = nonce
-                challenge_msg = format_message(MSG_AUTH_CHALLENGE, nonce)
-                channel.send(challenge_msg)
-                logging.info(f"Sent AUTH_CHALLENGE to {channel.label}")
+            # Always send AUTH_CHALLENGE — worker verifies with PSK or Ed25519
+            nonce = generate_nonce()
+            self._pending_auth[channel.label] = nonce
+            challenge_msg = format_message(MSG_AUTH_CHALLENGE, nonce)
+            channel.send(challenge_msg)
+            logging.info(f"Sent AUTH_CHALLENGE to {channel.label}")
 
-                # Start timeout task (10 seconds)
-                async def auth_timeout():
-                    await asyncio.sleep(10.0)
-                    if channel.label in self._pending_auth:
-                        logging.warning(f"Auth timeout for {channel.label}")
-                        del self._pending_auth[channel.label]
-                        if channel.label in self._auth_timeout_tasks:
-                            del self._auth_timeout_tasks[channel.label]
-                        # Send failure and close
-                        if channel.readyState == "open":
-                            channel.send(format_message(MSG_AUTH_FAILURE, "timeout"))
-                            # Note: aiortc doesn't have channel.close(), connection will be reset
+            # Start timeout task (10 seconds)
+            async def auth_timeout():
+                await asyncio.sleep(10.0)
+                if channel.label in self._pending_auth:
+                    logging.warning(f"Auth timeout for {channel.label}")
+                    del self._pending_auth[channel.label]
+                    if channel.label in self._auth_timeout_tasks:
+                        del self._auth_timeout_tasks[channel.label]
+                    # Send failure and close
+                    if channel.readyState == "open":
+                        channel.send(format_message(MSG_AUTH_FAILURE, "timeout"))
+                        # Note: aiortc doesn't have channel.close(), connection will be reset
 
-                self._auth_timeout_tasks[channel.label] = asyncio.create_task(
-                    auth_timeout()
-                )
-            else:
-                # No secret configured - mark as authenticated immediately (legacy mode)
-                self._authenticated_channels.add(channel.label)
-                logging.info(
-                    f"{channel.label} authenticated (legacy mode - no secret configured)"
-                )
+            self._auth_timeout_tasks[channel.label] = asyncio.create_task(
+                auth_timeout()
+            )
 
         # Register handler for future open events
         @channel.on("open")
