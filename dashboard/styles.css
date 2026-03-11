@@ -896,7 +896,7 @@ body::before {
 .worker-meta {
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: 20px;
     font-size: 12px;
     color: var(--text-muted);
     margin-top: 2px;
