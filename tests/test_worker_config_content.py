@@ -357,3 +357,37 @@ class TestResolvedSlpWriting:
         call_args = worker.job_executor.execute_from_spec.call_args
         cmd = call_args.args[1]
         assert any(slp_path in tok for tok in cmd)
+
+
+# =============================================================================
+# sleap-nn version in registration properties
+# =============================================================================
+
+
+class TestSleapNNVersionProperty:
+    """sleap_nn_version must be included in worker registration properties."""
+
+    def test_get_sleap_nn_version_returns_string(self):
+        """_get_sleap_nn_version() must return a non-empty string."""
+        from sleap_rtc.worker.worker_class import _get_sleap_nn_version
+
+        version = _get_sleap_nn_version()
+        assert isinstance(version, str)
+        assert len(version) > 0
+
+    def test_get_sleap_nn_version_fallback_on_missing(self, monkeypatch):
+        """_get_sleap_nn_version() returns 'unknown' when sleap_nn is not importable."""
+        import builtins
+
+        real_import = builtins.__import__
+
+        def mock_import(name, *args, **kwargs):
+            if name == "sleap_nn":
+                raise ImportError("sleap_nn not installed")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", mock_import)
+        from sleap_rtc.worker import worker_class
+
+        monkeypatch.setattr(worker_class, "_get_sleap_nn_version", lambda: "unknown")
+        assert worker_class._get_sleap_nn_version() == "unknown"

@@ -251,10 +251,11 @@ class TestDashboardJobSubmission:
         assert "sj-worker-row" in app_js
 
     def test_sj_worker_specs_rendered(self, app_js):
-        """Worker GPU specs (gpu_model, gpu_memory_mb, cuda_version) must be read from properties."""
+        """Worker GPU specs (gpu_model, gpu_memory_mb, cuda_version, sleap_nn_version) must be read from properties."""
         assert "gpu_model" in app_js
         assert "gpu_memory_mb" in app_js
         assert "cuda_version" in app_js
+        assert "sleap_nn_version" in app_js
 
     def test_sj_status_dot_classes(self, app_js):
         """Status dot must use idle/busy/maintenance CSS classes."""

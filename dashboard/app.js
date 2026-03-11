@@ -1857,13 +1857,14 @@ class SleapRTCDashboard {
             const gpuModel = props.gpu_model ?? 'Unknown GPU';
             const gpuMem = props.gpu_memory_mb ? `${Math.round(props.gpu_memory_mb / 1024)} GB` : '';
             const cuda = props.cuda_version ? `CUDA ${props.cuda_version}` : '';
+            const sleapNnVersion = props.sleap_nn_version ? `sleap-nn ${props.sleap_nn_version}` : '';
             // status is one of: idle, busy, maintenance
             const isAvailable = status === 'idle';
             const disabledClass = isAvailable ? '' : ' disabled';
             const clickHandler = isAvailable
                 ? `onclick="app.sjSelectWorker('${worker.peer_id}')"`
                 : '';
-            const specs = [gpuModel, gpuMem, cuda].filter(Boolean).join(' · ');
+            const specs = [gpuModel, gpuMem, cuda, sleapNnVersion].filter(Boolean).join(' · ');
 
             return `<div class="sj-worker-row${disabledClass}" data-peer-id="${worker.peer_id}" ${clickHandler}>
                 <div class="sj-worker-info">

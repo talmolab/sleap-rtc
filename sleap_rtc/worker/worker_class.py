@@ -163,6 +163,16 @@ def _get_checkpoint_dir(
     return str(ckpt_path)
 
 
+def _get_sleap_nn_version() -> str:
+    """Return the installed sleap-nn version string, or 'unknown' if not available."""
+    try:
+        import sleap_nn
+
+        return sleap_nn.__version__
+    except (ImportError, AttributeError):
+        return "unknown"
+
+
 class RTCWorkerClient:
     def __init__(
         self,
@@ -1464,6 +1474,7 @@ class RTCWorkerClient:
                 "gpu_memory_mb": self.gpu_memory_mb,
                 "gpu_model": self.gpu_model,
                 "sleap_version": sleap_version,
+                "sleap_nn_version": _get_sleap_nn_version(),
                 "cuda_version": self.cuda_version,
                 "hostname": socket.gethostname(),
                 "status": self.status,
@@ -3366,6 +3377,7 @@ class RTCWorkerClient:
                             "gpu_memory_mb": self.gpu_memory_mb,
                             "gpu_model": self.gpu_model,
                             "sleap_version": sleap_version,
+                            "sleap_nn_version": _get_sleap_nn_version(),
                             "cuda_version": self.cuda_version,
                             "hostname": socket.gethostname(),
                             "worker_name": self.name,
