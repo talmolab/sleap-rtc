@@ -820,6 +820,10 @@ class SleapRTCDashboard {
                         0 connected
                     </span>
                     ${!isExpired ? `
+                        <button class="btn btn-primary btn-sm" data-room-id="${room.room_id}" onclick="app.openSubmitJobModal('${room.room_id}')">
+                            <i data-lucide="play"></i>
+                            Submit Job
+                        </button>
                         ${room.role === 'owner' ? `
                             <button class="btn btn-secondary btn-sm" onclick="app.handleRoomSecret('${room.room_id}')">
                                 <i data-lucide="key"></i>
@@ -1807,6 +1811,13 @@ class SleapRTCDashboard {
         }
 
         await this.generateAndSaveRoomSecret(roomId);
+    }
+
+    // ── Job submission ────────────────────────────────────────────────────────
+
+    openSubmitJobModal(roomId) {
+        // TODO: implemented in Task 4 (worker selection) and beyond
+        console.log('openSubmitJobModal', roomId);
     }
 }
 

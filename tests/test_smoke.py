@@ -177,3 +177,23 @@ class TestRequiredDataFiles:
             f"fs_resolve.html missing from installed package at {html_path}. "
             "Check the hatchling exclude config in pyproject.toml."
         )
+
+
+# ── Dashboard smoke tests ─────────────────────────────────────────────────────
+
+
+class TestDashboardJobSubmission:
+    """Dashboard job submission UI elements must be present."""
+
+    @pytest.fixture
+    def app_js(self):
+        return (Path(__file__).parent.parent / "dashboard" / "app.js").read_text()
+
+    def test_submit_job_button_in_render_room_card(self, app_js):
+        """renderRoomCard must include a Submit Job button calling openSubmitJobModal."""
+        assert "openSubmitJobModal" in app_js
+        assert "Submit Job" in app_js
+
+    def test_open_submit_job_modal_method_defined(self, app_js):
+        """openSubmitJobModal method must be defined on the app class."""
+        assert "openSubmitJobModal(" in app_js
