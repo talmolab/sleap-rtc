@@ -377,3 +377,16 @@ class TestDashboardJobSubmission:
         """wandb_url in JOB_PROGRESS must reveal the WandB link element."""
         assert "wandb_url" in app_js
         assert "sj-wandb-link" in app_js
+
+    # ── Task 9: smoke test and cleanup ────────────────────────────────────────
+
+    def test_js_yaml_cdn_included(self, index_html):
+        """js-yaml CDN script must be included in index.html for YAML parsing."""
+        assert "js-yaml" in index_html
+
+    def test_nav_tabs_present(self, index_html):
+        """Core data-tab nav items (rooms, tokens, quickstart, about) must be present."""
+        assert 'data-tab="rooms"' in index_html
+        assert 'data-tab="tokens"' in index_html
+        assert 'data-tab="quickstart"' in index_html
+        assert 'data-tab="about"' in index_html
