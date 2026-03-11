@@ -391,3 +391,63 @@ class TestSleapNNVersionProperty:
 
         monkeypatch.setattr(worker_class, "_get_sleap_nn_version", lambda: "unknown")
         assert worker_class._get_sleap_nn_version() == "unknown"
+
+
+# =============================================================================
+# Bug fixes: GPU detection empty string, YAML parsing, ICE server config
+# =============================================================================
+
+
+class TestGPUModelDetection:
+    """GPU model must never register as empty string — fallback to nvidia-smi or 'CPU'."""
+
+    def test_empty_string_from_torch_falls_back(self, monkeypatch):
+        """If torch returns empty string for GPU name, capabilities falls back (not empty)."""
+        import types
+        import sys
+
+        # Stub torch.cuda so we can monkeypatch without a real GPU
+        fake_torch = types.ModuleType("torch")
+        fake_cuda = types.ModuleType("torch.cuda")
+
+        class FakeProps:
+            name = ""  # empty string — the HPC bug
+
+        fake_cuda.is_available = lambda: True
+        fake_cuda.device_count = lambda: 1
+        fake_cuda.get_device_properties = lambda _: FakeProps()
+        fake_torch.cuda = fake_cuda
+        monkeypatch.setitem(sys.modules, "torch", fake_torch)
+        monkeypatch.setitem(sys.modules, "torch.cuda", fake_cuda)
+
+        # Also stub out subprocess so nvidia-smi returns a known value
+        import subprocess
+        import unittest.mock as mock
+        fake_result = mock.MagicMock()
+        fake_result.returncode = 0
+        fake_result.stdout = "NVIDIA A100-SXM4-40GB\n"
+        monkeypatch.setattr(subprocess, "run", lambda *a, **kw: fake_result)
+
+        # Reload capabilities to pick up the stubbed torch
+        import importlib
+        import sleap_rtc.worker.capabilities as caps_mod
+        importlib.reload(caps_mod)
+
+        caps = caps_mod.WorkerCapabilities.__new__(caps_mod.WorkerCapabilities)
+        caps.gpu_id = 0
+        result = caps._detect_gpu_model()
+        assert result != ""
+        assert result == "NVIDIA A100-SXM4-40GB"
+
+
+class TestMeshCoordinatorICEServers:
+    """_handle_client_offer must use a fresh PC with ICE servers, not self.worker.pc."""
+
+    def test_handle_client_offer_creates_fresh_pc(self):
+        """_handle_client_offer source must call _create_client_peer_connection."""
+        import inspect
+        from sleap_rtc.worker.mesh_coordinator import MeshCoordinator
+        src = inspect.getsource(MeshCoordinator._handle_client_offer)
+        assert "_create_client_peer_connection" in src, (
+            "_handle_client_offer must create a fresh RTCPeerConnection with ICE servers"
+        )

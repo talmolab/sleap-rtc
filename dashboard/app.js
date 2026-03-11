@@ -1865,7 +1865,7 @@ class SleapRTCDashboard {
         container.innerHTML = workers.map(worker => {
             const props = worker.properties ?? {};
             const status = props.status ?? 'idle';
-            const gpuModel = props.gpu_model ?? 'Unknown GPU';
+            const gpuModel = props.gpu_model || 'Unknown GPU';
             const gpuMem = props.gpu_memory_mb ? `${Math.round(props.gpu_memory_mb / 1024)} GB` : '';
             const cuda = props.cuda_version ? `CUDA ${props.cuda_version}` : '';
             const sleapNnVersion = props.sleap_nn_version ? `sleap-nn ${props.sleap_nn_version}` : '';
@@ -2012,13 +2012,20 @@ class SleapRTCDashboard {
 
     parseTrainingConfig(yamlText) {
         const doc = jsyaml.load(yamlText);
-        const trainer = doc?.trainer ?? doc ?? {};
+        // sleap-nn uses trainer_config as the top-level key; fall back to trainer or root
+        const trainer = doc?.trainer_config ?? doc?.trainer ?? doc ?? {};
         const wandb = trainer.wandb ?? doc?.wandb ?? {};
+        // batch_size lives under train_data_loader in sleap-nn configs
+        const batch_size = trainer?.train_data_loader?.batch_size
+            ?? trainer.batch_size ?? doc?.batch_size ?? 'unknown';
+        // learning rate lives under optimizer.lr in sleap-nn configs
+        const learning_rate = trainer?.optimizer?.lr
+            ?? trainer.learning_rate ?? doc?.learning_rate ?? 'unknown';
         return {
-            batch_size: trainer.batch_size ?? doc?.batch_size ?? 'unknown',
-            learning_rate: trainer.learning_rate ?? doc?.learning_rate ?? 'unknown',
+            batch_size,
+            learning_rate,
             max_epochs: trainer.max_epochs ?? doc?.max_epochs ?? 'unknown',
-            run_name: wandb.run_name ?? trainer.run_name ?? doc?.run_name ?? 'unknown',
+            run_name: trainer.run_name ?? wandb.name ?? wandb.run_name ?? doc?.run_name ?? 'unknown',
             wandb_project: wandb.project ?? 'unknown',
             wandb_entity: wandb.entity ?? 'unknown',
         };

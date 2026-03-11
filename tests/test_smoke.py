@@ -275,6 +275,9 @@ class TestDashboardJobSubmission:
         assert "learning_rate" in app_js
         assert "max_epochs" in app_js
         assert "run_name" in app_js
+        # sleap-nn uses trainer_config (not trainer) and optimizer.lr (not learning_rate)
+        assert "trainer_config" in app_js
+        assert "optimizer" in app_js
 
     def test_dropzone_handler_wired(self, app_js):
         """Drop zone drag-and-drop handler must be implemented (_sjInitDropzone or inline)."""

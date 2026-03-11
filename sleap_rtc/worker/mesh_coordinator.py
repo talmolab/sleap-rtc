@@ -260,6 +260,12 @@ class MeshCoordinator:
         await self.worker.state_manager.update_status("reserved")
         logger.info("Worker status updated to 'reserved'")
 
+        # Create a fresh RTCPeerConnection with ICE servers so TURN relay is
+        # available. self.worker.pc was created before registered_auth delivered
+        # ICE server credentials, so it has no STUN/TURN config — reusing it
+        # causes ICE to stall at "checking" on firewalled networks (e.g. HPC).
+        self.worker.pc = self.worker._create_client_peer_connection()
+
         # Set remote description and create answer
         await self.worker.pc.setRemoteDescription(
             RTCSessionDescription(sdp=sdp, type="offer")

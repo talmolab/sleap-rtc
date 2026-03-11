@@ -68,15 +68,40 @@ class WorkerCapabilities:
         """Detect GPU model name.
 
         Returns:
-            GPU model name, or "CPU" if no GPU available.
+            GPU model name, or result of nvidia-smi fallback, or "CPU".
         """
         try:
             import torch
 
             if torch.cuda.is_available() and torch.cuda.device_count() > self.gpu_id:
-                return torch.cuda.get_device_properties(self.gpu_id).name
+                name = torch.cuda.get_device_properties(self.gpu_id).name
+                if name:
+                    return name
         except (ImportError, RuntimeError) as e:
-            logging.warning(f"Failed to detect GPU model: {e}")
+            logging.warning(f"Failed to detect GPU model via torch: {e}")
+
+        # Fallback: try nvidia-smi (handles HPC environments where torch name is empty)
+        try:
+            import subprocess
+
+            result = subprocess.run(
+                [
+                    "nvidia-smi",
+                    f"--query-gpu=name",
+                    "--format=csv,noheader",
+                    f"--id={self.gpu_id}",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if result.returncode == 0:
+                name = result.stdout.strip().splitlines()[0].strip()
+                if name:
+                    return name
+        except Exception as e:
+            logging.warning(f"Failed to detect GPU model via nvidia-smi: {e}")
+
         return "CPU"
 
     def _detect_cuda_version(self) -> str:
