@@ -517,6 +517,19 @@ class RTCWorkerClient:
         """
         ice_servers = self.mesh_ice_servers if for_mesh else self.ice_servers
 
+        # If the signaling server returned no ICE servers, fall back to public
+        # STUN so the worker can at least discover its reflexive (srflx) address.
+        # TURN relay requires credentials from the server — we can't provide that
+        # here, but STUN alone is enough when the HPC node has a routable public IP.
+        _FALLBACK_STUN = [{"urls": "stun:stun.l.google.com:19302"}]
+        if not ice_servers and not for_mesh:
+            logging.warning(
+                "No ICE servers from signaling server — falling back to public "
+                "STUN (stun.l.google.com). TURN relay will not be available; "
+                "connections through strict firewalls may still fail."
+            )
+            ice_servers = _FALLBACK_STUN
+
         if ice_servers:
             # Build RTCConfiguration from ICE servers
             ice_server_objects = []
@@ -530,7 +543,7 @@ class RTCWorkerClient:
             )
             pc = RTCPeerConnection(configuration=config)
         else:
-            # Fallback to default (no ICE servers)
+            # Mesh connections: no fallback (workers are typically on same network)
             logging.warning(
                 "No ICE servers configured, using default RTCPeerConnection"
             )

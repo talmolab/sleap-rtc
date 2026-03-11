@@ -189,30 +189,22 @@ class MeshCoordinator:
                         # the SDP, so this message type is only sent by browsers.
                         # Without handling this, ICE stalls at "checking" — the
                         # browser's relay (TURN) candidates are never added to the PC.
+                        #
+                        # The browser sends candidate.toJSON() which looks like:
+                        #   {"candidate": "candidate:xxx udp ... typ relay", "sdpMid": "0", ...}
+                        # Pass the raw dict directly to addIceCandidate — aiortc
+                        # parses the "candidate" string field internally.
                         candidate_data = data.get("candidate")
                         if candidate_data and self.worker.pc:
-                            from aiortc import RTCIceCandidate
-
                             try:
-                                # RTCIceCandidate from dict: sdpMid, sdpMLineIndex, candidate
-                                cand = RTCIceCandidate(
-                                    component=1,  # RTP
-                                    foundation=candidate_data.get("foundation", ""),
-                                    ip=candidate_data.get("ip", ""),
-                                    port=candidate_data.get("port", 0),
-                                    priority=candidate_data.get("priority", 0),
-                                    protocol=candidate_data.get("protocol", "udp"),
-                                    type=candidate_data.get("type", "host"),
-                                    sdpMid=candidate_data.get("sdpMid"),
-                                    sdpMLineIndex=candidate_data.get("sdpMLineIndex"),
+                                await self.worker.pc.addIceCandidate(candidate_data)
+                                cand_str = candidate_data.get("candidate", "")
+                                cand_type = (
+                                    "relay"
+                                    if "typ relay" in cand_str
+                                    else "srflx" if "typ srflx" in cand_str else "host"
                                 )
-                                await self.worker.pc.addIceCandidate(cand)
-                                logger.debug(
-                                    f"[ICE] Added client candidate: "
-                                    f"{candidate_data.get('type','?')} "
-                                    f"{candidate_data.get('ip','?')}:"
-                                    f"{candidate_data.get('port','?')}"
-                                )
+                                logger.info(f"[ICE] Added client {cand_type} candidate")
                             except Exception as e:
                                 logger.warning(f"[ICE] Failed to add candidate: {e}")
                         else:
