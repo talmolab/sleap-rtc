@@ -1518,7 +1518,7 @@ class SleapRTCDashboard {
                             : `<span class="worker-meta-item"><span class="auth-badge token">TOKEN</span></span>`;
                         const metaLine = `<div class="worker-meta">
                                     <span class="worker-meta-item">
-                                        <i data-lucide="id-card"></i>
+                                        <i data-lucide="hash"></i>
                                         ${worker.peer_id}
                                         <span class="auth-badge peer-id">PEER ID</span>
                                     </span>
