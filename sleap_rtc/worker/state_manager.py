@@ -167,6 +167,8 @@ class StateManager:
             # Add API key authentication
             if self.api_key:
                 registration_msg["api_key"] = self.api_key
+                if self.room_id:
+                    registration_msg["room_id"] = self.room_id
                 logging.info("Re-registering with API key authentication")
             else:
                 logging.error("No API key available for re-registration")

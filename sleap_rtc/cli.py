@@ -1096,34 +1096,33 @@ def room_invite(room_id):
     help="Save secret to credentials file (default: yes).",
 )
 def room_create_secret(room, save):
-    """Generate a new room secret for P2P authentication.
+    """Generate a new room secret for legacy PSK authentication.
 
-    Creates a cryptographically secure 256-bit secret for authenticating
-    P2P connections between workers and clients in the room.
+    [bold yellow]LEGACY[/bold yellow]: Account-key auth is now preferred for new setups.
+    Use 'sleap-rtc key create --save' and 'sleap-rtc worker --account-key ...' instead.
 
-    The secret must be shared with:
-    - Workers: via --room-secret flag, SLEAP_ROOM_SECRET env var, or filesystem
-    - Clients: via --room-secret flag, SLEAP_ROOM_SECRET env var, or credentials
+    This command creates a cryptographically secure 256-bit pre-shared secret
+    for authenticating P2P connections between workers and clients in the room.
+    Room secrets are an older auth mechanism — account keys (Ed25519 keypairs)
+    provide stronger, per-identity auth without manual secret distribution.
 
-    Configuration options (in priority order):
+    Preferred auth flow:
+        sleap-rtc login                     # log in and generate a keypair
+        sleap-rtc key create --save         # create and save an account key
+        sleap-rtc worker --account-key slp_acct_xxx...
+
+    Legacy PSK configuration options (in priority order):
     1. CLI flag: --room-secret SECRET
     2. Environment variable: SLEAP_ROOM_SECRET=SECRET
     3. Filesystem: ~/.sleap-rtc/room-secrets/<room-id>
     4. Credentials file: ~/.sleap-rtc/credentials.json
 
     Examples:
-        # Generate and save secret for a room
+        # Generate and save secret for a room (legacy)
         sleap-rtc room create-secret --room my-room
 
         # Generate without saving (just display)
         sleap-rtc room create-secret --room my-room --no-save
-
-        # Use the secret with worker
-        sleap-rtc worker --api-key slp_xxx --room-secret SECRET
-
-        # Use the secret with client (env var method)
-        export SLEAP_ROOM_SECRET=SECRET
-        sleap-rtc train --room my-room --config /path/to/config.yaml
     """
     from sleap_rtc.auth.psk import generate_secret
     from sleap_rtc.auth.credentials import save_room_secret, get_room_secret
@@ -1152,10 +1151,10 @@ def room_create_secret(room, save):
         click.echo("Secret saved to ~/.sleap-rtc/credentials.json")
         click.echo("")
 
-    click.echo("To use this secret:")
+    click.echo("To use this secret (legacy PSK auth):")
     click.echo("")
     click.echo("  Worker:")
-    click.echo(f"    sleap-rtc worker --api-key slp_xxx --room-secret {secret}")
+    click.echo(f"    sleap-rtc worker --room-secret {secret}")
     click.echo("    # Or set SLEAP_ROOM_SECRET environment variable")
     click.echo("")
     click.echo("  Client:")
@@ -1163,6 +1162,10 @@ def room_create_secret(room, save):
         f"    sleap-rtc train --room {room} --config /path/to/config.yaml --room-secret {secret}"
     )
     click.echo("    # Or set SLEAP_ROOM_SECRET environment variable")
+    click.echo("")
+    click.echo("Tip: For new setups, account-key auth is recommended instead:")
+    click.echo("    sleap-rtc key create --save")
+    click.echo("    sleap-rtc worker --account-key slp_acct_xxx...")
     click.echo("")
 
 
@@ -1498,12 +1501,19 @@ def show_worker_help():
 
 @cli.command()
 @click.option(
+    "--account-key",
+    type=str,
+    envvar="SLEAP_RTC_ACCOUNT_KEY",
+    required=False,
+    help="Account key (slp_acct_...) for authentication. Can also use SLEAP_RTC_ACCOUNT_KEY env var.",
+)
+@click.option(
     "--api-key",
     "-k",
     type=str,
     envvar="SLEAP_RTC_API_KEY",
     required=False,
-    help="API key for worker authentication (slp_xxx...). Can also use SLEAP_RTC_API_KEY env var.",
+    help="[Legacy] Per-room API key (slp_xxx...). Use --account-key (slp_acct_xxx...) for new setups.",
 )
 @click.option(
     "--room",
@@ -1535,13 +1545,6 @@ def show_worker_help():
     help="Show detailed logs including ICE state, keep-alive, and file transfers.",
 )
 @click.option(
-    "--account-key",
-    type=str,
-    envvar="SLEAP_RTC_ACCOUNT_KEY",
-    required=False,
-    help="Account key (slp_acct_...) for authentication. Can also use SLEAP_RTC_ACCOUNT_KEY env var.",
-)
-@click.option(
     "--room-secret",
     type=str,
     envvar="SLEAP_ROOM_SECRET",
@@ -1551,16 +1554,20 @@ def show_worker_help():
 def worker(api_key, account_key, room, working_dir, name, verbose, room_secret):
     """Start the sleap-RTC worker node.
 
-    Authentication:
+    Authentication (recommended setup):
 
-    Account Key (recommended for containers/HPC):
-       sleap-rtc worker --account-key slp_acct_xxx...
-       # or: export SLEAP_RTC_ACCOUNT_KEY=slp_acct_xxx...
+        1. sleap-rtc login              # log in and generate a keypair
+        2. sleap-rtc key create --save  # create and save an account key
+        3. sleap-rtc worker             # starts automatically using saved key
 
-    API Key (legacy):
-       sleap-rtc worker --api-key slp_xxx...
+    Or pass the key explicitly:
 
-    Or use --room with JWT authentication (requires login).
+        sleap-rtc worker --account-key slp_acct_xxx...
+        # or: export SLEAP_RTC_ACCOUNT_KEY=slp_acct_xxx...
+
+    Legacy (per-room API key):
+
+        sleap-rtc worker --api-key slp_xxx...  # deprecated, use --account-key
     """
     # Check for credential file if no explicit auth provided
     if not api_key and not account_key and not room:
@@ -2434,7 +2441,7 @@ def test():
     type=str,
     envvar="SLEAP_ROOM_SECRET",
     required=False,
-    help="Room secret for P2P authentication. Can also use SLEAP_ROOM_SECRET env var.",
+    help="[Legacy] Room secret for PSK authentication. Account-key auth is now preferred.",
 )
 def test_browse(room, port, no_browser, room_secret):
     """Browse a Worker's filesystem via web UI.
@@ -2450,6 +2457,8 @@ def test_browse(room, port, no_browser, room_secret):
     - Copy file paths for use with --worker-path
 
     Requires authentication. Run 'sleap-rtc login' first.
+    P2P auth uses your account key (Ed25519) automatically if saved via
+    'sleap-rtc key create --save' or 'sleap-rtc key use'.
 
     Examples:
         # Connect to a Worker and open browser
@@ -2521,7 +2530,7 @@ def test_browse(room, port, no_browser, room_secret):
     type=str,
     envvar="SLEAP_ROOM_SECRET",
     required=False,
-    help="Room secret for P2P authentication. Can also use SLEAP_ROOM_SECRET env var.",
+    help="[Legacy] Room secret for PSK authentication. Account-key auth is now preferred.",
 )
 @click.option(
     "--use-jwt/--no-jwt",
@@ -2538,6 +2547,8 @@ def test_resolve_paths(room, slp, port, no_browser, room_secret, use_jwt):
     allows you to browse the Worker's filesystem and resolve the paths.
 
     Requires JWT authentication. Run 'sleap-rtc login' first.
+    P2P auth uses your account key (Ed25519) automatically if saved via
+    'sleap-rtc key create --save' or 'sleap-rtc key use'.
 
     The resolution process:
     1. Worker checks if videos in the SLP are accessible
@@ -2610,7 +2621,7 @@ def test_resolve_paths(room, slp, port, no_browser, room_secret, use_jwt):
     type=str,
     envvar="SLEAP_ROOM_SECRET",
     required=False,
-    help="Room secret for P2P authentication. Can also use SLEAP_ROOM_SECRET env var.",
+    help="[Legacy] Room secret for PSK authentication. Account-key auth is now preferred.",
 )
 def tui(room, room_secret):
     """Launch the interactive TUI file browser.
@@ -2624,15 +2635,15 @@ def tui(room, room_secret):
     If you provide --room, it will connect directly to that room,
     bypassing the room selection screen.
 
+    P2P auth uses your account key (Ed25519) automatically if saved via
+    'sleap-rtc key create --save' or 'sleap-rtc key use'.
+
     Examples:
         # Launch TUI with room selection
         sleap-rtc tui
 
         # Connect directly to a specific room
         sleap-rtc tui --room my-room
-
-        # Connect with a room secret for P2P auth
-        sleap-rtc tui --room my-room --room-secret SECRET
     """
     from sleap_rtc.tui.app import TUIApp
 
@@ -2897,8 +2908,9 @@ def credentials_list():
 
     Shows a summary of locally stored credentials:
     - Logged-in user (if any)
-    - Room secrets (redacted)
-    - API tokens (redacted)
+    - Account key (primary auth credential)
+    - Room secrets (redacted, legacy)
+    - API tokens (redacted, legacy)
 
     Use 'sleap-rtc credentials show --reveal' to see full values.
 
@@ -2907,6 +2919,7 @@ def credentials_list():
     """
     from sleap_rtc.auth.credentials import (
         get_credentials,
+        get_account_key,
         get_user,
         is_logged_in,
         CREDENTIALS_PATH,
@@ -2928,20 +2941,32 @@ def credentials_list():
     else:
         click.echo("  Not logged in")
 
-    # Room secrets
+    # Account key (primary credential)
+    click.echo("")
+    click.echo(click.style("Account Key (primary):", bold=True))
+    account_key = get_account_key()
+    if account_key:
+        masked = account_key[:20] + "..." if len(account_key) > 20 else "****"
+        click.echo(f"  {masked}")
+    else:
+        click.echo(
+            "  (none) — run 'sleap-rtc key create --save' to set up, or 'sleap-rtc key use slp_acct_xxx...' if you already have one"
+        )
+
+    # Room secrets (legacy)
     room_secrets = creds.get("room_secrets", {})
     click.echo("")
-    click.echo(click.style("Room Secrets:", bold=True))
+    click.echo(click.style("Room Secrets (legacy):", bold=True))
     if room_secrets:
         for room_id in room_secrets:
             click.echo(f"  {room_id}: ****")
     else:
         click.echo("  (none)")
 
-    # API tokens
+    # API tokens (legacy)
     tokens = creds.get("tokens", {})
     click.echo("")
-    click.echo(click.style("API Tokens:", bold=True))
+    click.echo(click.style("API Tokens (legacy):", bold=True))
     if tokens:
         for room_id, token_info in tokens.items():
             name = token_info.get("worker_name", "unknown")
@@ -2973,6 +2998,7 @@ def credentials_show(reveal):
     """
     from sleap_rtc.auth.credentials import (
         get_credentials,
+        get_account_key,
         get_jwt,
         get_user,
         is_logged_in,
@@ -3028,10 +3054,25 @@ def credentials_show(reveal):
     else:
         click.echo("  Not logged in")
 
-    # Room secrets
+    # Account key (primary credential)
+    click.echo("")
+    click.echo(click.style("Account Key (primary):", bold=True))
+    account_key = get_account_key()
+    if account_key:
+        if reveal:
+            click.echo(f"  {account_key}")
+        else:
+            masked = account_key[:20] + "..." if len(account_key) > 20 else "****"
+            click.echo(f"  {masked}")
+    else:
+        click.echo(
+            "  (none) — run 'sleap-rtc key create --save' to set up, or 'sleap-rtc key use slp_acct_xxx...' if you already have one"
+        )
+
+    # Room secrets (legacy)
     room_secrets = creds.get("room_secrets", {})
     click.echo("")
-    click.echo(click.style("Room Secrets:", bold=True))
+    click.echo(click.style("Room Secrets (legacy):", bold=True))
     if room_secrets:
         for room_id, secret in room_secrets.items():
             if reveal:
@@ -3042,10 +3083,10 @@ def credentials_show(reveal):
     else:
         click.echo("  (none)")
 
-    # API tokens
+    # API tokens (legacy)
     tokens = creds.get("tokens", {})
     click.echo("")
-    click.echo(click.style("API Tokens:", bold=True))
+    click.echo(click.style("API Tokens (legacy):", bold=True))
     if tokens:
         for room_id, token_info in tokens.items():
             name = token_info.get("worker_name", "unknown")
@@ -3215,6 +3256,48 @@ def credentials_remove_token(room, yes):
         click.echo(f"Removed token for room: {room}")
     else:
         click.echo(f"Failed to remove token for room: {room}")
+
+
+@credentials.command(name="remove-account-key")
+@click.option(
+    "--yes",
+    "-y",
+    is_flag=True,
+    default=False,
+    help="Skip confirmation prompt.",
+)
+def credentials_remove_account_key(yes):
+    """Remove the stored account key.
+
+    Removes the locally stored account key (slp_acct_xxx...) from
+    ~/.sleap-rtc/credentials.json. This does NOT revoke the key on the
+    server — use 'sleap-rtc key revoke' for that.
+
+    Example:
+        sleap-rtc credentials remove-account-key
+    """
+    from sleap_rtc.auth.credentials import get_account_key, remove_account_key
+
+    account_key = get_account_key()
+    if not account_key:
+        click.echo("No account key stored in credentials")
+        return
+
+    masked = account_key[:20] + "..." if len(account_key) > 20 else "****"
+    if not yes:
+        click.echo(f"Account key: {masked}")
+        click.echo("")
+        click.echo(
+            click.style("Note:", fg="yellow") + " This only removes the local copy."
+        )
+        click.echo("To revoke the key on the server, use: sleap-rtc key revoke")
+        click.echo("")
+        if not click.confirm("Remove stored account key?"):
+            click.echo("Cancelled")
+            return
+
+    remove_account_key()
+    click.echo("Removed account key from credentials")
 
 
 # =============================================================================

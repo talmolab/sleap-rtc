@@ -2762,36 +2762,29 @@ class RTCWorkerClient:
             asyncio.create_task(self.keep_ice_alive(channel))
             logging.info(f"{channel.label} channel is open")
 
-            # P2P PSK authentication: send challenge if secret configured
-            if self._room_secret:
-                nonce = generate_nonce()
-                self._pending_auth[channel.label] = nonce
-                challenge_msg = format_message(MSG_AUTH_CHALLENGE, nonce)
-                channel.send(challenge_msg)
-                logging.info(f"Sent AUTH_CHALLENGE to {channel.label}")
+            # Always send AUTH_CHALLENGE — worker verifies with PSK or Ed25519
+            nonce = generate_nonce()
+            self._pending_auth[channel.label] = nonce
+            challenge_msg = format_message(MSG_AUTH_CHALLENGE, nonce)
+            channel.send(challenge_msg)
+            logging.info(f"Sent AUTH_CHALLENGE to {channel.label}")
 
-                # Start timeout task (10 seconds)
-                async def auth_timeout():
-                    await asyncio.sleep(10.0)
-                    if channel.label in self._pending_auth:
-                        logging.warning(f"Auth timeout for {channel.label}")
-                        del self._pending_auth[channel.label]
-                        if channel.label in self._auth_timeout_tasks:
-                            del self._auth_timeout_tasks[channel.label]
-                        # Send failure and close
-                        if channel.readyState == "open":
-                            channel.send(format_message(MSG_AUTH_FAILURE, "timeout"))
-                            # Note: aiortc doesn't have channel.close(), connection will be reset
+            # Start timeout task (10 seconds)
+            async def auth_timeout():
+                await asyncio.sleep(10.0)
+                if channel.label in self._pending_auth:
+                    logging.warning(f"Auth timeout for {channel.label}")
+                    del self._pending_auth[channel.label]
+                    if channel.label in self._auth_timeout_tasks:
+                        del self._auth_timeout_tasks[channel.label]
+                    # Send failure and close
+                    if channel.readyState == "open":
+                        channel.send(format_message(MSG_AUTH_FAILURE, "timeout"))
+                        # Note: aiortc doesn't have channel.close(), connection will be reset
 
-                self._auth_timeout_tasks[channel.label] = asyncio.create_task(
-                    auth_timeout()
-                )
-            else:
-                # No secret configured - mark as authenticated immediately (legacy mode)
-                self._authenticated_channels.add(channel.label)
-                logging.info(
-                    f"{channel.label} authenticated (legacy mode - no secret configured)"
-                )
+            self._auth_timeout_tasks[channel.label] = asyncio.create_task(
+                auth_timeout()
+            )
 
         # Register handler for future open events
         @channel.on("open")
@@ -3263,24 +3256,23 @@ class RTCWorkerClient:
             # Authentication: API key required
             if not api_key:
                 logging.error(
-                    "No API key provided. Workers require an API key. "
-                    "Create one with: sleap-rtc token create --room <id> --name <name>"
+                    "No account key found. Workers require an account key.\n"
+                    "  1. sleap-rtc login              # log in and generate a keypair\n"
+                    "  2. sleap-rtc key create --save  # create and save an account key\n"
+                    "     (or: sleap-rtc key use slp_acct_xxx...  # if you have one already)\n"
+                    "  3. sleap-rtc worker             # start the worker"
                 )
                 return
 
-            logging.info("Using API key authentication...")
+            logging.info("Using account key authentication...")
 
-            # Load room secret for P2P PSK authentication
+            # Load room secret for P2P PSK authentication (legacy backward compat)
             # Priority: CLI flag > env var > filesystem > config
             self._room_secret = resolve_secret(
                 room_id or "default", cli_secret=room_secret
             )
             if self._room_secret:
                 logging.info("P2P PSK authentication enabled (room secret configured)")
-            else:
-                logging.info(
-                    "P2P PSK authentication disabled (no room secret configured)"
-                )
 
             # Generate a worker peer ID based on API key prefix
             peer_id = f"worker-{api_key[4:12]}-{socket.gethostname()[:8]}"
