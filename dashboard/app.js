@@ -1519,8 +1519,8 @@ class SleapRTCDashboard {
                                         <i data-lucide="monitor"></i>
                                     </div>
                                     <div>
-                                        <div class="worker-name">${displayName} ${authBadge}</div>
-                                        <div class="worker-id">${worker.peer_id}</div>
+                                        <div class="worker-name">${displayName}</div>
+                                        <div class="worker-id">${worker.peer_id} ${authBadge}</div>
                                     </div>
                                 </div>
                                 <span class="worker-connected" title="${formatExactDate(worker.connected_at)}">

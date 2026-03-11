@@ -58,6 +58,7 @@ class StateManager:
 
         # Worker state
         self.status = "available"
+        self.worker_name: Optional[str] = None  # Human-readable label (from --name flag)
 
         # Admin status callback - returns True if this worker is currently admin
         # Set by worker after admin_controller is initialized
@@ -142,6 +143,7 @@ class StateManager:
                 "max_concurrent_jobs": self.max_concurrent_jobs,
                 "supported_models": self.capabilities.supported_models,
                 "supported_job_types": self.capabilities.supported_job_types,
+                "worker_name": self.worker_name,
             }
 
             # Build registration message
