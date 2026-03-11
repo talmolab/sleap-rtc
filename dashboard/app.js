@@ -1508,20 +1508,26 @@ class SleapRTCDashboard {
                     workersList.innerHTML = '<div class="nested-worker-row" style="justify-content: center; color: var(--text-muted);">No workers currently connected</div>';
                 } else {
                     workersList.innerHTML = workerData.workers.map(worker => {
-                        // For account-key workers, show truncated key + badge.
-                        // For token workers, show token badge only.
-                        const authLine = worker.account_key_id
-                            ? `${worker.account_key_id.slice(0, 20)}... <span class="auth-badge account-key">account-key</span>`
-                            : `<span class="auth-badge token">token</span>`;
-                        // Top line: --name label if set, else peer_id.
-                        // Middle line: peer_id (when name is set, as reference).
-                        // Bottom line: account key + badge.
+                        // Metadata line: peer_id + PEER ID badge, then account key + ACCOUNT-KEY badge
+                        const keyItem = worker.account_key_id
+                            ? `<span class="worker-meta-item">
+                                    <i data-lucide="key"></i>
+                                    ${worker.account_key_id.slice(0, 20)}...
+                                    <span class="auth-badge account-key">ACCOUNT-KEY</span>
+                                </span>`
+                            : `<span class="worker-meta-item"><span class="auth-badge token">TOKEN</span></span>`;
+                        const metaLine = `<div class="worker-meta">
+                                    <span class="worker-meta-item">
+                                        <i data-lucide="id-card"></i>
+                                        ${worker.peer_id}
+                                        <span class="auth-badge peer-id">PEER ID</span>
+                                    </span>
+                                    ${keyItem}
+                                </div>`;
+                        // Top: --name label if set, else just the meta line.
                         const nameHtml = worker.worker_name
-                            ? `<div class="worker-name">${worker.worker_name}</div>
-                                        <div class="worker-id">${worker.peer_id}</div>
-                                        <div class="worker-id">${authLine}</div>`
-                            : `<div class="worker-name">${worker.peer_id}</div>
-                                        <div class="worker-id">${authLine}</div>`;
+                            ? `<div class="worker-name">${worker.worker_name}</div>${metaLine}`
+                            : metaLine;
                         return `
                             <div class="nested-worker-row">
                                 <div class="worker-cell">
