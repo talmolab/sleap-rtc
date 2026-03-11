@@ -811,6 +811,10 @@ class SleapRTCDashboard {
                 </div>
                 <div class="room-actions">
                     <span class="role-badge ${room.role}">${room.role}</span>
+                    <span id="room-worker-badge-${room.room_id}" class="worker-count-badge offline">
+                        <i data-lucide="zap-off"></i>
+                        0 connected
+                    </span>
                     ${!isExpired ? `
                         ${room.role === 'owner' ? `
                             <button class="btn btn-secondary btn-sm" onclick="app.handleRoomSecret('${room.room_id}')">
@@ -834,6 +838,17 @@ class SleapRTCDashboard {
                     `}
                 </div>
             </div>
+            ${!isExpired ? `
+                <div class="nested-workers">
+                    <div class="nested-header" onclick="app.toggleRoomWorkersList('${room.room_id}', this)">
+                        <span>Connected Workers</span>
+                        <i data-lucide="chevron-down"></i>
+                    </div>
+                    <div id="room-workers-list-${room.room_id}" class="nested-worker-list">
+                        <div class="nested-worker-row" style="justify-content: center; color: var(--text-muted);">Loading workers...</div>
+                    </div>
+                </div>
+            ` : ''}
         </div>
         `;
     }
