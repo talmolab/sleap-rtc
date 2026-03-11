@@ -1508,15 +1508,20 @@ class SleapRTCDashboard {
                     workersList.innerHTML = '<div class="nested-worker-row" style="justify-content: center; color: var(--text-muted);">No workers currently connected</div>';
                 } else {
                     workersList.innerHTML = workerData.workers.map(worker => {
-                        const authBadge = worker.account_key_id
-                            ? '<span class="auth-badge account-key">account-key</span>'
-                            : '<span class="auth-badge token">token</span>';
-                        // Show two lines only when a human-readable name is set (via --name flag).
-                        // Without a name, show peer_id + auth badge on a single line.
+                        // For account-key workers, show truncated key + badge.
+                        // For token workers, show token badge only.
+                        const authLine = worker.account_key_id
+                            ? `${worker.account_key_id.slice(0, 20)}... <span class="auth-badge account-key">account-key</span>`
+                            : `<span class="auth-badge token">token</span>`;
+                        // Top line: --name label if set, else peer_id.
+                        // Middle line: peer_id (when name is set, as reference).
+                        // Bottom line: account key + badge.
                         const nameHtml = worker.worker_name
                             ? `<div class="worker-name">${worker.worker_name}</div>
-                                        <div class="worker-id">${worker.peer_id} ${authBadge}</div>`
-                            : `<div class="worker-name">${worker.peer_id} ${authBadge}</div>`;
+                                        <div class="worker-id">${worker.peer_id}</div>
+                                        <div class="worker-id">${authLine}</div>`
+                            : `<div class="worker-name">${worker.peer_id}</div>
+                                        <div class="worker-id">${authLine}</div>`;
                         return `
                             <div class="nested-worker-row">
                                 <div class="worker-cell">
