@@ -58,7 +58,9 @@ class StateManager:
 
         # Worker state
         self.status = "available"
-        self.worker_name: Optional[str] = None  # Human-readable label (from --name flag)
+        self.worker_name: Optional[str] = (
+            None  # Human-readable label (from --name flag)
+        )
 
         # Admin status callback - returns True if this worker is currently admin
         # Set by worker after admin_controller is initialized
