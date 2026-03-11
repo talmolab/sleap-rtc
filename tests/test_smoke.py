@@ -236,3 +236,28 @@ class TestDashboardJobSubmission:
     def test_wandb_link_present(self, index_html):
         """WandB URL link must exist in the status view (hidden by default)."""
         assert 'id="sj-wandb-link"' in index_html
+
+    def test_sj_render_worker_list_method_defined(self, app_js):
+        """_sjRenderWorkerList method must be defined."""
+        assert "_sjRenderWorkerList(" in app_js
+
+    def test_sj_select_worker_method_defined(self, app_js):
+        """sjSelectWorker method must be defined."""
+        assert "sjSelectWorker(" in app_js
+
+    def test_sj_worker_row_available_clickable(self, app_js):
+        """Available workers must call sjSelectWorker on click."""
+        assert "sjSelectWorker" in app_js
+        assert "sj-worker-row" in app_js
+
+    def test_sj_worker_specs_rendered(self, app_js):
+        """Worker GPU specs (gpu_model, gpu_memory_mb, cuda_version) must be read from properties."""
+        assert "gpu_model" in app_js
+        assert "gpu_memory_mb" in app_js
+        assert "cuda_version" in app_js
+
+    def test_sj_status_dot_classes(self, app_js):
+        """Status dot must use idle/busy/maintenance CSS classes."""
+        assert "sj-status-dot" in app_js
+        assert "idle" in app_js
+        assert "busy" in app_js

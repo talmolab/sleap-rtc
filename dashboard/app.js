@@ -1822,7 +1822,6 @@ class SleapRTCDashboard {
         this._sjLabelsPath = null;
 
         // Reset all views to initial state
-        document.getElementById('sj-worker-list').innerHTML = '';
         document.getElementById('sj-hyperparams').classList.add('hidden');
         document.getElementById('sj-config-error').classList.add('hidden');
         document.getElementById('sj-selected-path').classList.add('hidden');
@@ -1836,9 +1835,55 @@ class SleapRTCDashboard {
         const room = this.rooms?.find(r => r.room_id === roomId);
         document.getElementById('sj-subtitle').textContent = room?.name || roomId;
 
+        this._sjRenderWorkerList();
         this.sjGoToStep(1);
         this.showModal('submit-job-modal');
         if (typeof lucide !== 'undefined') lucide.createIcons();
+    }
+
+    _sjRenderWorkerList() {
+        const container = document.getElementById('sj-worker-list');
+        if (!container) return;
+
+        const workers = this.roomWorkers[this._sjRoomId]?.workers ?? [];
+        if (workers.length === 0) {
+            container.innerHTML = '<p class="text-muted">No workers connected to this room.</p>';
+            return;
+        }
+
+        container.innerHTML = workers.map(worker => {
+            const props = worker.properties ?? {};
+            const status = props.status ?? 'idle';
+            const gpuModel = props.gpu_model ?? 'Unknown GPU';
+            const gpuMem = props.gpu_memory_mb ? `${Math.round(props.gpu_memory_mb / 1024)} GB` : '';
+            const cuda = props.cuda_version ? `CUDA ${props.cuda_version}` : '';
+            // status is one of: idle, busy, maintenance
+            const isAvailable = status === 'idle';
+            const disabledClass = isAvailable ? '' : ' disabled';
+            const clickHandler = isAvailable
+                ? `onclick="app.sjSelectWorker('${worker.peer_id}')"`
+                : '';
+            const specs = [gpuModel, gpuMem, cuda].filter(Boolean).join(' · ');
+
+            return `<div class="sj-worker-row${disabledClass}" data-peer-id="${worker.peer_id}" ${clickHandler}>
+                <div class="sj-worker-info">
+                    <span class="sj-worker-name">${worker.worker_name ?? worker.peer_id}</span>
+                    <span class="sj-worker-specs">${specs}</span>
+                </div>
+                <span class="sj-status-dot ${status}" title="${status}"></span>
+            </div>`;
+        }).join('');
+    }
+
+    sjSelectWorker(peerId) {
+        this._sjWorkerId = peerId;
+
+        // Update selected state on all rows
+        document.querySelectorAll('.sj-worker-row').forEach(row => {
+            row.classList.toggle('selected', row.dataset.peerId === peerId);
+        });
+
+        document.getElementById('sj-next-1').disabled = false;
     }
 
     closeSubmitJobModal() {
