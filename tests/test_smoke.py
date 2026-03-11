@@ -380,6 +380,11 @@ class TestDashboardJobSubmission:
 
     # ── Task 9: smoke test and cleanup ────────────────────────────────────────
 
+    def test_no_workers_shows_toast_warning(self, app_js):
+        """openSubmitJobModal must show a toast warning and bail when no workers are connected."""
+        assert "No workers" in app_js
+        assert "start a worker" in app_js.lower()
+
     def test_js_yaml_cdn_included(self, index_html):
         """js-yaml CDN script must be included in index.html for YAML parsing."""
         assert "js-yaml" in index_html

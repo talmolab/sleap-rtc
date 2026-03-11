@@ -1816,6 +1816,16 @@ class SleapRTCDashboard {
     // ── Job submission ────────────────────────────────────────────────────────
 
     openSubmitJobModal(roomId) {
+        // Guard: warn and bail if no workers are connected
+        const workerCount = this.roomWorkers[roomId]?.workers?.length ?? 0;
+        if (workerCount === 0) {
+            this.showToast(
+                'No workers connected to this room. Start a worker with sleap-rtc worker before submitting a job.',
+                'error'
+            );
+            return;
+        }
+
         this._sjRoomId = roomId;
         this._sjWorkerId = null;
         this._sjConfigContent = null;
