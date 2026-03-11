@@ -197,3 +197,42 @@ class TestDashboardJobSubmission:
     def test_open_submit_job_modal_method_defined(self, app_js):
         """openSubmitJobModal method must be defined on the app class."""
         assert "openSubmitJobModal(" in app_js
+
+    @pytest.fixture
+    def index_html(self):
+        return (Path(__file__).parent.parent / "dashboard" / "index.html").read_text()
+
+    def test_modal_wrapper_present(self, index_html):
+        """submit-job-modal wrapper must exist."""
+        assert 'id="submit-job-modal"' in index_html
+
+    def test_all_four_views_present(self, index_html):
+        """All four step/status views must exist inside the modal."""
+        assert 'id="sj-step1"' in index_html
+        assert 'id="sj-step2"' in index_html
+        assert 'id="sj-step3"' in index_html
+        assert 'id="sj-status"' in index_html
+
+    def test_step_progress_indicator_present(self, index_html):
+        """A step progress indicator showing 3 steps must exist."""
+        assert 'sj-step-indicator' in index_html
+
+    def test_worker_list_container_present(self, index_html):
+        """Worker selection list container must exist in step 1."""
+        assert 'id="sj-worker-list"' in index_html
+
+    def test_config_dropzone_present(self, index_html):
+        """Config YAML drop zone must exist in step 2."""
+        assert 'id="sj-config-dropzone"' in index_html
+
+    def test_file_browser_columns_present(self, index_html):
+        """File browser columns container must exist in step 3."""
+        assert 'id="sj-file-columns"' in index_html
+
+    def test_status_label_present(self, index_html):
+        """Status label element must exist in the status view."""
+        assert 'id="sj-status-label"' in index_html
+
+    def test_wandb_link_present(self, index_html):
+        """WandB URL link must exist in the status view (hidden by default)."""
+        assert 'id="sj-wandb-link"' in index_html

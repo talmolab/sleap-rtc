@@ -1286,6 +1286,416 @@ body::before {
     margin-bottom: 24px;
 }
 
+/* ── Job Submission Modal ─────────────────────────────────────────────────── */
+
+.modal-job-submission {
+    max-width: 640px;
+    width: 100%;
+}
+
+/* Header */
+.sj-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    margin-bottom: 24px;
+}
+
+.sj-header h3 {
+    margin-bottom: 4px;
+}
+
+.sj-subtitle {
+    font-size: 13px;
+    color: var(--text-muted);
+}
+
+/* Step progress indicator */
+.sj-step-indicator {
+    display: flex;
+    align-items: center;
+    margin-bottom: 28px;
+}
+
+.sj-step {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+}
+
+.sj-step-number {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: 600;
+    background: var(--bg-elevated);
+    color: var(--text-muted);
+    border: 1px solid var(--border-default);
+    transition: background 0.2s, color 0.2s, border-color 0.2s;
+}
+
+.sj-step-label {
+    font-size: 13px;
+    color: var(--text-muted);
+    transition: color 0.2s;
+}
+
+.sj-step.active .sj-step-number {
+    background: var(--accent-primary);
+    color: #fff;
+    border-color: var(--accent-primary);
+}
+
+.sj-step.active .sj-step-label {
+    color: var(--text-primary);
+    font-weight: 500;
+}
+
+.sj-step.done .sj-step-number {
+    background: var(--accent-muted);
+    color: var(--accent-secondary);
+    border-color: var(--accent-primary);
+}
+
+.sj-step-line {
+    flex: 1;
+    height: 1px;
+    background: var(--border-default);
+    margin: 0 12px;
+}
+
+/* Views */
+.sj-view {
+    min-height: 200px;
+    display: flex;
+    flex-direction: column;
+}
+
+.sj-instruction {
+    font-size: 14px;
+    color: var(--text-secondary);
+    margin-bottom: 16px;
+}
+
+/* Worker list (step 1) */
+.sj-worker-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 24px;
+    flex: 1;
+}
+
+.sj-worker-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 16px;
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius);
+    background: var(--bg-tertiary);
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+}
+
+.sj-worker-row:hover:not(.disabled) {
+    border-color: var(--accent-primary);
+    background: var(--bg-elevated);
+}
+
+.sj-worker-row.selected {
+    border-color: var(--accent-primary);
+    background: var(--accent-muted);
+}
+
+.sj-worker-row.disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.sj-worker-icon {
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
+    background: var(--bg-elevated);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    color: var(--text-muted);
+}
+
+.sj-worker-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.sj-worker-name {
+    font-weight: 600;
+    font-size: 14px;
+    margin-bottom: 2px;
+}
+
+.sj-worker-specs {
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+.sj-worker-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+}
+
+.sj-status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--text-muted);
+}
+
+.sj-status-dot.idle { background: var(--status-success); }
+.sj-status-dot.busy { background: var(--status-warning); }
+.sj-status-dot.maintenance { background: var(--status-error); }
+
+.sj-radio {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    border: 2px solid var(--border-default);
+    flex-shrink: 0;
+}
+
+.sj-worker-row.selected .sj-radio {
+    border-color: var(--accent-primary);
+    background: var(--accent-primary);
+    box-shadow: inset 0 0 0 3px var(--bg-tertiary);
+}
+
+/* Config drop zone (step 2) */
+.sj-dropzone {
+    border: 2px dashed var(--border-default);
+    border-radius: var(--radius);
+    padding: 40px 24px;
+    text-align: center;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+    margin-bottom: 16px;
+}
+
+.sj-dropzone:hover,
+.sj-dropzone.drag-over {
+    border-color: var(--accent-primary);
+    background: var(--accent-subtle);
+    color: var(--text-primary);
+}
+
+.sj-dropzone i {
+    width: 32px;
+    height: 32px;
+    margin-bottom: 12px;
+}
+
+.sj-dropzone p {
+    font-size: 14px;
+    margin: 0;
+}
+
+.sj-browse-link {
+    color: var(--accent-secondary);
+    cursor: pointer;
+    text-decoration: underline;
+}
+
+/* Hyperparameter display */
+.sj-hyperparams {
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius);
+    padding: 16px;
+    margin-bottom: 16px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+}
+
+.sj-hyperparam-item {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.sj-hyperparam-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+}
+
+.sj-hyperparam-value {
+    font-size: 14px;
+    font-family: 'JetBrains Mono', monospace;
+    color: var(--text-primary);
+}
+
+/* File browser (step 3) */
+.sj-file-browser {
+    flex: 1;
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius);
+    overflow: hidden;
+    margin-bottom: 12px;
+    min-height: 260px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.sj-file-columns {
+    display: flex;
+    height: 260px;
+    width: 100%;
+    overflow-x: auto;
+    align-items: stretch;
+}
+
+.sj-file-column {
+    min-width: 200px;
+    border-right: 1px solid var(--border-default);
+    overflow-y: auto;
+    flex-shrink: 0;
+}
+
+.sj-file-column:last-child {
+    border-right: none;
+}
+
+.sj-file-entry {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    cursor: pointer;
+    font-size: 13px;
+    transition: background 0.1s;
+}
+
+.sj-file-entry:hover {
+    background: var(--bg-hover);
+}
+
+.sj-file-entry.selected {
+    background: var(--accent-muted);
+    color: var(--accent-secondary);
+}
+
+.sj-file-entry i {
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+    color: var(--text-muted);
+}
+
+.sj-selected-path {
+    font-size: 12px;
+    font-family: 'JetBrains Mono', monospace;
+    color: var(--accent-secondary);
+    margin-bottom: 16px;
+    word-break: break-all;
+}
+
+/* Spinner */
+.sj-spinner {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    color: var(--text-muted);
+    font-size: 14px;
+}
+
+.sj-spinner i {
+    width: 24px;
+    height: 24px;
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+/* Status view */
+.sj-status-body {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+    padding: 32px 0;
+    flex: 1;
+}
+
+.sj-status-icon {
+    width: 56px;
+    height: 56px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-elevated);
+}
+
+.sj-status-label {
+    font-size: 18px;
+    font-weight: 600;
+}
+
+.sj-wandb-link {
+    color: var(--accent-secondary);
+    text-decoration: none;
+    font-size: 14px;
+}
+
+.sj-wandb-link:hover {
+    text-decoration: underline;
+}
+
+/* Error display */
+.sj-error {
+    font-size: 13px;
+    color: var(--status-error);
+    margin-bottom: 12px;
+}
+
+/* Icon-only close button */
+.btn-icon {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 4px;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: color 0.15s, background 0.15s;
+}
+
+.btn-icon:hover {
+    color: var(--text-primary);
+    background: var(--bg-hover);
+}
+
+.btn-icon i {
+    width: 20px;
+    height: 20px;
+}
+
 /* Forms */
 .form-group {
     margin-bottom: 20px;

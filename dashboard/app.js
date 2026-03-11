@@ -1816,8 +1816,56 @@ class SleapRTCDashboard {
     // ── Job submission ────────────────────────────────────────────────────────
 
     openSubmitJobModal(roomId) {
-        // TODO: implemented in Task 4 (worker selection) and beyond
-        console.log('openSubmitJobModal', roomId);
+        this._sjRoomId = roomId;
+        this._sjWorkerId = null;
+        this._sjConfigContent = null;
+        this._sjLabelsPath = null;
+
+        // Reset all views to initial state
+        document.getElementById('sj-worker-list').innerHTML = '';
+        document.getElementById('sj-hyperparams').classList.add('hidden');
+        document.getElementById('sj-config-error').classList.add('hidden');
+        document.getElementById('sj-selected-path').classList.add('hidden');
+        document.getElementById('sj-browser-error').classList.add('hidden');
+        document.getElementById('sj-wandb-link').classList.add('hidden');
+        document.getElementById('sj-next-1').disabled = true;
+        document.getElementById('sj-next-2').disabled = true;
+        document.getElementById('sj-submit-btn').disabled = true;
+
+        // Find room name for subtitle
+        const room = this.rooms?.find(r => r.room_id === roomId);
+        document.getElementById('sj-subtitle').textContent = room?.name || roomId;
+
+        this.sjGoToStep(1);
+        this.showModal('submit-job-modal');
+        if (typeof lucide !== 'undefined') lucide.createIcons();
+    }
+
+    closeSubmitJobModal() {
+        this.hideModal('submit-job-modal');
+        // TODO: Task 6 — disconnect WebRTC when implemented
+    }
+
+    sjGoToStep(step) {
+        // Hide all views
+        ['sj-step1', 'sj-step2', 'sj-step3', 'sj-status'].forEach(id => {
+            document.getElementById(id)?.classList.add('hidden');
+        });
+
+        // Show target view (status view doesn't have a step number)
+        const viewId = step === 'status' ? 'sj-status' : `sj-step${step}`;
+        document.getElementById(viewId)?.classList.remove('hidden');
+
+        // Update step indicator dots (steps 1-3 only)
+        if (typeof step === 'number') {
+            for (let i = 1; i <= 3; i++) {
+                const dot = document.getElementById(`sj-step-dot-${i}`);
+                if (!dot) continue;
+                dot.classList.remove('active', 'done');
+                if (i < step) dot.classList.add('done');
+                else if (i === step) dot.classList.add('active');
+            }
+        }
     }
 }
 

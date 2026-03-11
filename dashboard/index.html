@@ -1106,6 +1106,110 @@ auto_select = true</code></pre>
         </div>
     </div>
 
+    <!-- Submit Job Modal -->
+    <div id="submit-job-modal" class="modal hidden">
+        <div class="modal-content modal-job-submission">
+
+            <!-- Modal header -->
+            <div class="sj-header">
+                <div>
+                    <h3 id="sj-title">Submit Training Job</h3>
+                    <p id="sj-subtitle" class="sj-subtitle"></p>
+                </div>
+                <button class="btn-icon" onclick="app.closeSubmitJobModal()">
+                    <i data-lucide="x"></i>
+                </button>
+            </div>
+
+            <!-- Step progress indicator -->
+            <div class="sj-step-indicator">
+                <div class="sj-step" id="sj-step-dot-1">
+                    <span class="sj-step-number">1</span>
+                    <span class="sj-step-label">Select Worker</span>
+                </div>
+                <div class="sj-step-line"></div>
+                <div class="sj-step" id="sj-step-dot-2">
+                    <span class="sj-step-number">2</span>
+                    <span class="sj-step-label">Configure Job</span>
+                </div>
+                <div class="sj-step-line"></div>
+                <div class="sj-step" id="sj-step-dot-3">
+                    <span class="sj-step-number">3</span>
+                    <span class="sj-step-label">Submit</span>
+                </div>
+            </div>
+
+            <!-- Step 1: Select Worker -->
+            <div id="sj-step1" class="sj-view">
+                <p class="sj-instruction">Choose an available worker. The job will run on the selected machine.</p>
+                <div id="sj-worker-list" class="sj-worker-list"></div>
+                <div class="form-actions">
+                    <button class="btn btn-secondary" onclick="app.closeSubmitJobModal()">Cancel</button>
+                    <button class="btn btn-primary" id="sj-next-1" disabled onclick="app.sjGoToStep(2)">
+                        Next <i data-lucide="arrow-right"></i>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Step 2: Configure Job (config YAML upload) -->
+            <div id="sj-step2" class="sj-view hidden">
+                <div id="sj-config-dropzone" class="sj-dropzone">
+                    <i data-lucide="upload-cloud"></i>
+                    <p>Drop your sleap-nn config YAML here, or <label for="sj-config-input" class="sj-browse-link">browse</label></p>
+                    <input type="file" id="sj-config-input" accept=".yaml,.yml" class="hidden">
+                </div>
+                <div id="sj-hyperparams" class="sj-hyperparams hidden"></div>
+                <p id="sj-config-error" class="sj-error hidden"></p>
+                <div class="form-actions">
+                    <button class="btn btn-secondary" onclick="app.sjGoToStep(1)">
+                        <i data-lucide="arrow-left"></i> Back
+                    </button>
+                    <button class="btn btn-primary" id="sj-next-2" disabled onclick="app.sjGoToStep(3)">
+                        Next <i data-lucide="arrow-right"></i>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Step 3: File browser (.slp selection) -->
+            <div id="sj-step3" class="sj-view hidden">
+                <p class="sj-instruction">Navigate to your <code>.slp</code> labels file on the worker filesystem.</p>
+                <div id="sj-file-browser" class="sj-file-browser">
+                    <div id="sj-browser-spinner" class="sj-spinner">
+                        <i data-lucide="loader-2"></i>
+                        <span>Connecting to worker…</span>
+                    </div>
+                    <div id="sj-file-columns" class="sj-file-columns hidden"></div>
+                </div>
+                <p id="sj-selected-path" class="sj-selected-path hidden"></p>
+                <p id="sj-browser-error" class="sj-error hidden"></p>
+                <div class="form-actions">
+                    <button class="btn btn-secondary" onclick="app.sjGoToStep(2)">
+                        <i data-lucide="arrow-left"></i> Back
+                    </button>
+                    <button class="btn btn-primary" id="sj-submit-btn" disabled onclick="app.submitJob()">
+                        Submit
+                    </button>
+                </div>
+            </div>
+
+            <!-- Status view (replaces steps after job accepted) -->
+            <div id="sj-status" class="sj-view hidden">
+                <div class="sj-status-body">
+                    <div id="sj-status-icon" class="sj-status-icon"></div>
+                    <p id="sj-status-label" class="sj-status-label">Running…</p>
+                    <a id="sj-wandb-link" href="#" target="_blank" class="sj-wandb-link hidden">
+                        Track in WandB →
+                    </a>
+                    <p id="sj-status-error" class="sj-error hidden"></p>
+                </div>
+                <div class="form-actions">
+                    <button class="btn btn-primary" id="sj-close-btn" onclick="app.closeSubmitJobModal()">Close</button>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
     <!-- Confirmation Modal -->
     <div id="confirm-modal" class="modal hidden">
         <div class="modal-content modal-confirm">
@@ -1126,6 +1230,8 @@ auto_select = true</code></pre>
 
     <!-- QR Code library -->
     <script src="https://cdn.jsdelivr.net/npm/qrcode/build/qrcode.min.js"></script>
+    <!-- YAML parser (used for config upload in job submission) -->
+    <script src="https://cdn.jsdelivr.net/npm/js-yaml@4/dist/js-yaml.min.js"></script>
     <!-- App -->
     <script src="config.js"></script>
     <script src="app.js"></script>
