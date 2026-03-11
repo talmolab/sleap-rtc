@@ -262,3 +262,26 @@ class TestDashboardJobSubmission:
         assert "sj-status-dot" in app_js
         assert "idle" in app_js
         assert "busy" in app_js
+
+    # ── Task 5: YAML config upload ────────────────────────────────────────────
+
+    def test_parse_training_config_method_defined(self, app_js):
+        """parseTrainingConfig method must be defined."""
+        assert "parseTrainingConfig(" in app_js
+
+    def test_parse_training_config_reads_key_fields(self, app_js):
+        """parseTrainingConfig must read batch_size, learning_rate, max_epochs, run_name."""
+        assert "batch_size" in app_js
+        assert "learning_rate" in app_js
+        assert "max_epochs" in app_js
+        assert "run_name" in app_js
+
+    def test_dropzone_handler_wired(self, app_js):
+        """Drop zone drag-and-drop handler must be implemented (_sjInitDropzone or inline)."""
+        assert "sj-config-dropzone" in app_js
+        assert "dragover" in app_js
+        assert "drop" in app_js
+
+    def test_config_content_stored(self, app_js):
+        """Parsed YAML content must be stored as _sjConfigContent."""
+        assert "_sjConfigContent" in app_js

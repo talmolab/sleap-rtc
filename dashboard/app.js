@@ -1836,6 +1836,7 @@ class SleapRTCDashboard {
         document.getElementById('sj-subtitle').textContent = room?.name || roomId;
 
         this._sjRenderWorkerList();
+        this._sjInitDropzone();
         this.sjGoToStep(1);
         this.showModal('submit-job-modal');
         if (typeof lucide !== 'undefined') lucide.createIcons();
@@ -1890,6 +1891,84 @@ class SleapRTCDashboard {
     closeSubmitJobModal() {
         this.hideModal('submit-job-modal');
         // TODO: Task 6 — disconnect WebRTC when implemented
+    }
+
+    // ── Task 5: YAML config upload ────────────────────────────────────────────
+
+    parseTrainingConfig(yamlText) {
+        const doc = jsyaml.load(yamlText);
+        const trainer = doc?.trainer ?? doc ?? {};
+        const wandb = trainer.wandb ?? doc?.wandb ?? {};
+        return {
+            batch_size: trainer.batch_size ?? doc?.batch_size ?? 'unknown',
+            learning_rate: trainer.learning_rate ?? doc?.learning_rate ?? 'unknown',
+            max_epochs: trainer.max_epochs ?? doc?.max_epochs ?? 'unknown',
+            run_name: wandb.run_name ?? trainer.run_name ?? doc?.run_name ?? 'unknown',
+            wandb_project: wandb.project ?? 'unknown',
+            wandb_entity: wandb.entity ?? 'unknown',
+        };
+    }
+
+    _sjRenderHyperparams(fields) {
+        const container = document.getElementById('sj-hyperparams');
+        if (!container) return;
+        const rows = [
+            ['Batch size', fields.batch_size],
+            ['Learning rate', fields.learning_rate],
+            ['Max epochs', fields.max_epochs],
+            ['Run name', fields.run_name],
+            ['WandB project', fields.wandb_project],
+            ['WandB entity', fields.wandb_entity],
+        ];
+        container.innerHTML = rows.map(([label, val]) =>
+            `<div class="sj-hyperparam-row"><span class="sj-hyperparam-label">${label}</span><span class="sj-hyperparam-value">${val}</span></div>`
+        ).join('');
+        container.classList.remove('hidden');
+    }
+
+    _sjHandleConfigFile(file) {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            const text = e.target.result;
+            const errorEl = document.getElementById('sj-config-error');
+            const next2 = document.getElementById('sj-next-2');
+            try {
+                const fields = this.parseTrainingConfig(text);
+                this._sjConfigContent = text;
+                this._sjRenderHyperparams(fields);
+                errorEl.classList.add('hidden');
+                next2.disabled = false;
+            } catch (err) {
+                this._sjConfigContent = null;
+                document.getElementById('sj-hyperparams').classList.add('hidden');
+                errorEl.textContent = `Invalid YAML: ${err.message}`;
+                errorEl.classList.remove('hidden');
+                next2.disabled = true;
+            }
+        };
+        reader.readAsText(file);
+    }
+
+    _sjInitDropzone() {
+        const dropzone = document.getElementById('sj-config-dropzone');
+        const fileInput = document.getElementById('sj-config-input');
+        if (!dropzone || !fileInput) return;
+
+        dropzone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropzone.classList.add('drag-over');
+        });
+        dropzone.addEventListener('dragleave', () => dropzone.classList.remove('drag-over'));
+        dropzone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropzone.classList.remove('drag-over');
+            const file = e.dataTransfer.files[0];
+            if (file) this._sjHandleConfigFile(file);
+        });
+        fileInput.addEventListener('change', () => {
+            const file = fileInput.files[0];
+            if (file) this._sjHandleConfigFile(file);
+        });
     }
 
     sjGoToStep(step) {
