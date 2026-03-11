@@ -1467,6 +1467,7 @@ class RTCWorkerClient:
                 "max_concurrent_jobs": self.max_concurrent_jobs,
                 "supported_models": self.supported_models,
                 "supported_job_types": self.supported_job_types,
+                "worker_name": self.name,
             }
 
             # Send register message with is_admin=True
@@ -3301,6 +3302,8 @@ class RTCWorkerClient:
                     capabilities=self.capabilities,
                     max_concurrent_jobs=self.max_concurrent_jobs,
                 )
+                # Set human-readable name label for dashboard display
+                self.state_manager.worker_name = self.name
                 # Set room credentials in state manager
                 self.state_manager.set_room_credentials(
                     room_id=self.room_id,

@@ -866,6 +866,54 @@ body::before {
     color: var(--text-muted);
 }
 
+.auth-badge {
+    display: inline-block;
+    font-size: 10px;
+    font-weight: 600;
+    padding: 1px 6px;
+    border-radius: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    vertical-align: middle;
+    margin-left: 4px;
+}
+
+.auth-badge.account-key {
+    background: var(--accent-blue, #3b82f6);
+    color: #fff;
+}
+
+.auth-badge.peer-id {
+    background: var(--accent-primary);
+    color: #fff;
+}
+
+.auth-badge.token {
+    background: var(--text-muted, #6b7280);
+    color: #fff;
+}
+
+.worker-meta {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-top: 2px;
+}
+
+.worker-meta-item {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.worker-meta-item svg {
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+}
+
 /* API key available section */
 .api-key-available {
     border-top: 1px solid var(--border-subtle);
