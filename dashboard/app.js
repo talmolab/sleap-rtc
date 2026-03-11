@@ -650,6 +650,10 @@ class SleapRTCDashboard {
             this.rooms = data.rooms || [];
             this.renderRooms();
             this.updateCounts();
+            // Load live workers for all rooms (non-blocking, same pattern as token workers)
+            this.loadAllRoomWorkers().then(() => {
+                this.updateRoomWorkerBadges();
+            });
         } catch (e) {
             console.error('Failed to load rooms:', e);
             container.innerHTML = `<p class="loading" style="color: var(--status-error);">Failed to load rooms: ${e.message}</p>`;
