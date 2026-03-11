@@ -182,6 +182,45 @@ class MeshCoordinator:
                         )
                         await self.handle_signaling_offer(data)
 
+                    elif msg_type == "candidate":
+                        # Trickle ICE candidate from a browser client (dashboard).
+                        # Browser clients (WebRTC JS API) send candidates separately
+                        # after the offer. aiortc (GUI/CLI) embeds all candidates in
+                        # the SDP, so this message type is only sent by browsers.
+                        # Without handling this, ICE stalls at "checking" — the
+                        # browser's relay (TURN) candidates are never added to the PC.
+                        candidate_data = data.get("candidate")
+                        if candidate_data and self.worker.pc:
+                            from aiortc import RTCIceCandidate
+
+                            try:
+                                # RTCIceCandidate from dict: sdpMid, sdpMLineIndex, candidate
+                                cand = RTCIceCandidate(
+                                    component=1,  # RTP
+                                    foundation=candidate_data.get("foundation", ""),
+                                    ip=candidate_data.get("ip", ""),
+                                    port=candidate_data.get("port", 0),
+                                    priority=candidate_data.get("priority", 0),
+                                    protocol=candidate_data.get("protocol", "udp"),
+                                    type=candidate_data.get("type", "host"),
+                                    sdpMid=candidate_data.get("sdpMid"),
+                                    sdpMLineIndex=candidate_data.get("sdpMLineIndex"),
+                                )
+                                await self.worker.pc.addIceCandidate(cand)
+                                logger.debug(
+                                    f"[ICE] Added client candidate: "
+                                    f"{candidate_data.get('type','?')} "
+                                    f"{candidate_data.get('ip','?')}:"
+                                    f"{candidate_data.get('port','?')}"
+                                )
+                            except Exception as e:
+                                logger.warning(f"[ICE] Failed to add candidate: {e}")
+                        else:
+                            logger.debug(
+                                "[ICE] Ignoring candidate: no PC or empty candidate "
+                                "(end-of-candidates signal)"
+                            )
+
                     elif msg_type == "ice_candidate":
                         # ICE candidate for mesh connection
                         await self.handle_signaling_ice_candidate(data)
@@ -260,17 +299,60 @@ class MeshCoordinator:
         await self.worker.state_manager.update_status("reserved")
         logger.info("Worker status updated to 'reserved'")
 
+        # Store peer role so handle_channel_open can skip PSK challenge for
+        # dashboard clients (role: "client"). Without this, the channel open
+        # handler issues a PSK challenge the dashboard can't answer.
+        self.worker._pending_offer_role = data.get("role")
+        logger.info(f"Stored pending offer role: {self.worker._pending_offer_role!r}")
+
+        # Log ICE server config so we can diagnose HPC connectivity issues
+        ice_count = len(self.worker.ice_servers) if self.worker.ice_servers else 0
+        logger.info(
+            f"Creating client PC with {ice_count} ICE server(s): "
+            f"{[s.get('urls', s) for s in (self.worker.ice_servers or [])]}"
+        )
+        if ice_count == 0:
+            logger.warning(
+                "No ICE servers configured — client-worker ICE will rely on "
+                "direct host candidates only. This will fail when the worker "
+                "is behind a firewall (e.g. HPC). Check that the signaling "
+                "server returns ice_servers in registered_auth."
+            )
+
         # Create a fresh RTCPeerConnection with ICE servers so TURN relay is
         # available. self.worker.pc was created before registered_auth delivered
         # ICE server credentials, so it has no STUN/TURN config — reusing it
         # causes ICE to stall at "checking" on firewalled networks (e.g. HPC).
         self.worker.pc = self.worker._create_client_peer_connection()
 
+        # Log ICE gathering state changes so we can diagnose candidate types
+        @self.worker.pc.on("icegatheringstatechange")
+        def _on_ice_gathering():
+            state = self.worker.pc.iceGatheringState
+            logger.info(f"[ICE] Gathering state → {state}")
+            if state == "complete":
+                # Log the gathered candidates from the local SDP
+                sdp_lines = (
+                    self.worker.pc.localDescription.sdp.splitlines()
+                    if self.worker.pc.localDescription
+                    else []
+                )
+                candidates = [l for l in sdp_lines if l.startswith("a=candidate")]
+                logger.info(f"[ICE] Gathered {len(candidates)} candidate(s):")
+                for c in candidates:
+                    logger.info(f"[ICE]   {c}")
+
         # Set remote description and create answer
         await self.worker.pc.setRemoteDescription(
             RTCSessionDescription(sdp=sdp, type="offer")
         )
         await self.worker.pc.setLocalDescription(await self.worker.pc.createAnswer())
+
+        # Log the answer SDP length for debugging
+        answer_sdp = self.worker.pc.localDescription.sdp
+        logger.info(
+            f"[ICE] Answer SDP ready ({len(answer_sdp)} chars), " f"sending to {sender}"
+        )
 
         # Send answer back to client
         await self.websocket.send(
@@ -279,7 +361,7 @@ class MeshCoordinator:
                     "type": self.worker.pc.localDescription.type,
                     "sender": self.worker.peer_id,
                     "target": sender,
-                    "sdp": self.worker.pc.localDescription.sdp,
+                    "sdp": answer_sdp,
                 }
             )
         )
