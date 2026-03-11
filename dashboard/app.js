@@ -129,6 +129,7 @@ class SleapRTCDashboard {
         this.jwt = null;
         this.user = null;
         this.rooms = [];
+        this.roomWorkers = {}; // Cache of connected workers by room_id
         this.tokens = [];
         this.tokenWorkers = {}; // Cache of connected workers by token_id
 
@@ -1447,6 +1448,23 @@ class SleapRTCDashboard {
         // Load worker counts for all active tokens in parallel
         const activeTokens = this.tokens.filter(t => !t.revoked_at);
         const promises = activeTokens.map(token => this.loadTokenWorkers(token.token_id));
+        await Promise.all(promises);
+    }
+
+    async loadRoomWorkers(roomId) {
+        try {
+            const data = await this.apiRequest(`/api/rooms/${roomId}/workers`);
+            this.roomWorkers[roomId] = data;
+            return data;
+        } catch (e) {
+            console.error(`Failed to load workers for room ${roomId}:`, e);
+            this.roomWorkers[roomId] = { workers: [], count: 0 };
+            return this.roomWorkers[roomId];
+        }
+    }
+
+    async loadAllRoomWorkers() {
+        const promises = this.rooms.map(room => this.loadRoomWorkers(room.room_id));
         await Promise.all(promises);
     }
 
