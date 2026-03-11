@@ -1665,6 +1665,17 @@ class RTCWorkerClient:
                 if msg_type == "offer":
                     logging.info("Received offer SDP")
 
+                    # When this worker is acting as admin, the MeshCoordinator's
+                    # admin WebSocket handles client offers (with proper ICE server
+                    # config). Skip here to avoid double-handling the same offer,
+                    # which would send a spurious "worker_busy" error to the client.
+                    if self.admin_controller and self.admin_controller.is_admin:
+                        logging.info(
+                            "Skipping offer in main loop — MeshCoordinator admin "
+                            "WebSocket will handle it"
+                        )
+                        continue
+
                     # Obtain the sender's peer ID (this is the new target)
                     target_pid = data.get("sender")
 

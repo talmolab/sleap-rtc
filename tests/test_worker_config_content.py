@@ -451,3 +451,21 @@ class TestMeshCoordinatorICEServers:
         assert "_create_client_peer_connection" in src, (
             "_handle_client_offer must create a fresh RTCPeerConnection with ICE servers"
         )
+
+
+class TestDoubleOfferGuard:
+    """Main WebSocket loop must not double-handle offers when MeshCoordinator is admin."""
+
+    def test_offer_skipped_when_admin_controller_is_admin(self):
+        """worker_class main loop must skip 'offer' when admin_controller.is_admin is True."""
+        import inspect
+        from sleap_rtc.worker.worker_class import RTCWorkerClient
+
+        # Read the source around the offer handler and verify the admin guard
+        src = inspect.getsource(RTCWorkerClient.handle_connection)
+        # The guard must check is_admin before processing the offer
+        assert "admin_controller.is_admin" in src, (
+            "Main WebSocket loop must skip offer when MeshCoordinator is admin"
+        )
+        # Must use continue to skip (not fall through)
+        assert "continue" in src

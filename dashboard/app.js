@@ -2054,12 +2054,31 @@ class SleapRTCDashboard {
             const text = e.target.result;
             const errorEl = document.getElementById('sj-config-error');
             const next2 = document.getElementById('sj-next-2');
+            const dropzone = document.getElementById('sj-config-dropzone');
             try {
                 const fields = this.parseTrainingConfig(text);
                 this._sjConfigContent = text;
                 this._sjRenderHyperparams(fields);
                 errorEl.classList.add('hidden');
                 next2.disabled = false;
+                // Show filename and allow re-upload
+                if (dropzone) {
+                    dropzone.innerHTML = `
+                        <i data-lucide="file-check"></i>
+                        <p><strong>${file.name}</strong></p>
+                        <p style="font-size:0.8em;opacity:0.7">Drop a different file or <label for="sj-config-input" class="sj-browse-link">browse</label> to replace</p>
+                        <input type="file" id="sj-config-input" accept=".yaml,.yml" class="hidden">
+                    `;
+                    lucide.createIcons();
+                    // Re-wire the new file input
+                    const newInput = document.getElementById('sj-config-input');
+                    if (newInput) {
+                        newInput.addEventListener('change', () => {
+                            const f = newInput.files[0];
+                            if (f) this._sjHandleConfigFile(f);
+                        });
+                    }
+                }
             } catch (err) {
                 this._sjConfigContent = null;
                 document.getElementById('sj-hyperparams').classList.add('hidden');
