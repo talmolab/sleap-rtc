@@ -266,6 +266,9 @@ class RTCWorkerClient:
         # PSK P2P authentication (zero-trust layer)
         self._room_secret: Optional[str] = None  # Set via CLI flag, env var, or config
         self._pending_auth: dict[str, str] = {}  # channel_label -> nonce
+        self._pending_offer_role: Optional[str] = (
+            None  # role of peer whose offer we're processing
+        )
 
         # Ed25519 P2P authentication (new auth architecture)
         self._authorized_public_keys: list[dict] = []  # Fetched from server
@@ -1654,6 +1657,9 @@ class RTCWorkerClient:
                     # Obtain the sender's peer ID (this is the new target)
                     target_pid = data.get("sender")
 
+                    # Store the peer's role so handle_channel_open can decide whether to skip PSK
+                    self._pending_offer_role = data.get("role")
+
                     # SAFEGUARD: Check worker status before accepting connection
                     if self.status in ["busy", "reserved"]:
                         logging.warning(
@@ -2763,7 +2769,16 @@ class RTCWorkerClient:
             asyncio.create_task(self.keep_ice_alive(channel))
             logging.info(f"{channel.label} channel is open")
 
-            # Always send AUTH_CHALLENGE — worker verifies with PSK or Ed25519
+            # Skip PSK challenge for dashboard clients (role: "client").
+            # The signaling server validates JWT and room membership on their behalf.
+            if self._pending_offer_role == "client":
+                self._authenticated_channels.add(channel.label)
+                logging.info(
+                    f"Trusted {channel.label} without PSK challenge (role: client)"
+                )
+                return
+
+            # Send AUTH_CHALLENGE — worker verifies response with PSK or Ed25519
             nonce = generate_nonce()
             self._pending_auth[channel.label] = nonce
             challenge_msg = format_message(MSG_AUTH_CHALLENGE, nonce)
