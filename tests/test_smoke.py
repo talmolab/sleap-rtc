@@ -309,3 +309,31 @@ class TestDashboardJobSubmission:
     def test_connect_timeout_handled(self, app_js):
         """connectToWorker must handle connection timeout."""
         assert "timeout" in app_js.lower() or "setTimeout" in app_js
+
+    # ── Task 7: filesystem browser ────────────────────────────────────────────
+
+    def test_send_fs_message_defined(self, app_js):
+        """sendFsMessage method must be defined."""
+        assert "sendFsMessage(" in app_js
+
+    def test_init_file_browser_defined(self, app_js):
+        """initFileBrowser method must be defined."""
+        assert "initFileBrowser(" in app_js
+
+    def test_render_column_defined(self, app_js):
+        """renderColumn method must be defined."""
+        assert "renderColumn(" in app_js
+
+    def test_fs_protocol_messages_used(self, app_js):
+        """FS_GET_MOUNTS and FS_LIST_DIR protocol strings must be sent."""
+        assert "FS_GET_MOUNTS" in app_js
+        assert "FS_LIST_DIR" in app_js
+
+    def test_slp_file_selection_stored(self, app_js):
+        """Selecting a .slp file must store path as _sjLabelsPath."""
+        assert "_sjLabelsPath" in app_js
+        assert ".slp" in app_js
+
+    def test_step3_triggers_connect(self, app_js):
+        """Entering step 3 must call connectToWorker."""
+        assert "connectToWorker" in app_js

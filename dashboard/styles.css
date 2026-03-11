@@ -1602,6 +1602,18 @@ body::before {
     color: var(--text-muted);
 }
 
+.sj-file-entry.is-dir::before {
+    content: '📁';
+    font-size: 12px;
+    flex-shrink: 0;
+}
+
+.sj-file-entry.is-slp::before {
+    content: '🎯';
+    font-size: 12px;
+    flex-shrink: 0;
+}
+
 .sj-selected-path {
     font-size: 12px;
     font-family: 'JetBrains Mono', monospace;

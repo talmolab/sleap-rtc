@@ -2076,6 +2076,135 @@ class SleapRTCDashboard {
         });
     }
 
+    // ── Task 7: column filesystem browser ────────────────────────────────────
+
+    async sjEnterStep3() {
+        this.sjGoToStep(3);
+
+        // Show spinner, hide columns
+        document.getElementById('sj-browser-spinner')?.classList.remove('hidden');
+        document.getElementById('sj-file-columns')?.classList.add('hidden');
+        document.getElementById('sj-browser-error')?.classList.add('hidden');
+
+        // Look up room token from cached rooms list
+        const room = this.rooms?.find(r => r.room_id === this._sjRoomId);
+        const roomToken = room?.token ?? null;
+
+        try {
+            const dc = await this.connectToWorker(this._sjWorkerId, this._sjRoomId, roomToken);
+            dc.onmessage = (event) => this.onDataChannelMessage(event);
+            document.getElementById('sj-browser-spinner')?.classList.add('hidden');
+            document.getElementById('sj-file-columns')?.classList.remove('hidden');
+            this.initFileBrowser();
+        } catch (err) {
+            document.getElementById('sj-browser-spinner')?.classList.add('hidden');
+            const errEl = document.getElementById('sj-browser-error');
+            if (errEl) {
+                errEl.textContent = `Connection failed: ${err.message}`;
+                errEl.classList.remove('hidden');
+            }
+        }
+    }
+
+    sendFsMessage(msg) {
+        if (this._sjDc?.readyState === 'open') {
+            this._sjDc.send(msg);
+        }
+    }
+
+    onDataChannelMessage(event) {
+        const text = event.data;
+        const sep = '::';
+        const firstSep = text.indexOf(sep);
+        if (firstSep === -1) return;
+        const msgType = text.slice(0, firstSep);
+        const payload = text.slice(firstSep + sep.length);
+
+        if (msgType === 'FS_MOUNTS_RESPONSE') {
+            let mounts;
+            try { mounts = JSON.parse(payload); } catch { return; }
+            // Each mount: { path, label }
+            const entries = mounts.map(m => ({ name: m.label || m.path, path: m.path, is_dir: true }));
+            this.renderColumn(entries, 0);
+
+        } else if (msgType === 'FS_LIST_RESPONSE') {
+            let data;
+            try { data = JSON.parse(payload); } catch { return; }
+            // data: { path, entries, total_count, has_more }
+            const colIndex = this._sjPendingColIndex ?? 1;
+            this.renderColumn(data.entries, colIndex, data.has_more ? data.path : null);
+            delete this._sjPendingColIndex;
+        }
+    }
+
+    initFileBrowser() {
+        document.getElementById('sj-file-columns').innerHTML = '';
+        this.sendFsMessage('FS_GET_MOUNTS');
+    }
+
+    renderColumn(entries, colIndex, hasMorePath = null) {
+        const container = document.getElementById('sj-file-columns');
+        if (!container) return;
+
+        // Truncate columns to the right of colIndex
+        const existing = container.querySelectorAll('.sj-file-column');
+        existing.forEach((col, i) => { if (i >= colIndex) col.remove(); });
+
+        // Filter: show only directories and .slp files
+        const visible = entries.filter(e => e.is_dir || (e.name ?? e.path ?? '').endsWith('.slp'));
+
+        const col = document.createElement('div');
+        col.className = 'sj-file-column';
+        col.dataset.colIndex = colIndex;
+
+        visible.forEach(entry => {
+            const name = entry.name ?? entry.path.split('/').pop();
+            const row = document.createElement('div');
+            row.className = 'sj-file-entry' + (entry.is_dir ? ' is-dir' : ' is-slp');
+            row.textContent = name;
+
+            if (entry.is_dir) {
+                row.onclick = () => {
+                    this._sjPendingColIndex = colIndex + 1;
+                    this.sendFsMessage(`FS_LIST_DIR::${entry.path}::0`);
+                    // Highlight selected dir
+                    col.querySelectorAll('.sj-file-entry').forEach(r => r.classList.remove('selected'));
+                    row.classList.add('selected');
+                };
+            } else {
+                // .slp file
+                row.onclick = () => {
+                    this._sjLabelsPath = entry.path;
+                    const pathEl = document.getElementById('sj-selected-path');
+                    if (pathEl) {
+                        pathEl.textContent = `Selected: ${entry.path}`;
+                        pathEl.classList.remove('hidden');
+                    }
+                    document.getElementById('sj-submit-btn').disabled = false;
+                    // Highlight
+                    container.querySelectorAll('.sj-file-entry').forEach(r => r.classList.remove('selected'));
+                    row.classList.add('selected');
+                };
+            }
+            col.appendChild(row);
+        });
+
+        // Infinite scroll: request next page when scrolled to bottom
+        if (hasMorePath) {
+            let page = 1;
+            col.addEventListener('scroll', () => {
+                if (col.scrollTop + col.clientHeight >= col.scrollHeight - 20) {
+                    const offset = page * 100; // default page size
+                    this.sendFsMessage(`FS_LIST_DIR::${hasMorePath}::${offset}`);
+                    page++;
+                    col.removeEventListener('scroll', col._scrollHandler);
+                }
+            });
+        }
+
+        container.appendChild(col);
+    }
+
     sjGoToStep(step) {
         // Hide all views
         ['sj-step1', 'sj-step2', 'sj-step3', 'sj-status'].forEach(id => {
