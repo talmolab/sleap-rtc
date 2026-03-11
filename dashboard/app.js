@@ -2123,17 +2123,84 @@ class SleapRTCDashboard {
         if (msgType === 'FS_MOUNTS_RESPONSE') {
             let mounts;
             try { mounts = JSON.parse(payload); } catch { return; }
-            // Each mount: { path, label }
             const entries = mounts.map(m => ({ name: m.label || m.path, path: m.path, is_dir: true }));
             this.renderColumn(entries, 0);
 
         } else if (msgType === 'FS_LIST_RESPONSE') {
             let data;
             try { data = JSON.parse(payload); } catch { return; }
-            // data: { path, entries, total_count, has_more }
             const colIndex = this._sjPendingColIndex ?? 1;
             this.renderColumn(data.entries, colIndex, data.has_more ? data.path : null);
             delete this._sjPendingColIndex;
+
+        } else if (msgType === 'JOB_ACCEPTED') {
+            this.sjGoToStep('status');
+            const label = document.getElementById('sj-status-label');
+            if (label) label.textContent = 'Running…';
+
+        } else if (msgType === 'JOB_REJECTED') {
+            // payload: {job_id}::{json_errors}
+            const rejSep = payload.indexOf('::');
+            const errJson = rejSep !== -1 ? payload.slice(rejSep + 2) : payload;
+            let msg = 'Job rejected by worker.';
+            try {
+                const data = JSON.parse(errJson);
+                const errors = data.errors ?? [];
+                if (errors.length) msg = errors.map(e => e.message).join(' ');
+            } catch { /* use default msg */ }
+            const errEl = document.getElementById('sj-browser-error');
+            if (errEl) { errEl.textContent = msg; errEl.classList.remove('hidden'); }
+
+        } else if (msgType === 'JOB_PROGRESS') {
+            let data;
+            try { data = JSON.parse(payload); } catch { return; }
+            const label = document.getElementById('sj-status-label');
+            const epoch = data.epoch;
+            const loss = data.loss != null ? data.loss.toFixed(4) : null;
+            if (label && epoch != null) {
+                label.textContent = `Running — Epoch ${epoch}${loss ? `, loss ${loss}` : ''}`;
+            }
+            if (data.wandb_url) {
+                const link = document.getElementById('sj-wandb-link');
+                if (link) {
+                    link.href = data.wandb_url;
+                    link.classList.remove('hidden');
+                }
+            }
+
+        } else if (msgType === 'JOB_COMPLETE') {
+            const label = document.getElementById('sj-status-label');
+            if (label) label.textContent = 'Complete ✓';
+            this._sjShowCloseButton();
+
+        } else if (msgType === 'JOB_FAILED') {
+            const label = document.getElementById('sj-status-label');
+            let errMsg = 'Job failed.';
+            try {
+                const data = JSON.parse(payload);
+                errMsg = data.message ?? errMsg;
+            } catch { /* use default */ }
+            if (label) label.textContent = `Failed: ${errMsg}`;
+            this._sjShowCloseButton();
+        }
+    }
+
+    submitJob() {
+        const jobId = crypto.randomUUID();
+        const spec = {
+            type: 'train',
+            config_content: this._sjConfigContent,
+            labels_path: this._sjLabelsPath,
+            model_types: [],
+        };
+        this.sendFsMessage(`JOB_SUBMIT::${jobId}::${JSON.stringify(spec)}`);
+    }
+
+    _sjShowCloseButton() {
+        // Replace Submit button with a Close button in status view
+        const actions = document.querySelector('#sj-status .form-actions');
+        if (actions) {
+            actions.innerHTML = `<button class="btn btn-secondary" onclick="app.closeSubmitJobModal()">Close</button>`;
         }
     }
 

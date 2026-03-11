@@ -337,3 +337,43 @@ class TestDashboardJobSubmission:
     def test_step3_triggers_connect(self, app_js):
         """Entering step 3 must call connectToWorker."""
         assert "connectToWorker" in app_js
+
+    # ── Task 8: job submission and status view ────────────────────────────────
+
+    def test_submit_job_method_defined(self, app_js):
+        """submitJob method must be defined."""
+        assert "submitJob(" in app_js
+
+    def test_submit_job_uses_job_submit_protocol(self, app_js):
+        """submitJob must send JOB_SUBMIT message."""
+        assert "JOB_SUBMIT" in app_js
+
+    def test_submit_job_generates_job_id(self, app_js):
+        """submitJob must generate a job_id (crypto.randomUUID)."""
+        assert "randomUUID" in app_js
+
+    def test_job_accepted_switches_to_status_view(self, app_js):
+        """JOB_ACCEPTED handler must switch to status view."""
+        assert "JOB_ACCEPTED" in app_js
+        assert "sj-status" in app_js
+
+    def test_job_rejected_shows_error(self, app_js):
+        """JOB_REJECTED handler must show an error."""
+        assert "JOB_REJECTED" in app_js
+
+    def test_job_progress_handled(self, app_js):
+        """JOB_PROGRESS handler must be present."""
+        assert "JOB_PROGRESS" in app_js
+
+    def test_job_complete_updates_status(self, app_js):
+        """JOB_COMPLETE handler must update status label."""
+        assert "JOB_COMPLETE" in app_js
+
+    def test_job_failed_updates_status(self, app_js):
+        """JOB_FAILED handler must update status label."""
+        assert "JOB_FAILED" in app_js
+
+    def test_wandb_link_shown_on_progress(self, app_js):
+        """wandb_url in JOB_PROGRESS must reveal the WandB link element."""
+        assert "wandb_url" in app_js
+        assert "sj-wandb-link" in app_js
