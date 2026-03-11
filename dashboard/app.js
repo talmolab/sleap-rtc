@@ -1511,17 +1511,19 @@ class SleapRTCDashboard {
                         const authBadge = worker.account_key_id
                             ? '<span class="auth-badge account-key">account-key</span>'
                             : '<span class="auth-badge token">token</span>';
-                        const displayName = worker.worker_name || extractWorkerHostname(worker.peer_id);
+                        // Show two lines only when a human-readable name is set (via --name flag).
+                        // Without a name, show peer_id + auth badge on a single line.
+                        const nameHtml = worker.worker_name
+                            ? `<div class="worker-name">${worker.worker_name}</div>
+                                        <div class="worker-id">${worker.peer_id} ${authBadge}</div>`
+                            : `<div class="worker-name">${worker.peer_id} ${authBadge}</div>`;
                         return `
                             <div class="nested-worker-row">
                                 <div class="worker-cell">
                                     <div class="worker-avatar">
                                         <i data-lucide="monitor"></i>
                                     </div>
-                                    <div>
-                                        <div class="worker-name">${displayName}</div>
-                                        <div class="worker-id">${worker.peer_id} ${authBadge}</div>
-                                    </div>
+                                    <div>${nameHtml}</div>
                                 </div>
                                 <span class="worker-connected" title="${formatExactDate(worker.connected_at)}">
                                     Connected ${formatRelativeTime(worker.connected_at)}
