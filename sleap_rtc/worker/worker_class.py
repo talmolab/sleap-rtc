@@ -2773,8 +2773,10 @@ class RTCWorkerClient:
             # The signaling server validates JWT and room membership on their behalf.
             if self._pending_offer_role == "client":
                 self._authenticated_channels.add(channel.label)
-                logging.info(
-                    f"Trusted {channel.label} without PSK challenge (role: client)"
+                logging.warning(
+                    f"PSK challenge skipped for {channel.label} (peer role: client) — "
+                    "trusting signaling server JWT admission. "
+                    "Revisit when per-peer authorization is hardened."
                 )
                 return
 
