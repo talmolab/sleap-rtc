@@ -358,7 +358,9 @@ class WorkerSetupDialog(QDialog):
         step4_layout.addWidget(step4_label)
 
         # Build worker command using account key pattern
-        worker_cmd_str = 'sleap-rtc worker --account-key YOUR_ACCOUNT_KEY --name "My GPU Server"'
+        worker_cmd_str = (
+            'sleap-rtc worker --account-key YOUR_ACCOUNT_KEY --name "My GPU Server"'
+        )
         self._worker_cmd = QLabel(f"   <code>{worker_cmd_str}</code>")
         self._worker_cmd.setTextFormat(Qt.RichText)
         self._worker_cmd.setStyleSheet("background-color: #f0f0f0; padding: 4px;")
@@ -397,7 +399,9 @@ class WorkerSetupDialog(QDialog):
 
     def _on_copy_commands(self):
         """Copy setup commands to clipboard."""
-        worker_cmd = 'sleap-rtc worker --account-key YOUR_ACCOUNT_KEY --name "My GPU Server"'
+        worker_cmd = (
+            'sleap-rtc worker --account-key YOUR_ACCOUNT_KEY --name "My GPU Server"'
+        )
 
         commands = f"""# Install sleap-rtc (one time)
 uv tool install --python 3.11 sleap-rtc --with "sleap-nn[torch]" --with-executables-from sleap-nn --torch-backend auto

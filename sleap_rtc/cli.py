@@ -2949,7 +2949,9 @@ def credentials_list():
         masked = account_key[:20] + "..." if len(account_key) > 20 else "****"
         click.echo(f"  {masked}")
     else:
-        click.echo("  (none) — run 'sleap-rtc key create --save' to set up, or 'sleap-rtc key use slp_acct_xxx...' if you already have one")
+        click.echo(
+            "  (none) — run 'sleap-rtc key create --save' to set up, or 'sleap-rtc key use slp_acct_xxx...' if you already have one"
+        )
 
     # Room secrets (legacy)
     room_secrets = creds.get("room_secrets", {})
@@ -3063,7 +3065,9 @@ def credentials_show(reveal):
             masked = account_key[:20] + "..." if len(account_key) > 20 else "****"
             click.echo(f"  {masked}")
     else:
-        click.echo("  (none) — run 'sleap-rtc key create --save' to set up, or 'sleap-rtc key use slp_acct_xxx...' if you already have one")
+        click.echo(
+            "  (none) — run 'sleap-rtc key create --save' to set up, or 'sleap-rtc key use slp_acct_xxx...' if you already have one"
+        )
 
     # Room secrets (legacy)
     room_secrets = creds.get("room_secrets", {})

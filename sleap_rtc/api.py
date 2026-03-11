@@ -508,9 +508,7 @@ def list_workers(room_id: str) -> list[Worker]:
     return asyncio.run(_discover_workers_async(config, jwt, room_id))
 
 
-async def _discover_workers_async(
-    config, jwt: str, room_id: str
-) -> list[Worker]:
+async def _discover_workers_async(config, jwt: str, room_id: str) -> list[Worker]:
     """Async implementation of worker discovery.
 
     Connects to signaling server, registers, requests peer list, and disconnects.
