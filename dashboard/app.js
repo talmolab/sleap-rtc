@@ -1890,7 +1890,112 @@ class SleapRTCDashboard {
 
     closeSubmitJobModal() {
         this.hideModal('submit-job-modal');
-        // TODO: Task 6 — disconnect WebRTC when implemented
+        this.disconnectFromWorker();
+    }
+
+    // ── Task 6: WebRTC signaling ──────────────────────────────────────────────
+
+    connectToWorker(workerId, roomId, roomToken) {
+        return new Promise((resolve, reject) => {
+            const TIMEOUT_MS = 15000;
+            let settled = false;
+
+            const settle = (fn, val) => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(timer);
+                fn(val);
+            };
+
+            const timer = setTimeout(() => {
+                settle(reject, new Error('WebRTC connection timed out after 15 s'));
+                this.disconnectFromWorker();
+            }, TIMEOUT_MS);
+
+            // Derive client peer_id from JWT claims (username)
+            const peerId = this.user?.username ?? 'dashboard-client';
+
+            const wsUrl = CONFIG.SIGNALING_SERVER.replace(/^http/, 'ws') + '/ws';
+            const ws = new WebSocket(wsUrl);
+            this._sjWs = ws;
+
+            ws.onopen = () => {
+                ws.send(JSON.stringify({
+                    type: 'register',
+                    peer_id: peerId,
+                    room_id: roomId,
+                    token: roomToken,
+                    role: 'client',
+                    jwt: this.jwt,
+                }));
+            };
+
+            ws.onmessage = async (event) => {
+                let msg;
+                try { msg = JSON.parse(event.data); } catch { return; }
+
+                if (msg.type === 'registered_auth') {
+                    const iceServers = (msg.ice_servers ?? []).map(s => ({
+                        urls: s.urls,
+                        ...(s.username ? { username: s.username } : {}),
+                        ...(s.credential ? { credential: s.credential } : {}),
+                    }));
+                    const pc = new RTCPeerConnection({ iceServers });
+                    this._sjPc = pc;
+
+                    const dc = pc.createDataChannel('job');
+                    this._sjDc = dc;
+
+                    dc.onopen = () => settle(resolve, dc);
+                    dc.onerror = (e) => settle(reject, e);
+
+                    pc.onicecandidate = ({ candidate }) => {
+                        if (candidate && ws.readyState === WebSocket.OPEN) {
+                            ws.send(JSON.stringify({
+                                type: 'candidate',
+                                sender: peerId,
+                                target: workerId,
+                                candidate: candidate.toJSON(),
+                            }));
+                        }
+                    };
+
+                    await pc.setLocalDescription(await pc.createOffer());
+                    ws.send(JSON.stringify({
+                        type: 'offer',
+                        sender: peerId,
+                        target: workerId,
+                        role: 'client',
+                        sdp: pc.localDescription.sdp,
+                    }));
+
+                } else if (msg.type === 'answer') {
+                    await this._sjPc?.setRemoteDescription(
+                        new RTCSessionDescription({ type: 'answer', sdp: msg.sdp })
+                    );
+
+                } else if (msg.type === 'candidate') {
+                    try {
+                        await this._sjPc?.addIceCandidate(new RTCIceCandidate(msg.candidate));
+                    } catch { /* ignore stale candidates */ }
+
+                } else if (msg.type === 'error') {
+                    settle(reject, new Error(msg.message ?? 'Signaling error'));
+                }
+            };
+
+            ws.onerror = () => settle(reject, new Error('WebSocket error'));
+            ws.onclose = () => { if (!settled) settle(reject, new Error('WebSocket closed')); };
+        });
+    }
+
+    disconnectFromWorker() {
+        this._sjDc?.close();
+        this._sjPc?.close();
+        this._sjWs?.close();
+        this._sjDc = null;
+        this._sjPc = null;
+        this._sjWs = null;
     }
 
     // ── Task 5: YAML config upload ────────────────────────────────────────────

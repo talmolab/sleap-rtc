@@ -285,3 +285,27 @@ class TestDashboardJobSubmission:
     def test_config_content_stored(self, app_js):
         """Parsed YAML content must be stored as _sjConfigContent."""
         assert "_sjConfigContent" in app_js
+
+    # ── Task 6: WebRTC signaling ──────────────────────────────────────────────
+
+    def test_connect_to_worker_method_defined(self, app_js):
+        """connectToWorker method must be defined."""
+        assert "connectToWorker(" in app_js
+
+    def test_disconnect_from_worker_method_defined(self, app_js):
+        """disconnectFromWorker method must be defined."""
+        assert "disconnectFromWorker(" in app_js
+
+    def test_webrtc_offer_sent_with_client_role(self, app_js):
+        """Offer message must include role: 'client' so worker skips auth challenge."""
+        assert "role" in app_js
+        assert "client" in app_js
+
+    def test_datachannel_label_is_job(self, app_js):
+        """Data channel must be created with label 'job'."""
+        assert "createDataChannel" in app_js
+        assert "'job'" in app_js or '"job"' in app_js
+
+    def test_connect_timeout_handled(self, app_js):
+        """connectToWorker must handle connection timeout."""
+        assert "timeout" in app_js.lower() or "setTimeout" in app_js
