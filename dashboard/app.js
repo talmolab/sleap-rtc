@@ -1467,6 +1467,58 @@ class SleapRTCDashboard {
         const promises = this.rooms.map(room => this.loadRoomWorkers(room.room_id));
         await Promise.all(promises);
     }
+    updateRoomWorkerBadges() {
+        for (const room of this.rooms) {
+            const workerData = this.roomWorkers[room.room_id] || { workers: [], count: 0 };
+            const badge = document.getElementById(`room-worker-badge-${room.room_id}`);
+            const workersList = document.getElementById(`room-workers-list-${room.room_id}`);
+
+            if (badge) {
+                const count = workerData.count;
+                const text = count === 0 ? '0 connected' :
+                    count === 1 ? '1 connected' : `${count} connected`;
+                badge.innerHTML = `
+                    <i data-lucide="${count > 0 ? 'zap' : 'zap-off'}"></i>
+                    ${text}
+                `;
+                badge.className = `worker-count-badge ${count === 0 ? 'offline' : ''}`;
+            }
+
+            if (workersList) {
+                if (workerData.workers.length === 0) {
+                    workersList.innerHTML = '<div class="nested-worker-row" style="justify-content: center; color: var(--text-muted);">No workers currently connected</div>';
+                } else {
+                    workersList.innerHTML = workerData.workers.map(worker => {
+                        const authBadge = worker.account_key_id
+                            ? '<span class="auth-badge account-key">account-key</span>'
+                            : '<span class="auth-badge token">token</span>';
+                        const displayName = worker.worker_name || extractWorkerHostname(worker.peer_id);
+                        return `
+                            <div class="nested-worker-row">
+                                <div class="worker-cell">
+                                    <div class="worker-avatar">
+                                        <i data-lucide="monitor"></i>
+                                    </div>
+                                    <div>
+                                        <div class="worker-name">${displayName} ${authBadge}</div>
+                                        <div class="worker-id">${worker.peer_id}</div>
+                                    </div>
+                                </div>
+                                <span class="worker-connected" title="${formatExactDate(worker.connected_at)}">
+                                    Connected ${formatRelativeTime(worker.connected_at)}
+                                </span>
+                            </div>
+                        `;
+                    }).join('');
+                }
+            }
+
+            if (typeof lucide !== 'undefined') {
+                lucide.createIcons();
+            }
+        }
+    }
+
 
     toggleWorkersList(tokenId, headerElement) {
         const list = document.getElementById(`workers-list-${tokenId}`);
@@ -1479,6 +1531,17 @@ class SleapRTCDashboard {
             }
         }
     }
+    toggleRoomWorkersList(roomId, headerElement) {
+        const list = document.getElementById(`room-workers-list-${roomId}`);
+        if (list && headerElement) {
+            const isExpanded = list.classList.toggle('expanded');
+            headerElement.classList.toggle('expanded', isExpanded);
+            if (typeof lucide !== 'undefined') {
+                lucide.createIcons();
+            }
+        }
+    }
+
 
     async handleRevokeToken(tokenId) {
         const confirmed = await this.showConfirmModal(
