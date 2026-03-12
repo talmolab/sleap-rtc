@@ -1907,7 +1907,7 @@ class SleapRTCDashboard {
 
     connectToWorker(workerId, roomId, roomToken) {
         return new Promise((resolve, reject) => {
-            const TIMEOUT_MS = 15000;
+            const TIMEOUT_MS = 120000;  // 2 min — generous for ICE debugging
             let settled = false;
 
             const settle = (fn, val) => {
@@ -1918,7 +1918,7 @@ class SleapRTCDashboard {
             };
 
             const timer = setTimeout(() => {
-                settle(reject, new Error('WebRTC connection timed out after 15 s'));
+                settle(reject, new Error('WebRTC connection timed out after 120 s'));
                 this.disconnectFromWorker();
             }, TIMEOUT_MS);
 
