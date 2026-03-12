@@ -353,34 +353,26 @@ class MeshCoordinator:
         # causes ICE to stall at "checking" on firewalled networks (e.g. HPC).
         self.worker.pc = self.worker._create_client_peer_connection()
 
-        # Log ICE gathering state changes so we can diagnose candidate types
-        @self.worker.pc.on("icegatheringstatechange")
-        def _on_ice_gathering():
-            state = self.worker.pc.iceGatheringState
-            logger.info(f"[ICE] Gathering state → {state}")
-            if state == "complete":
-                # Log the gathered candidates from the local SDP
-                sdp_lines = (
-                    self.worker.pc.localDescription.sdp.splitlines()
-                    if self.worker.pc.localDescription
-                    else []
-                )
-                candidates = [l for l in sdp_lines if l.startswith("a=candidate")]
-                logger.info(f"[ICE] Gathered {len(candidates)} candidate(s):")
-                for c in candidates:
-                    logger.info(f"[ICE]   {c}")
-
         # Set remote description and create answer
         await self.worker.pc.setRemoteDescription(
             RTCSessionDescription(sdp=sdp, type="offer")
         )
         await self.worker.pc.setLocalDescription(await self.worker.pc.createAnswer())
 
-        # Log the answer SDP length for debugging
+        # Log the FINAL answer SDP candidates (after gathering is complete)
         answer_sdp = self.worker.pc.localDescription.sdp
+        sdp_lines = answer_sdp.splitlines()
+        candidates = [l for l in sdp_lines if l.startswith("a=candidate")]
         logger.info(
-            f"[ICE] Answer SDP ready ({len(answer_sdp)} chars), " f"sending to {sender}"
+            f"[ICE] Answer SDP ready ({len(answer_sdp)} chars) with "
+            f"{len(candidates)} candidate(s), sending to {sender}"
         )
+        for c in candidates:
+            logger.info(f"[ICE]   {c}")
+        if not candidates:
+            logger.warning(
+                "[ICE] Answer SDP has 0 candidates — browser has nothing to connect to"
+            )
 
         # Send answer back to client
         await self.websocket.send(
