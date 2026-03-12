@@ -231,6 +231,43 @@ class TestFetchAuthorizedKeysCache:
 
 
 # =============================================================================
+# Task 1 — PSK bypass for role: "client" peers
+# =============================================================================
+
+
+class TestClientRolePSKBypass:
+    """Worker skips AUTH_CHALLENGE for peers that registered with role: 'client'."""
+
+    @patch("asyncio.create_task")
+    def test_client_role_skips_auth_challenge(self, mock_create_task, worker):
+        """When _pending_offer_role is 'client', no AUTH_CHALLENGE is sent."""
+        ch = MagicMock()
+        ch.readyState = "open"
+        ch.label = "job"
+
+        worker._pending_offer_role = "client"
+        worker.on_datachannel(ch)
+
+        sent = [str(call.args[0]) for call in ch.send.call_args_list]
+        assert not any(MSG_AUTH_CHALLENGE in msg for msg in sent)
+        assert ch.label in worker._authenticated_channels
+
+    @patch("asyncio.create_task")
+    def test_worker_role_sends_auth_challenge(self, mock_create_task, worker):
+        """When _pending_offer_role is 'worker', AUTH_CHALLENGE is sent as normal."""
+        ch = MagicMock()
+        ch.readyState = "open"
+        ch.label = "data"
+
+        worker._pending_offer_role = "worker"
+        worker.on_datachannel(ch)
+
+        sent = [str(call.args[0]) for call in ch.send.call_args_list]
+        assert any(MSG_AUTH_CHALLENGE in msg for msg in sent)
+        assert ch.label not in worker._authenticated_channels
+
+
+# =============================================================================
 # Phase 7 — Client P2P Auth
 # =============================================================================
 

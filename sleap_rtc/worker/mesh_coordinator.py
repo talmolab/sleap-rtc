@@ -182,6 +182,60 @@ class MeshCoordinator:
                         )
                         await self.handle_signaling_offer(data)
 
+                    elif msg_type == "candidate":
+                        # Trickle ICE candidate from a browser client (dashboard).
+                        # The browser sends candidate.toJSON():
+                        #   {"candidate": "candidate:xxx 1 udp ... typ host", "sdpMid": "0", ...}
+                        # aiortc's addIceCandidate expects an RTCIceCandidate object,
+                        # so we parse the candidate string via aioice and convert.
+                        candidate_data = data.get("candidate")
+                        if candidate_data and self.worker.pc:
+                            cand_str = candidate_data.get("candidate", "")
+                            if not cand_str or cand_str == "":
+                                # End-of-candidates signal
+                                logger.info("[ICE] Received end-of-candidates signal")
+                                await self.worker.pc.addIceCandidate(None)
+                            else:
+                                try:
+                                    # Strip leading "candidate:" prefix if present
+                                    sdp_str = cand_str
+                                    if sdp_str.startswith("candidate:"):
+                                        sdp_str = sdp_str[len("candidate:") :]
+
+                                    from aioice import Candidate as AioCandidate
+                                    from aiortc.rtcicetransport import (
+                                        candidate_from_aioice,
+                                    )
+
+                                    aio_cand = AioCandidate.from_sdp(sdp_str)
+                                    rtc_cand = candidate_from_aioice(aio_cand)
+                                    rtc_cand.sdpMid = candidate_data.get("sdpMid")
+                                    rtc_cand.sdpMLineIndex = candidate_data.get(
+                                        "sdpMLineIndex"
+                                    )
+
+                                    await self.worker.pc.addIceCandidate(rtc_cand)
+                                    cand_type = (
+                                        "relay"
+                                        if "typ relay" in cand_str
+                                        else (
+                                            "srflx"
+                                            if "typ srflx" in cand_str
+                                            else "host"
+                                        )
+                                    )
+                                    logger.info(
+                                        f"[ICE] Added client {cand_type} candidate"
+                                    )
+                                except Exception as e:
+                                    logger.warning(
+                                        f"[ICE] Failed to add candidate: {e}"
+                                    )
+                        else:
+                            logger.debug(
+                                "[ICE] Ignoring candidate: no PC or empty candidate"
+                            )
+
                     elif msg_type == "ice_candidate":
                         # ICE candidate for mesh connection
                         await self.handle_signaling_ice_candidate(data)
@@ -260,11 +314,45 @@ class MeshCoordinator:
         await self.worker.state_manager.update_status("reserved")
         logger.info("Worker status updated to 'reserved'")
 
+        # Store peer role so handle_channel_open can skip PSK challenge for
+        # dashboard clients (role: "client"). Without this, the channel open
+        # handler issues a PSK challenge the dashboard can't answer.
+        self.worker._pending_offer_role = data.get("role")
+        logger.info(f"Stored pending offer role: {self.worker._pending_offer_role!r}")
+
+        # Log ICE server config so we can diagnose HPC connectivity issues
+        ice_count = len(self.worker.ice_servers) if self.worker.ice_servers else 0
+        logger.info(
+            f"Creating client PC with {ice_count} ICE server(s) from signaling "
+            f"server (factory will add STUN fallback if 0)"
+        )
+
+        # Create a fresh RTCPeerConnection with ICE servers so TURN relay is
+        # available. self.worker.pc was created before registered_auth delivered
+        # ICE server credentials, so it has no STUN/TURN config — reusing it
+        # causes ICE to stall at "checking" on firewalled networks (e.g. HPC).
+        self.worker.pc = self.worker._create_client_peer_connection()
+
         # Set remote description and create answer
         await self.worker.pc.setRemoteDescription(
             RTCSessionDescription(sdp=sdp, type="offer")
         )
         await self.worker.pc.setLocalDescription(await self.worker.pc.createAnswer())
+
+        # Log the FINAL answer SDP candidates (after gathering is complete)
+        answer_sdp = self.worker.pc.localDescription.sdp
+        sdp_lines = answer_sdp.splitlines()
+        candidates = [l for l in sdp_lines if l.startswith("a=candidate")]
+        logger.info(
+            f"[ICE] Answer SDP ready ({len(answer_sdp)} chars) with "
+            f"{len(candidates)} candidate(s), sending to {sender}"
+        )
+        for c in candidates:
+            logger.info(f"[ICE]   {c}")
+        if not candidates:
+            logger.warning(
+                "[ICE] Answer SDP has 0 candidates — browser has nothing to connect to"
+            )
 
         # Send answer back to client
         await self.websocket.send(
@@ -273,7 +361,7 @@ class MeshCoordinator:
                     "type": self.worker.pc.localDescription.type,
                     "sender": self.worker.peer_id,
                     "target": sender,
-                    "sdp": self.worker.pc.localDescription.sdp,
+                    "sdp": answer_sdp,
                 }
             )
         )
@@ -302,8 +390,9 @@ class MeshCoordinator:
         logger.info(f"Connecting to admin worker: {admin_peer_id}")
 
         try:
-            # Create peer connection for admin
-            pc = RTCPeerConnection()
+            # Create peer connection for admin — use factory to avoid
+            # aiortc's default STUN (hangs in internet-less containers).
+            pc = self.worker._create_mesh_peer_connection()
 
             # Set up data channel for mesh signaling
             data_channel = pc.createDataChannel("mesh_signaling")
@@ -455,8 +544,8 @@ class MeshCoordinator:
         logger.info(f"Initiating connection to worker: {peer_id}")
 
         try:
-            # Create peer connection
-            pc = RTCPeerConnection()
+            # Create peer connection — use factory to avoid default STUN hang
+            pc = self.worker._create_mesh_peer_connection()
 
             # Set up data channel
             data_channel = pc.createDataChannel("mesh_signaling")
@@ -915,8 +1004,8 @@ class MeshCoordinator:
         logger.info(f"Received mesh offer from {from_peer_id}")
 
         try:
-            # Create peer connection
-            pc = RTCPeerConnection()
+            # Create peer connection — use factory to avoid default STUN hang
+            pc = self.worker._create_mesh_peer_connection()
 
             # Set up datachannel event handler to receive incoming channel
             @pc.on("datachannel")
@@ -1529,8 +1618,8 @@ class MeshCoordinator:
         logger.info(f"Received mesh offer from signaling server: {from_peer_id}")
 
         try:
-            # Create peer connection
-            pc = RTCPeerConnection()
+            # Create peer connection — use factory to avoid default STUN hang
+            pc = self.worker._create_mesh_peer_connection()
 
             # Set up datachannel event handler to receive incoming channel
             @pc.on("datachannel")

@@ -163,6 +163,16 @@ def _get_checkpoint_dir(
     return str(ckpt_path)
 
 
+def _get_sleap_nn_version() -> str:
+    """Return the installed sleap-nn version string, or 'unknown' if not available."""
+    try:
+        import sleap_nn
+
+        return sleap_nn.__version__
+    except (ImportError, AttributeError):
+        return "unknown"
+
+
 class RTCWorkerClient:
     def __init__(
         self,
@@ -266,6 +276,9 @@ class RTCWorkerClient:
         # PSK P2P authentication (zero-trust layer)
         self._room_secret: Optional[str] = None  # Set via CLI flag, env var, or config
         self._pending_auth: dict[str, str] = {}  # channel_label -> nonce
+        self._pending_offer_role: Optional[str] = (
+            None  # role of peer whose offer we're processing
+        )
 
         # Ed25519 P2P authentication (new auth architecture)
         self._authorized_public_keys: list[dict] = []  # Fetched from server
@@ -504,24 +517,30 @@ class RTCWorkerClient:
         """
         ice_servers = self.mesh_ice_servers if for_mesh else self.ice_servers
 
-        if ice_servers:
-            # Build RTCConfiguration from ICE servers
-            ice_server_objects = []
-            for server in ice_servers:
-                ice_server_objects.append(RTCIceServer(**server))
-
-            config = RTCConfiguration(iceServers=ice_server_objects)
-            connection_type = "mesh" if for_mesh else "client"
+        # Build RTCConfiguration from ICE servers.  When the signaling server
+        # provides no ICE servers, fall back to public STUN so both the worker
+        # and browser discover their server-reflexive (public) IPs — needed for
+        # NAT hole-punching when the worker is behind a Kubernetes overlay and
+        # the browser is behind an institution NAT.
+        _FALLBACK_STUN = [{"urls": "stun:stun.l.google.com:19302"}]
+        if not ice_servers:
+            ice_servers = _FALLBACK_STUN
             logging.info(
-                f"Creating RTCPeerConnection for {connection_type} with {len(ice_server_objects)} ICE server(s)"
+                "No ICE servers from signaling server — using public STUN "
+                "fallback (stun.l.google.com)"
             )
-            pc = RTCPeerConnection(configuration=config)
-        else:
-            # Fallback to default (no ICE servers)
-            logging.warning(
-                "No ICE servers configured, using default RTCPeerConnection"
-            )
-            pc = RTCPeerConnection()
+
+        ice_server_objects = []
+        for server in ice_servers:
+            ice_server_objects.append(RTCIceServer(**server))
+
+        config = RTCConfiguration(iceServers=ice_server_objects)
+        connection_type = "mesh" if for_mesh else "client"
+        logging.info(
+            f"Creating RTCPeerConnection for {connection_type} with "
+            f"{len(ice_server_objects)} ICE server(s)"
+        )
+        pc = RTCPeerConnection(configuration=config)
 
         return pc
 
@@ -1461,6 +1480,7 @@ class RTCWorkerClient:
                 "gpu_memory_mb": self.gpu_memory_mb,
                 "gpu_model": self.gpu_model,
                 "sleap_version": sleap_version,
+                "sleap_nn_version": _get_sleap_nn_version(),
                 "cuda_version": self.cuda_version,
                 "hostname": socket.gethostname(),
                 "status": self.status,
@@ -1651,8 +1671,22 @@ class RTCWorkerClient:
                 if msg_type == "offer":
                     logging.info("Received offer SDP")
 
+                    # When this worker is acting as admin, the MeshCoordinator's
+                    # admin WebSocket handles client offers (with proper ICE server
+                    # config). Skip here to avoid double-handling the same offer,
+                    # which would send a spurious "worker_busy" error to the client.
+                    if self.admin_controller and self.admin_controller.is_admin:
+                        logging.info(
+                            "Skipping offer in main loop — MeshCoordinator admin "
+                            "WebSocket will handle it"
+                        )
+                        continue
+
                     # Obtain the sender's peer ID (this is the new target)
                     target_pid = data.get("sender")
+
+                    # Store the peer's role so handle_channel_open can decide whether to skip PSK
+                    self._pending_offer_role = data.get("role")
 
                     # SAFEGUARD: Check worker status before accepting connection
                     if self.status in ["busy", "reserved"]:
@@ -2763,7 +2797,18 @@ class RTCWorkerClient:
             asyncio.create_task(self.keep_ice_alive(channel))
             logging.info(f"{channel.label} channel is open")
 
-            # Always send AUTH_CHALLENGE — worker verifies with PSK or Ed25519
+            # Skip PSK challenge for dashboard clients (role: "client").
+            # The signaling server validates JWT and room membership on their behalf.
+            if self._pending_offer_role == "client":
+                self._authenticated_channels.add(channel.label)
+                logging.warning(
+                    f"PSK challenge skipped for {channel.label} (peer role: client) — "
+                    "trusting signaling server JWT admission. "
+                    "Revisit when per-peer authorization is hardened."
+                )
+                return
+
+            # Send AUTH_CHALLENGE — worker verifies response with PSK or Ed25519
             nonce = generate_nonce()
             self._pending_auth[channel.label] = nonce
             challenge_msg = format_message(MSG_AUTH_CHALLENGE, nonce)
@@ -3349,6 +3394,7 @@ class RTCWorkerClient:
                             "gpu_memory_mb": self.gpu_memory_mb,
                             "gpu_model": self.gpu_model,
                             "sleap_version": sleap_version,
+                            "sleap_nn_version": _get_sleap_nn_version(),
                             "cuda_version": self.cuda_version,
                             "hostname": socket.gethostname(),
                             "worker_name": self.name,
@@ -3395,8 +3441,10 @@ if __name__ == "__main__":
     # Create the worker instance.
     worker = RTCWorkerClient()
 
-    # Create the RTCPeerConnection object.
-    pc = RTCPeerConnection()
+    # Create the RTCPeerConnection object.  Pass empty iceServers to prevent
+    # aiortc's default STUN (stun.l.google.com) which hangs in containers
+    # without internet access (e.g. RunAI / Kubernetes GPU pods).
+    pc = RTCPeerConnection(configuration=RTCConfiguration(iceServers=[]))
 
     # Generate a unique peer ID for the worker.
     # peer_id = f"worker-{uuid.uuid4()}"

@@ -135,10 +135,13 @@ class StateManager:
 
         try:
             # Build registration message properties
+            from sleap_rtc.worker.worker_class import _get_sleap_nn_version
+
             properties = {
                 "gpu_memory_mb": self.capabilities.gpu_memory_mb,
                 "gpu_model": self.capabilities.gpu_model,
                 "sleap_version": sleap_version,
+                "sleap_nn_version": _get_sleap_nn_version(),
                 "cuda_version": self.capabilities.cuda_version,
                 "hostname": socket.gethostname(),
                 "status": self.status,

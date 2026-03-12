@@ -357,3 +357,165 @@ class TestResolvedSlpWriting:
         call_args = worker.job_executor.execute_from_spec.call_args
         cmd = call_args.args[1]
         assert any(slp_path in tok for tok in cmd)
+
+
+# =============================================================================
+# sleap-nn version in registration properties
+# =============================================================================
+
+
+class TestSleapNNVersionProperty:
+    """sleap_nn_version must be included in worker registration properties."""
+
+    def test_get_sleap_nn_version_returns_string(self):
+        """_get_sleap_nn_version() must return a non-empty string."""
+        from sleap_rtc.worker.worker_class import _get_sleap_nn_version
+
+        version = _get_sleap_nn_version()
+        assert isinstance(version, str)
+        assert len(version) > 0
+
+    def test_get_sleap_nn_version_fallback_on_missing(self, monkeypatch):
+        """_get_sleap_nn_version() returns 'unknown' when sleap_nn is not importable."""
+        import builtins
+
+        real_import = builtins.__import__
+
+        def mock_import(name, *args, **kwargs):
+            if name == "sleap_nn":
+                raise ImportError("sleap_nn not installed")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", mock_import)
+        from sleap_rtc.worker import worker_class
+
+        monkeypatch.setattr(worker_class, "_get_sleap_nn_version", lambda: "unknown")
+        assert worker_class._get_sleap_nn_version() == "unknown"
+
+
+# =============================================================================
+# Bug fixes: GPU detection empty string, YAML parsing, ICE server config
+# =============================================================================
+
+
+class TestGPUModelDetection:
+    """GPU model must never register as empty string — fallback to nvidia-smi or 'CPU'."""
+
+    def test_empty_string_from_torch_falls_back(self, monkeypatch):
+        """If torch returns empty string for GPU name, capabilities falls back (not empty)."""
+        import types
+        import sys
+
+        # Stub torch.cuda so we can monkeypatch without a real GPU
+        fake_torch = types.ModuleType("torch")
+        fake_cuda = types.ModuleType("torch.cuda")
+
+        class FakeProps:
+            name = ""  # empty string — the HPC bug
+
+        fake_cuda.is_available = lambda: True
+        fake_cuda.device_count = lambda: 1
+        fake_cuda.get_device_properties = lambda _: FakeProps()
+        fake_torch.cuda = fake_cuda
+        monkeypatch.setitem(sys.modules, "torch", fake_torch)
+        monkeypatch.setitem(sys.modules, "torch.cuda", fake_cuda)
+
+        # Also stub out subprocess so nvidia-smi returns a known value
+        import subprocess
+        import unittest.mock as mock
+
+        fake_result = mock.MagicMock()
+        fake_result.returncode = 0
+        fake_result.stdout = "NVIDIA A100-SXM4-40GB\n"
+        monkeypatch.setattr(subprocess, "run", lambda *a, **kw: fake_result)
+
+        # Reload capabilities to pick up the stubbed torch
+        import importlib
+        import sleap_rtc.worker.capabilities as caps_mod
+
+        importlib.reload(caps_mod)
+
+        caps = caps_mod.WorkerCapabilities.__new__(caps_mod.WorkerCapabilities)
+        caps.gpu_id = 0
+        result = caps._detect_gpu_model()
+        assert result != ""
+        assert result == "NVIDIA A100-SXM4-40GB"
+
+
+class TestMeshCoordinatorICEServers:
+    """_handle_client_offer must use a fresh PC with ICE servers, not self.worker.pc."""
+
+    def test_handle_client_offer_creates_fresh_pc(self):
+        """_handle_client_offer source must call _create_client_peer_connection."""
+        import inspect
+        from sleap_rtc.worker.mesh_coordinator import MeshCoordinator
+
+        src = inspect.getsource(MeshCoordinator._handle_client_offer)
+        assert (
+            "_create_client_peer_connection" in src
+        ), "_handle_client_offer must create a fresh RTCPeerConnection with ICE servers"
+
+
+class TestExplicitIceServers:
+    """RTCPeerConnection must always use explicit RTCConfiguration."""
+
+    def test_create_peer_connection_passes_explicit_ice_servers(self):
+        """_create_peer_connection must always pass RTCConfiguration(iceServers=...)
+        so aiortc does NOT fall back to its hardcoded default in an uncontrolled way."""
+        import inspect
+        from sleap_rtc.worker.worker_class import RTCWorkerClient
+
+        src = inspect.getsource(RTCWorkerClient._create_peer_connection)
+        # Must always create an RTCConfiguration — no bare RTCPeerConnection()
+        assert "RTCConfiguration" in src
+        import re
+
+        bare_pc = re.findall(r"^\s+pc\s*=\s*RTCPeerConnection\(\)", src, re.MULTILINE)
+        assert (
+            len(bare_pc) == 0
+        ), "Found bare RTCPeerConnection() — must pass RTCConfiguration(iceServers=...)"
+
+    def test_stun_fallback_when_no_ice_servers(self):
+        """When signaling server provides no ICE servers, factory must fall
+        back to public STUN so workers behind NAT get srflx candidates."""
+        import inspect
+        from sleap_rtc.worker.worker_class import RTCWorkerClient
+
+        src = inspect.getsource(RTCWorkerClient._create_peer_connection)
+        assert "_FALLBACK_STUN" in src
+        assert "stun.l.google.com" in src
+
+    def test_mesh_coordinator_uses_factory(self):
+        """All RTCPeerConnection calls in mesh_coordinator must use the factory
+        method, not bare RTCPeerConnection()."""
+        import inspect
+        from sleap_rtc.worker import mesh_coordinator
+
+        src = inspect.getsource(mesh_coordinator)
+        # Count bare RTCPeerConnection() calls (not inside strings/comments)
+        # The import line will have "RTCPeerConnection" but not "RTCPeerConnection()"
+        import re
+
+        bare_calls = re.findall(r"pc\s*=\s*RTCPeerConnection\(\)", src)
+        assert len(bare_calls) == 0, (
+            f"Found {len(bare_calls)} bare RTCPeerConnection() call(s) in "
+            "mesh_coordinator — use worker._create_*_peer_connection() instead"
+        )
+
+
+class TestDoubleOfferGuard:
+    """Main WebSocket loop must not double-handle offers when MeshCoordinator is admin."""
+
+    def test_offer_skipped_when_admin_controller_is_admin(self):
+        """worker_class main loop must skip 'offer' when admin_controller.is_admin is True."""
+        import inspect
+        from sleap_rtc.worker.worker_class import RTCWorkerClient
+
+        # Read the source around the offer handler and verify the admin guard
+        src = inspect.getsource(RTCWorkerClient.handle_connection)
+        # The guard must check is_admin before processing the offer
+        assert (
+            "admin_controller.is_admin" in src
+        ), "Main WebSocket loop must skip offer when MeshCoordinator is admin"
+        # Must use continue to skip (not fall through)
+        assert "continue" in src

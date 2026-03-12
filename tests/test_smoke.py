@@ -177,3 +177,224 @@ class TestRequiredDataFiles:
             f"fs_resolve.html missing from installed package at {html_path}. "
             "Check the hatchling exclude config in pyproject.toml."
         )
+
+
+# ── Dashboard smoke tests ─────────────────────────────────────────────────────
+
+
+class TestDashboardJobSubmission:
+    """Dashboard job submission UI elements must be present."""
+
+    @pytest.fixture
+    def app_js(self):
+        return (Path(__file__).parent.parent / "dashboard" / "app.js").read_text()
+
+    def test_submit_job_button_in_render_room_card(self, app_js):
+        """renderRoomCard must include a Submit Job button calling openSubmitJobModal."""
+        assert "openSubmitJobModal" in app_js
+        assert "Submit Job" in app_js
+
+    def test_open_submit_job_modal_method_defined(self, app_js):
+        """openSubmitJobModal method must be defined on the app class."""
+        assert "openSubmitJobModal(" in app_js
+
+    @pytest.fixture
+    def index_html(self):
+        return (Path(__file__).parent.parent / "dashboard" / "index.html").read_text()
+
+    def test_modal_wrapper_present(self, index_html):
+        """submit-job-modal wrapper must exist."""
+        assert 'id="submit-job-modal"' in index_html
+
+    def test_all_four_views_present(self, index_html):
+        """All four step/status views must exist inside the modal."""
+        assert 'id="sj-step1"' in index_html
+        assert 'id="sj-step2"' in index_html
+        assert 'id="sj-step3"' in index_html
+        assert 'id="sj-status"' in index_html
+
+    def test_step_progress_indicator_present(self, index_html):
+        """A step progress indicator showing 3 steps must exist."""
+        assert 'sj-step-indicator' in index_html
+
+    def test_worker_list_container_present(self, index_html):
+        """Worker selection list container must exist in step 1."""
+        assert 'id="sj-worker-list"' in index_html
+
+    def test_config_dropzone_present(self, index_html):
+        """Config YAML drop zone must exist in step 2."""
+        assert 'id="sj-config-dropzone"' in index_html
+
+    def test_file_browser_columns_present(self, index_html):
+        """File browser columns container must exist in step 3."""
+        assert 'id="sj-file-columns"' in index_html
+
+    def test_status_label_present(self, index_html):
+        """Status label element must exist in the status view."""
+        assert 'id="sj-status-label"' in index_html
+
+    def test_wandb_link_present(self, index_html):
+        """WandB URL link must exist in the status view (hidden by default)."""
+        assert 'id="sj-wandb-link"' in index_html
+
+    def test_sj_render_worker_list_method_defined(self, app_js):
+        """_sjRenderWorkerList method must be defined."""
+        assert "_sjRenderWorkerList(" in app_js
+
+    def test_sj_select_worker_method_defined(self, app_js):
+        """sjSelectWorker method must be defined."""
+        assert "sjSelectWorker(" in app_js
+
+    def test_sj_worker_row_available_clickable(self, app_js):
+        """Available workers must call sjSelectWorker on click."""
+        assert "sjSelectWorker" in app_js
+        assert "sj-worker-row" in app_js
+
+    def test_sj_worker_specs_rendered(self, app_js):
+        """Worker GPU specs (gpu_model, gpu_memory_mb, cuda_version, sleap_nn_version) must be read from properties."""
+        assert "gpu_model" in app_js
+        assert "gpu_memory_mb" in app_js
+        assert "cuda_version" in app_js
+        assert "sleap_nn_version" in app_js
+
+    def test_sj_status_dot_classes(self, app_js):
+        """Status dot must use idle/busy/maintenance CSS classes."""
+        assert "sj-status-dot" in app_js
+        assert "idle" in app_js
+        assert "busy" in app_js
+
+    # ── Task 5: YAML config upload ────────────────────────────────────────────
+
+    def test_parse_training_config_method_defined(self, app_js):
+        """parseTrainingConfig method must be defined."""
+        assert "parseTrainingConfig(" in app_js
+
+    def test_parse_training_config_reads_key_fields(self, app_js):
+        """parseTrainingConfig must read batch_size, learning_rate, max_epochs, run_name."""
+        assert "batch_size" in app_js
+        assert "learning_rate" in app_js
+        assert "max_epochs" in app_js
+        assert "run_name" in app_js
+        # sleap-nn uses trainer_config (not trainer) and optimizer.lr (not learning_rate)
+        assert "trainer_config" in app_js
+        assert "optimizer" in app_js
+
+    def test_dropzone_handler_wired(self, app_js):
+        """Drop zone drag-and-drop handler must be implemented (_sjInitDropzone or inline)."""
+        assert "sj-config-dropzone" in app_js
+        assert "dragover" in app_js
+        assert "drop" in app_js
+
+    def test_config_content_stored(self, app_js):
+        """Parsed YAML content must be stored as _sjConfigContent."""
+        assert "_sjConfigContent" in app_js
+
+    # ── Task 6: WebRTC signaling ──────────────────────────────────────────────
+
+    def test_connect_to_worker_method_defined(self, app_js):
+        """connectToWorker method must be defined."""
+        assert "connectToWorker(" in app_js
+
+    def test_disconnect_from_worker_method_defined(self, app_js):
+        """disconnectFromWorker method must be defined."""
+        assert "disconnectFromWorker(" in app_js
+
+    def test_webrtc_offer_sent_with_client_role(self, app_js):
+        """Offer message must include role: 'client' so worker skips auth challenge."""
+        assert "role" in app_js
+        assert "client" in app_js
+
+    def test_datachannel_label_is_job(self, app_js):
+        """Data channel must be created with label 'job'."""
+        assert "createDataChannel" in app_js
+        assert "'job'" in app_js or '"job"' in app_js
+
+    def test_connect_timeout_handled(self, app_js):
+        """connectToWorker must handle connection timeout."""
+        assert "timeout" in app_js.lower() or "setTimeout" in app_js
+
+    # ── Task 7: filesystem browser ────────────────────────────────────────────
+
+    def test_send_fs_message_defined(self, app_js):
+        """sendFsMessage method must be defined."""
+        assert "sendFsMessage(" in app_js
+
+    def test_init_file_browser_defined(self, app_js):
+        """initFileBrowser method must be defined."""
+        assert "initFileBrowser(" in app_js
+
+    def test_render_column_defined(self, app_js):
+        """renderColumn method must be defined."""
+        assert "renderColumn(" in app_js
+
+    def test_fs_protocol_messages_used(self, app_js):
+        """FS_GET_MOUNTS and FS_LIST_DIR protocol strings must be sent."""
+        assert "FS_GET_MOUNTS" in app_js
+        assert "FS_LIST_DIR" in app_js
+
+    def test_slp_file_selection_stored(self, app_js):
+        """Selecting a .slp file must store path as _sjLabelsPath."""
+        assert "_sjLabelsPath" in app_js
+        assert ".slp" in app_js
+
+    def test_step3_triggers_connect(self, app_js):
+        """Entering step 3 must call connectToWorker."""
+        assert "connectToWorker" in app_js
+
+    # ── Task 8: job submission and status view ────────────────────────────────
+
+    def test_submit_job_method_defined(self, app_js):
+        """submitJob method must be defined."""
+        assert "submitJob(" in app_js
+
+    def test_submit_job_uses_job_submit_protocol(self, app_js):
+        """submitJob must send JOB_SUBMIT message."""
+        assert "JOB_SUBMIT" in app_js
+
+    def test_submit_job_generates_job_id(self, app_js):
+        """submitJob must generate a job_id (crypto.randomUUID)."""
+        assert "randomUUID" in app_js
+
+    def test_job_accepted_switches_to_status_view(self, app_js):
+        """JOB_ACCEPTED handler must switch to status view."""
+        assert "JOB_ACCEPTED" in app_js
+        assert "sj-status" in app_js
+
+    def test_job_rejected_shows_error(self, app_js):
+        """JOB_REJECTED handler must show an error."""
+        assert "JOB_REJECTED" in app_js
+
+    def test_job_progress_handled(self, app_js):
+        """JOB_PROGRESS handler must be present."""
+        assert "JOB_PROGRESS" in app_js
+
+    def test_job_complete_updates_status(self, app_js):
+        """JOB_COMPLETE handler must update status label."""
+        assert "JOB_COMPLETE" in app_js
+
+    def test_job_failed_updates_status(self, app_js):
+        """JOB_FAILED handler must update status label."""
+        assert "JOB_FAILED" in app_js
+
+    def test_wandb_link_shown_on_progress(self, app_js):
+        """wandb_url in JOB_PROGRESS must reveal the WandB link element."""
+        assert "wandb_url" in app_js
+        assert "sj-wandb-link" in app_js
+
+    # ── Task 9: smoke test and cleanup ────────────────────────────────────────
+
+    def test_no_workers_shows_toast_warning(self, app_js):
+        """openSubmitJobModal must show a toast warning and bail when no workers are connected."""
+        assert "No workers" in app_js
+        assert "start a worker" in app_js.lower()
+
+    def test_js_yaml_cdn_included(self, index_html):
+        """js-yaml CDN script must be included in index.html for YAML parsing."""
+        assert "js-yaml" in index_html
+
+    def test_nav_tabs_present(self, index_html):
+        """Core data-tab nav items (rooms, tokens, quickstart, about) must be present."""
+        assert 'data-tab="rooms"' in index_html
+        assert 'data-tab="tokens"' in index_html
+        assert 'data-tab="quickstart"' in index_html
+        assert 'data-tab="about"' in index_html

@@ -820,6 +820,10 @@ class SleapRTCDashboard {
                         0 connected
                     </span>
                     ${!isExpired ? `
+                        <button class="btn btn-primary btn-sm" data-room-id="${room.room_id}" onclick="app.openSubmitJobModal('${room.room_id}')">
+                            <i data-lucide="play"></i>
+                            Submit Job
+                        </button>
                         ${room.role === 'owner' ? `
                             <button class="btn btn-secondary btn-sm" onclick="app.handleRoomSecret('${room.room_id}')">
                                 <i data-lucide="key"></i>
@@ -1807,6 +1811,554 @@ class SleapRTCDashboard {
         }
 
         await this.generateAndSaveRoomSecret(roomId);
+    }
+
+    // ── Job submission ────────────────────────────────────────────────────────
+
+    openSubmitJobModal(roomId) {
+        // Guard: warn and bail if no workers are connected
+        const workerCount = this.roomWorkers[roomId]?.workers?.length ?? 0;
+        if (workerCount === 0) {
+            this.showToast(
+                'No workers connected to this room. Start a worker with sleap-rtc worker before submitting a job.',
+                'error'
+            );
+            return;
+        }
+
+        this._sjRoomId = roomId;
+        this._sjWorkerId = null;
+        this._sjConfigContent = null;
+        this._sjLabelsPath = null;
+
+        // Reset all views to initial state
+        document.getElementById('sj-hyperparams').classList.add('hidden');
+        document.getElementById('sj-config-error').classList.add('hidden');
+        document.getElementById('sj-selected-path').classList.add('hidden');
+        document.getElementById('sj-browser-error').classList.add('hidden');
+        document.getElementById('sj-wandb-link').classList.add('hidden');
+        document.getElementById('sj-next-1').disabled = true;
+        document.getElementById('sj-next-2').disabled = true;
+        document.getElementById('sj-submit-btn').disabled = true;
+
+        // Find room name for subtitle
+        const room = this.rooms?.find(r => r.room_id === roomId);
+        document.getElementById('sj-subtitle').textContent = room?.name || roomId;
+
+        this._sjRenderWorkerList();
+        this._sjInitDropzone();
+        this.sjGoToStep(1);
+        this.showModal('submit-job-modal');
+        if (typeof lucide !== 'undefined') lucide.createIcons();
+    }
+
+    _sjRenderWorkerList() {
+        const container = document.getElementById('sj-worker-list');
+        if (!container) return;
+
+        const workers = this.roomWorkers[this._sjRoomId]?.workers ?? [];
+        if (workers.length === 0) {
+            container.innerHTML = '<p class="text-muted">No workers connected to this room.</p>';
+            return;
+        }
+
+        container.innerHTML = workers.map(worker => {
+            const props = worker.properties ?? {};
+            const status = props.status ?? 'idle';
+            const gpuModel = props.gpu_model || 'Unknown GPU';
+            const gpuMem = props.gpu_memory_mb ? `${Math.round(props.gpu_memory_mb / 1024)} GB` : '';
+            const cuda = props.cuda_version ? `CUDA ${props.cuda_version}` : '';
+            const sleapNnVersion = props.sleap_nn_version ? `sleap-nn ${props.sleap_nn_version}` : '';
+            // status is one of: idle, busy, maintenance
+            const isAvailable = status === 'idle';
+            const disabledClass = isAvailable ? '' : ' disabled';
+            const clickHandler = isAvailable
+                ? `onclick="app.sjSelectWorker('${worker.peer_id}')"`
+                : '';
+            const specs = [gpuModel, gpuMem, cuda, sleapNnVersion].filter(Boolean).join(' · ');
+
+            return `<div class="sj-worker-row${disabledClass}" data-peer-id="${worker.peer_id}" ${clickHandler}>
+                <div class="sj-worker-info">
+                    <span class="sj-worker-name">${worker.worker_name ?? worker.peer_id}</span>
+                    <span class="sj-worker-specs">${specs}</span>
+                </div>
+                <span class="sj-status-dot ${status}" title="${status}"></span>
+            </div>`;
+        }).join('');
+    }
+
+    sjSelectWorker(peerId) {
+        this._sjWorkerId = peerId;
+
+        // Update selected state on all rows
+        document.querySelectorAll('.sj-worker-row').forEach(row => {
+            row.classList.toggle('selected', row.dataset.peerId === peerId);
+        });
+
+        document.getElementById('sj-next-1').disabled = false;
+    }
+
+    closeSubmitJobModal() {
+        this.hideModal('submit-job-modal');
+        this.disconnectFromWorker();
+    }
+
+    // ── Task 6: WebRTC signaling ──────────────────────────────────────────────
+
+    connectToWorker(workerId, roomId, roomToken) {
+        return new Promise((resolve, reject) => {
+            const TIMEOUT_MS = 120000;  // 2 min — generous for ICE debugging
+            let settled = false;
+
+            const settle = (fn, val) => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(timer);
+                fn(val);
+            };
+
+            const timer = setTimeout(() => {
+                settle(reject, new Error('WebRTC connection timed out after 120 s'));
+                this.disconnectFromWorker();
+            }, TIMEOUT_MS);
+
+            // Derive client peer_id from JWT claims (username)
+            const peerId = this.user?.username ?? 'dashboard-client';
+
+            const wsUrl = CONFIG.SIGNALING_SERVER.replace(/^http/, 'ws') + '/ws';
+            const ws = new WebSocket(wsUrl);
+            this._sjWs = ws;
+
+            ws.onopen = () => {
+                ws.send(JSON.stringify({
+                    type: 'register',
+                    peer_id: peerId,
+                    room_id: roomId,
+                    token: roomToken,
+                    role: 'client',
+                    jwt: this.jwt,
+                }));
+            };
+
+            ws.onmessage = async (event) => {
+                let msg;
+                try { msg = JSON.parse(event.data); } catch { return; }
+                console.log('[SJ-ICE] WS message:', msg.type, msg);
+
+                if (msg.type === 'registered_auth') {
+                    let iceServers = (msg.ice_servers ?? []).map(s => ({
+                        urls: s.urls,
+                        ...(s.username ? { username: s.username } : {}),
+                        ...(s.credential ? { credential: s.credential } : {}),
+                    }));
+                    // When the signaling server provides no ICE servers, add
+                    // a public STUN so the browser discovers its real IP
+                    // (server-reflexive candidate) instead of only sending
+                    // mDNS-obfuscated host candidates that the worker can't
+                    // resolve in a container without multicast.
+                    if (iceServers.length === 0) {
+                        iceServers = [{ urls: 'stun:stun.l.google.com:19302' }];
+                    }
+                    const pc = new RTCPeerConnection({ iceServers });
+                    this._sjPc = pc;
+
+                    const dc = pc.createDataChannel('job');
+                    this._sjDc = dc;
+
+                    dc.onopen = () => settle(resolve, dc);
+                    dc.onerror = (e) => settle(reject, e);
+
+                    pc.oniceconnectionstatechange = () => {
+                        console.log('[SJ-ICE] ICE state:', pc.iceConnectionState);
+                    };
+                    pc.onicegatheringstatechange = () => {
+                        console.log('[SJ-ICE] Gathering state:', pc.iceGatheringState);
+                    };
+                    pc.onicecandidate = ({ candidate }) => {
+                        if (candidate) {
+                            console.log('[SJ-ICE] Local candidate:', candidate.type, candidate.address, candidate.port);
+                        } else {
+                            console.log('[SJ-ICE] Gathering complete (null candidate)');
+                        }
+                        if (candidate && ws.readyState === WebSocket.OPEN) {
+                            ws.send(JSON.stringify({
+                                type: 'candidate',
+                                sender: peerId,
+                                target: workerId,
+                                candidate: candidate.toJSON(),
+                            }));
+                        }
+                    };
+
+                    await pc.setLocalDescription(await pc.createOffer());
+                    ws.send(JSON.stringify({
+                        type: 'offer',
+                        sender: peerId,
+                        target: workerId,
+                        role: 'client',
+                        sdp: pc.localDescription.sdp,
+                    }));
+
+                } else if (msg.type === 'answer') {
+                    console.log('[SJ-ICE] Received answer SDP, candidates in SDP:',
+                        (msg.sdp || '').split('\n').filter(l => l.startsWith('a=candidate')).length);
+                    await this._sjPc?.setRemoteDescription(
+                        new RTCSessionDescription({ type: 'answer', sdp: msg.sdp })
+                    );
+                    console.log('[SJ-ICE] Remote description set, ICE state:', this._sjPc?.iceConnectionState);
+
+                } else if (msg.type === 'candidate') {
+                    try {
+                        await this._sjPc?.addIceCandidate(new RTCIceCandidate(msg.candidate));
+                    } catch { /* ignore stale candidates */ }
+
+                } else if (msg.type === 'error') {
+                    settle(reject, new Error(msg.message ?? 'Signaling error'));
+                }
+            };
+
+            ws.onerror = () => settle(reject, new Error('WebSocket error'));
+            ws.onclose = () => { if (!settled) settle(reject, new Error('WebSocket closed')); };
+        });
+    }
+
+    disconnectFromWorker() {
+        this._sjDc?.close();
+        this._sjPc?.close();
+        this._sjWs?.close();
+        this._sjDc = null;
+        this._sjPc = null;
+        this._sjWs = null;
+    }
+
+    // ── Task 5: YAML config upload ────────────────────────────────────────────
+
+    parseTrainingConfig(yamlText) {
+        const doc = jsyaml.load(yamlText);
+        // sleap-nn uses trainer_config as the top-level key; fall back to trainer or root
+        const trainer = doc?.trainer_config ?? doc?.trainer ?? doc ?? {};
+        const wandb = trainer.wandb ?? doc?.wandb ?? {};
+        // batch_size lives under train_data_loader in sleap-nn configs
+        const batch_size = trainer?.train_data_loader?.batch_size
+            ?? trainer.batch_size ?? doc?.batch_size ?? 'unknown';
+        // learning rate lives under optimizer.lr in sleap-nn configs
+        const learning_rate = trainer?.optimizer?.lr
+            ?? trainer.learning_rate ?? doc?.learning_rate ?? 'unknown';
+        return {
+            batch_size,
+            learning_rate,
+            max_epochs: trainer.max_epochs ?? doc?.max_epochs ?? 'unknown',
+            run_name: trainer.run_name ?? wandb.name ?? wandb.run_name ?? doc?.run_name ?? 'unknown',
+            wandb_project: wandb.project ?? 'unknown',
+            wandb_entity: wandb.entity ?? 'unknown',
+        };
+    }
+
+    _sjRenderHyperparams(fields) {
+        const container = document.getElementById('sj-hyperparams');
+        if (!container) return;
+        const rows = [
+            ['Batch size', fields.batch_size],
+            ['Learning rate', fields.learning_rate],
+            ['Max epochs', fields.max_epochs],
+            ['Run name', fields.run_name],
+            ['WandB project', fields.wandb_project],
+            ['WandB entity', fields.wandb_entity],
+        ];
+        container.innerHTML = rows.map(([label, val]) =>
+            `<div class="sj-hyperparam-row"><span class="sj-hyperparam-label">${label}</span><span class="sj-hyperparam-value">${val}</span></div>`
+        ).join('');
+        container.classList.remove('hidden');
+    }
+
+    _sjHandleConfigFile(file) {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            const text = e.target.result;
+            const errorEl = document.getElementById('sj-config-error');
+            const next2 = document.getElementById('sj-next-2');
+            const dropzone = document.getElementById('sj-config-dropzone');
+            try {
+                const fields = this.parseTrainingConfig(text);
+                this._sjConfigContent = text;
+                this._sjRenderHyperparams(fields);
+                errorEl.classList.add('hidden');
+                next2.disabled = false;
+                // Show filename and allow re-upload
+                if (dropzone) {
+                    dropzone.innerHTML = `
+                        <i data-lucide="file-check"></i>
+                        <p><strong>${file.name}</strong></p>
+                        <p style="font-size:0.8em;opacity:0.7">Drop a different file or <label for="sj-config-input" class="sj-browse-link">browse</label> to replace</p>
+                        <input type="file" id="sj-config-input" accept=".yaml,.yml" class="hidden">
+                    `;
+                    lucide.createIcons();
+                    // Re-wire the new file input
+                    const newInput = document.getElementById('sj-config-input');
+                    if (newInput) {
+                        newInput.addEventListener('change', () => {
+                            const f = newInput.files[0];
+                            if (f) this._sjHandleConfigFile(f);
+                        });
+                    }
+                }
+            } catch (err) {
+                this._sjConfigContent = null;
+                document.getElementById('sj-hyperparams').classList.add('hidden');
+                errorEl.textContent = `Invalid YAML: ${err.message}`;
+                errorEl.classList.remove('hidden');
+                next2.disabled = true;
+            }
+        };
+        reader.readAsText(file);
+    }
+
+    _sjInitDropzone() {
+        const dropzone = document.getElementById('sj-config-dropzone');
+        const fileInput = document.getElementById('sj-config-input');
+        if (!dropzone || !fileInput) return;
+
+        dropzone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropzone.classList.add('drag-over');
+        });
+        dropzone.addEventListener('dragleave', () => dropzone.classList.remove('drag-over'));
+        dropzone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropzone.classList.remove('drag-over');
+            const file = e.dataTransfer.files[0];
+            if (file) this._sjHandleConfigFile(file);
+        });
+        fileInput.addEventListener('change', () => {
+            const file = fileInput.files[0];
+            if (file) this._sjHandleConfigFile(file);
+        });
+    }
+
+    // ── Task 7: column filesystem browser ────────────────────────────────────
+
+    async sjEnterStep3() {
+        this.sjGoToStep(3);
+
+        // Show spinner, hide columns
+        document.getElementById('sj-browser-spinner')?.classList.remove('hidden');
+        document.getElementById('sj-file-columns')?.classList.add('hidden');
+        document.getElementById('sj-browser-error')?.classList.add('hidden');
+
+        // Look up room token from cached rooms list
+        const room = this.rooms?.find(r => r.room_id === this._sjRoomId);
+        const roomToken = room?.token ?? null;
+
+        try {
+            const dc = await this.connectToWorker(this._sjWorkerId, this._sjRoomId, roomToken);
+            dc.onmessage = (event) => this.onDataChannelMessage(event);
+            document.getElementById('sj-browser-spinner')?.classList.add('hidden');
+            document.getElementById('sj-file-columns')?.classList.remove('hidden');
+            this.initFileBrowser();
+        } catch (err) {
+            document.getElementById('sj-browser-spinner')?.classList.add('hidden');
+            const errEl = document.getElementById('sj-browser-error');
+            if (errEl) {
+                errEl.textContent = `Connection failed: ${err.message}`;
+                errEl.classList.remove('hidden');
+            }
+        }
+    }
+
+    sendFsMessage(msg) {
+        if (this._sjDc?.readyState === 'open') {
+            this._sjDc.send(msg);
+        }
+    }
+
+    onDataChannelMessage(event) {
+        const text = event.data;
+        const sep = '::';
+        const firstSep = text.indexOf(sep);
+        if (firstSep === -1) return;
+        const msgType = text.slice(0, firstSep);
+        const payload = text.slice(firstSep + sep.length);
+
+        if (msgType === 'FS_MOUNTS_RESPONSE') {
+            let mounts;
+            try { mounts = JSON.parse(payload); } catch { return; }
+            const entries = mounts.map(m => ({ name: m.label || m.path, path: m.path, is_dir: true }));
+            this.renderColumn(entries, 0);
+
+        } else if (msgType === 'FS_LIST_RESPONSE') {
+            let data;
+            try { data = JSON.parse(payload); } catch { return; }
+            // Normalize: worker returns {name, type:"directory"|"file"} — convert
+            // to the {name, path, is_dir} shape that renderColumn expects.
+            const parentPath = data.path?.replace(/\/$/, '') ?? '';
+            const entries = (data.entries || []).map(e => ({
+                name: e.name,
+                path: e.path ?? `${parentPath}/${e.name}`,
+                is_dir: e.is_dir ?? (e.type === 'directory'),
+            }));
+            const colIndex = this._sjPendingColIndex ?? 1;
+            this.renderColumn(entries, colIndex, data.has_more ? data.path : null);
+            delete this._sjPendingColIndex;
+
+        } else if (msgType === 'JOB_ACCEPTED') {
+            this.sjGoToStep('status');
+            const label = document.getElementById('sj-status-label');
+            if (label) label.textContent = 'Running…';
+
+        } else if (msgType === 'JOB_REJECTED') {
+            // payload: {job_id}::{json_errors}
+            const rejSep = payload.indexOf('::');
+            const errJson = rejSep !== -1 ? payload.slice(rejSep + 2) : payload;
+            let msg = 'Job rejected by worker.';
+            try {
+                const data = JSON.parse(errJson);
+                const errors = data.errors ?? [];
+                if (errors.length) msg = errors.map(e => e.message).join(' ');
+            } catch { /* use default msg */ }
+            const errEl = document.getElementById('sj-browser-error');
+            if (errEl) { errEl.textContent = msg; errEl.classList.remove('hidden'); }
+
+        } else if (msgType === 'JOB_PROGRESS') {
+            let data;
+            try { data = JSON.parse(payload); } catch { return; }
+            const label = document.getElementById('sj-status-label');
+            const epoch = data.epoch;
+            const loss = data.loss != null ? data.loss.toFixed(4) : null;
+            if (label && epoch != null) {
+                label.textContent = `Running — Epoch ${epoch}${loss ? `, loss ${loss}` : ''}`;
+            }
+            if (data.wandb_url) {
+                const link = document.getElementById('sj-wandb-link');
+                if (link) {
+                    link.href = data.wandb_url;
+                    link.classList.remove('hidden');
+                }
+            }
+
+        } else if (msgType === 'JOB_COMPLETE') {
+            const label = document.getElementById('sj-status-label');
+            if (label) label.textContent = 'Complete ✓';
+            this._sjShowCloseButton();
+
+        } else if (msgType === 'JOB_FAILED') {
+            const label = document.getElementById('sj-status-label');
+            let errMsg = 'Job failed.';
+            try {
+                const data = JSON.parse(payload);
+                errMsg = data.message ?? errMsg;
+            } catch { /* use default */ }
+            if (label) label.textContent = `Failed: ${errMsg}`;
+            this._sjShowCloseButton();
+        }
+    }
+
+    submitJob() {
+        const jobId = crypto.randomUUID();
+        const spec = {
+            type: 'train',
+            config_content: this._sjConfigContent,
+            labels_path: this._sjLabelsPath,
+            model_types: [],
+        };
+        this.sendFsMessage(`JOB_SUBMIT::${jobId}::${JSON.stringify(spec)}`);
+    }
+
+    _sjShowCloseButton() {
+        // Replace Submit button with a Close button in status view
+        const actions = document.querySelector('#sj-status .form-actions');
+        if (actions) {
+            actions.innerHTML = `<button class="btn btn-secondary" onclick="app.closeSubmitJobModal()">Close</button>`;
+        }
+    }
+
+    initFileBrowser() {
+        document.getElementById('sj-file-columns').innerHTML = '';
+        this.sendFsMessage('FS_GET_MOUNTS');
+    }
+
+    renderColumn(entries, colIndex, hasMorePath = null) {
+        const container = document.getElementById('sj-file-columns');
+        if (!container) return;
+
+        // Truncate columns to the right of colIndex
+        const existing = container.querySelectorAll('.sj-file-column');
+        existing.forEach((col, i) => { if (i >= colIndex) col.remove(); });
+
+        // Filter: show only directories and .slp files
+        const visible = entries.filter(e => e.is_dir || (e.name ?? e.path ?? '').endsWith('.slp'));
+
+        const col = document.createElement('div');
+        col.className = 'sj-file-column';
+        col.dataset.colIndex = colIndex;
+
+        visible.forEach(entry => {
+            const name = entry.name ?? entry.path.split('/').pop();
+            const row = document.createElement('div');
+            row.className = 'sj-file-entry' + (entry.is_dir ? ' is-dir' : ' is-slp');
+            row.textContent = name;
+
+            if (entry.is_dir) {
+                row.onclick = () => {
+                    this._sjPendingColIndex = colIndex + 1;
+                    this.sendFsMessage(`FS_LIST_DIR::${entry.path}::0`);
+                    // Highlight selected dir
+                    col.querySelectorAll('.sj-file-entry').forEach(r => r.classList.remove('selected'));
+                    row.classList.add('selected');
+                };
+            } else {
+                // .slp file
+                row.onclick = () => {
+                    this._sjLabelsPath = entry.path;
+                    const pathEl = document.getElementById('sj-selected-path');
+                    if (pathEl) {
+                        pathEl.textContent = `Selected: ${entry.path}`;
+                        pathEl.classList.remove('hidden');
+                    }
+                    document.getElementById('sj-submit-btn').disabled = false;
+                    // Highlight
+                    container.querySelectorAll('.sj-file-entry').forEach(r => r.classList.remove('selected'));
+                    row.classList.add('selected');
+                };
+            }
+            col.appendChild(row);
+        });
+
+        // Infinite scroll: request next page when scrolled to bottom
+        if (hasMorePath) {
+            let page = 1;
+            col.addEventListener('scroll', () => {
+                if (col.scrollTop + col.clientHeight >= col.scrollHeight - 20) {
+                    const offset = page * 100; // default page size
+                    this.sendFsMessage(`FS_LIST_DIR::${hasMorePath}::${offset}`);
+                    page++;
+                    col.removeEventListener('scroll', col._scrollHandler);
+                }
+            });
+        }
+
+        container.appendChild(col);
+    }
+
+    sjGoToStep(step) {
+        // Hide all views
+        ['sj-step1', 'sj-step2', 'sj-step3', 'sj-status'].forEach(id => {
+            document.getElementById(id)?.classList.add('hidden');
+        });
+
+        // Show target view (status view doesn't have a step number)
+        const viewId = step === 'status' ? 'sj-status' : `sj-step${step}`;
+        document.getElementById(viewId)?.classList.remove('hidden');
+
+        // Update step indicator dots (steps 1-3 only)
+        if (typeof step === 'number') {
+            for (let i = 1; i <= 3; i++) {
+                const dot = document.getElementById(`sj-step-dot-${i}`);
+                if (!dot) continue;
+                dot.classList.remove('active', 'done');
+                if (i < step) dot.classList.add('done');
+                else if (i === step) dot.classList.add('active');
+            }
+        }
     }
 }
 
