@@ -334,6 +334,19 @@ class MeshCoordinator:
                 "server returns ice_servers in registered_auth."
             )
 
+        # Diagnostic: log what addresses aioice would discover
+        try:
+            import ifaddr
+
+            addrs = []
+            for adapter in ifaddr.get_adapters():
+                for ip in adapter.ips:
+                    if isinstance(ip.ip, str) and ip.ip != "127.0.0.1":
+                        addrs.append(f"{adapter.nice_name}={ip.ip}")
+            logger.info(f"[ICE] Host addresses from ifaddr: {addrs}")
+        except Exception as e:
+            logger.warning(f"[ICE] ifaddr diagnostic failed: {e}")
+
         # Create a fresh RTCPeerConnection with ICE servers so TURN relay is
         # available. self.worker.pc was created before registered_auth delivered
         # ICE server credentials, so it has no STUN/TURN config — reusing it

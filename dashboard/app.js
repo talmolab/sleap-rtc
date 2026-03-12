@@ -1945,11 +1945,19 @@ class SleapRTCDashboard {
                 try { msg = JSON.parse(event.data); } catch { return; }
 
                 if (msg.type === 'registered_auth') {
-                    const iceServers = (msg.ice_servers ?? []).map(s => ({
+                    let iceServers = (msg.ice_servers ?? []).map(s => ({
                         urls: s.urls,
                         ...(s.username ? { username: s.username } : {}),
                         ...(s.credential ? { credential: s.credential } : {}),
                     }));
+                    // When the signaling server provides no ICE servers, add
+                    // a public STUN so the browser discovers its real IP
+                    // (server-reflexive candidate) instead of only sending
+                    // mDNS-obfuscated host candidates that the worker can't
+                    // resolve in a container without multicast.
+                    if (iceServers.length === 0) {
+                        iceServers = [{ urls: 'stun:stun.l.google.com:19302' }];
+                    }
                     const pc = new RTCPeerConnection({ iceServers });
                     this._sjPc = pc;
 
