@@ -2188,8 +2188,16 @@ class SleapRTCDashboard {
         } else if (msgType === 'FS_LIST_RESPONSE') {
             let data;
             try { data = JSON.parse(payload); } catch { return; }
+            // Normalize: worker returns {name, type:"directory"|"file"} — convert
+            // to the {name, path, is_dir} shape that renderColumn expects.
+            const parentPath = data.path?.replace(/\/$/, '') ?? '';
+            const entries = (data.entries || []).map(e => ({
+                name: e.name,
+                path: e.path ?? `${parentPath}/${e.name}`,
+                is_dir: e.is_dir ?? (e.type === 'directory'),
+            }));
             const colIndex = this._sjPendingColIndex ?? 1;
-            this.renderColumn(data.entries, colIndex, data.has_more ? data.path : null);
+            this.renderColumn(entries, colIndex, data.has_more ? data.path : null);
             delete this._sjPendingColIndex;
 
         } else if (msgType === 'JOB_ACCEPTED') {
