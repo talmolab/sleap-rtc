@@ -9,7 +9,12 @@ import shutil
 import os
 import zmq
 
-from aiortc import RTCPeerConnection, RTCSessionDescription, RTCDataChannel
+from aiortc import (
+    RTCPeerConnection,
+    RTCSessionDescription,
+    RTCDataChannel,
+    RTCConfiguration,
+)
 from websockets.client import ClientConnection
 from pathlib import Path
 
@@ -635,7 +640,9 @@ async def run_worker(pc, peer_id: str, DNS: str, port_number):
 
 
 if __name__ == "__main__":
-    pc = RTCPeerConnection()
+    # Pass empty iceServers to prevent aiortc's default STUN
+    # (stun.l.google.com) which hangs in internet-less containers.
+    pc = RTCPeerConnection(configuration=RTCConfiguration(iceServers=[]))
     config = get_config()
     DNS = sys.argv[1] if len(sys.argv) > 1 else config.signaling_websocket
     port_number = sys.argv[2] if len(sys.argv) > 1 else 8080

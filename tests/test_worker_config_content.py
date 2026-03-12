@@ -423,6 +423,7 @@ class TestGPUModelDetection:
         # Also stub out subprocess so nvidia-smi returns a known value
         import subprocess
         import unittest.mock as mock
+
         fake_result = mock.MagicMock()
         fake_result.returncode = 0
         fake_result.stdout = "NVIDIA A100-SXM4-40GB\n"
@@ -431,6 +432,7 @@ class TestGPUModelDetection:
         # Reload capabilities to pick up the stubbed torch
         import importlib
         import sleap_rtc.worker.capabilities as caps_mod
+
         importlib.reload(caps_mod)
 
         caps = caps_mod.WorkerCapabilities.__new__(caps_mod.WorkerCapabilities)
@@ -447,9 +449,51 @@ class TestMeshCoordinatorICEServers:
         """_handle_client_offer source must call _create_client_peer_connection."""
         import inspect
         from sleap_rtc.worker.mesh_coordinator import MeshCoordinator
+
         src = inspect.getsource(MeshCoordinator._handle_client_offer)
-        assert "_create_client_peer_connection" in src, (
-            "_handle_client_offer must create a fresh RTCPeerConnection with ICE servers"
+        assert (
+            "_create_client_peer_connection" in src
+        ), "_handle_client_offer must create a fresh RTCPeerConnection with ICE servers"
+
+
+class TestNoDefaultStun:
+    """RTCPeerConnection must never use aiortc's default STUN in containers."""
+
+    def test_create_peer_connection_passes_explicit_ice_servers(self):
+        """_create_peer_connection must always pass RTCConfiguration(iceServers=...)
+        so aiortc does NOT fall back to its hardcoded stun.l.google.com default,
+        which hangs in internet-less containers (RunAI / Kubernetes)."""
+        import inspect
+        from sleap_rtc.worker.worker_class import RTCWorkerClient
+
+        src = inspect.getsource(RTCWorkerClient._create_peer_connection)
+        # Must always create an RTCConfiguration — no bare RTCPeerConnection()
+        assert "RTCConfiguration" in src
+        # Must NOT contain a STUN fallback URL in executable code
+        # (comments mentioning it for context are fine)
+        import re
+
+        # Match stun.l.google.com outside of comments and docstrings
+        bare_pc = re.findall(r"^\s+pc\s*=\s*RTCPeerConnection\(\)", src, re.MULTILINE)
+        assert (
+            len(bare_pc) == 0
+        ), "Found bare RTCPeerConnection() — must pass RTCConfiguration(iceServers=...)"
+
+    def test_mesh_coordinator_uses_factory(self):
+        """All RTCPeerConnection calls in mesh_coordinator must use the factory
+        method, not bare RTCPeerConnection()."""
+        import inspect
+        from sleap_rtc.worker import mesh_coordinator
+
+        src = inspect.getsource(mesh_coordinator)
+        # Count bare RTCPeerConnection() calls (not inside strings/comments)
+        # The import line will have "RTCPeerConnection" but not "RTCPeerConnection()"
+        import re
+
+        bare_calls = re.findall(r"pc\s*=\s*RTCPeerConnection\(\)", src)
+        assert len(bare_calls) == 0, (
+            f"Found {len(bare_calls)} bare RTCPeerConnection() call(s) in "
+            "mesh_coordinator — use worker._create_*_peer_connection() instead"
         )
 
 
@@ -464,8 +508,8 @@ class TestDoubleOfferGuard:
         # Read the source around the offer handler and verify the admin guard
         src = inspect.getsource(RTCWorkerClient.handle_connection)
         # The guard must check is_admin before processing the offer
-        assert "admin_controller.is_admin" in src, (
-            "Main WebSocket loop must skip offer when MeshCoordinator is admin"
-        )
+        assert (
+            "admin_controller.is_admin" in src
+        ), "Main WebSocket loop must skip offer when MeshCoordinator is admin"
         # Must use continue to skip (not fall through)
         assert "continue" in src

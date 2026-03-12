@@ -382,8 +382,9 @@ class MeshCoordinator:
         logger.info(f"Connecting to admin worker: {admin_peer_id}")
 
         try:
-            # Create peer connection for admin
-            pc = RTCPeerConnection()
+            # Create peer connection for admin — use factory to avoid
+            # aiortc's default STUN (hangs in internet-less containers).
+            pc = self.worker._create_mesh_peer_connection()
 
             # Set up data channel for mesh signaling
             data_channel = pc.createDataChannel("mesh_signaling")
@@ -535,8 +536,8 @@ class MeshCoordinator:
         logger.info(f"Initiating connection to worker: {peer_id}")
 
         try:
-            # Create peer connection
-            pc = RTCPeerConnection()
+            # Create peer connection — use factory to avoid default STUN hang
+            pc = self.worker._create_mesh_peer_connection()
 
             # Set up data channel
             data_channel = pc.createDataChannel("mesh_signaling")
@@ -995,8 +996,8 @@ class MeshCoordinator:
         logger.info(f"Received mesh offer from {from_peer_id}")
 
         try:
-            # Create peer connection
-            pc = RTCPeerConnection()
+            # Create peer connection — use factory to avoid default STUN hang
+            pc = self.worker._create_mesh_peer_connection()
 
             # Set up datachannel event handler to receive incoming channel
             @pc.on("datachannel")
@@ -1609,8 +1610,8 @@ class MeshCoordinator:
         logger.info(f"Received mesh offer from signaling server: {from_peer_id}")
 
         try:
-            # Create peer connection
-            pc = RTCPeerConnection()
+            # Create peer connection — use factory to avoid default STUN hang
+            pc = self.worker._create_mesh_peer_connection()
 
             # Set up datachannel event handler to receive incoming channel
             @pc.on("datachannel")

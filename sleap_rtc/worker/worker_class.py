@@ -517,37 +517,26 @@ class RTCWorkerClient:
         """
         ice_servers = self.mesh_ice_servers if for_mesh else self.ice_servers
 
-        # If the signaling server returned no ICE servers, fall back to public
-        # STUN so the worker can at least discover its reflexive (srflx) address.
-        # TURN relay requires credentials from the server — we can't provide that
-        # here, but STUN alone is enough when the HPC node has a routable public IP.
-        _FALLBACK_STUN = [{"urls": "stun:stun.l.google.com:19302"}]
-        if not ice_servers and not for_mesh:
-            logging.warning(
-                "No ICE servers from signaling server — falling back to public "
-                "STUN (stun.l.google.com). TURN relay will not be available; "
-                "connections through strict firewalls may still fail."
-            )
-            ice_servers = _FALLBACK_STUN
+        # Build RTCConfiguration from ICE servers provided by the signaling
+        # server.  When no servers are configured we pass an explicit empty
+        # list so aiortc does NOT fall back to its hardcoded default
+        # (stun.l.google.com:19302).  That default STUN causes
+        # gather_candidates to hang indefinitely in containers that have no
+        # internet access (e.g. RunAI / Kubernetes GPU pods).  With an empty
+        # list, aioice skips STUN entirely and gathers only host candidates,
+        # which is sufficient when the client and worker share the same
+        # network (e.g. institution WiFi → HPC overlay).
+        ice_server_objects = []
+        for server in ice_servers or []:
+            ice_server_objects.append(RTCIceServer(**server))
 
-        if ice_servers:
-            # Build RTCConfiguration from ICE servers
-            ice_server_objects = []
-            for server in ice_servers:
-                ice_server_objects.append(RTCIceServer(**server))
-
-            config = RTCConfiguration(iceServers=ice_server_objects)
-            connection_type = "mesh" if for_mesh else "client"
-            logging.info(
-                f"Creating RTCPeerConnection for {connection_type} with {len(ice_server_objects)} ICE server(s)"
-            )
-            pc = RTCPeerConnection(configuration=config)
-        else:
-            # Mesh connections: no fallback (workers are typically on same network)
-            logging.warning(
-                "No ICE servers configured, using default RTCPeerConnection"
-            )
-            pc = RTCPeerConnection()
+        config = RTCConfiguration(iceServers=ice_server_objects)
+        connection_type = "mesh" if for_mesh else "client"
+        logging.info(
+            f"Creating RTCPeerConnection for {connection_type} with "
+            f"{len(ice_server_objects)} ICE server(s)"
+        )
+        pc = RTCPeerConnection(configuration=config)
 
         return pc
 
@@ -3448,8 +3437,10 @@ if __name__ == "__main__":
     # Create the worker instance.
     worker = RTCWorkerClient()
 
-    # Create the RTCPeerConnection object.
-    pc = RTCPeerConnection()
+    # Create the RTCPeerConnection object.  Pass empty iceServers to prevent
+    # aiortc's default STUN (stun.l.google.com) which hangs in containers
+    # without internet access (e.g. RunAI / Kubernetes GPU pods).
+    pc = RTCPeerConnection(configuration=RTCConfiguration(iceServers=[]))
 
     # Generate a unique peer ID for the worker.
     # peer_id = f"worker-{uuid.uuid4()}"
