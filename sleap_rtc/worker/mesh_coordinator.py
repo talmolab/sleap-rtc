@@ -184,33 +184,56 @@ class MeshCoordinator:
 
                     elif msg_type == "candidate":
                         # Trickle ICE candidate from a browser client (dashboard).
-                        # Browser clients (WebRTC JS API) send candidates separately
-                        # after the offer. aiortc (GUI/CLI) embeds all candidates in
-                        # the SDP, so this message type is only sent by browsers.
-                        # Without handling this, ICE stalls at "checking" — the
-                        # browser's relay (TURN) candidates are never added to the PC.
-                        #
-                        # The browser sends candidate.toJSON() which looks like:
-                        #   {"candidate": "candidate:xxx udp ... typ relay", "sdpMid": "0", ...}
-                        # Pass the raw dict directly to addIceCandidate — aiortc
-                        # parses the "candidate" string field internally.
+                        # The browser sends candidate.toJSON():
+                        #   {"candidate": "candidate:xxx 1 udp ... typ host", "sdpMid": "0", ...}
+                        # aiortc's addIceCandidate expects an RTCIceCandidate object,
+                        # so we parse the candidate string via aioice and convert.
                         candidate_data = data.get("candidate")
                         if candidate_data and self.worker.pc:
-                            try:
-                                await self.worker.pc.addIceCandidate(candidate_data)
-                                cand_str = candidate_data.get("candidate", "")
-                                cand_type = (
-                                    "relay"
-                                    if "typ relay" in cand_str
-                                    else "srflx" if "typ srflx" in cand_str else "host"
-                                )
-                                logger.info(f"[ICE] Added client {cand_type} candidate")
-                            except Exception as e:
-                                logger.warning(f"[ICE] Failed to add candidate: {e}")
+                            cand_str = candidate_data.get("candidate", "")
+                            if not cand_str or cand_str == "":
+                                # End-of-candidates signal
+                                logger.info("[ICE] Received end-of-candidates signal")
+                                await self.worker.pc.addIceCandidate(None)
+                            else:
+                                try:
+                                    # Strip leading "candidate:" prefix if present
+                                    sdp_str = cand_str
+                                    if sdp_str.startswith("candidate:"):
+                                        sdp_str = sdp_str[len("candidate:") :]
+
+                                    from aioice import Candidate as AioCandidate
+                                    from aiortc.rtcicetransport import (
+                                        candidate_from_aioice,
+                                    )
+
+                                    aio_cand = AioCandidate.from_sdp(sdp_str)
+                                    rtc_cand = candidate_from_aioice(aio_cand)
+                                    rtc_cand.sdpMid = candidate_data.get("sdpMid")
+                                    rtc_cand.sdpMLineIndex = candidate_data.get(
+                                        "sdpMLineIndex"
+                                    )
+
+                                    await self.worker.pc.addIceCandidate(rtc_cand)
+                                    cand_type = (
+                                        "relay"
+                                        if "typ relay" in cand_str
+                                        else (
+                                            "srflx"
+                                            if "typ srflx" in cand_str
+                                            else "host"
+                                        )
+                                    )
+                                    logger.info(
+                                        f"[ICE] Added client {cand_type} candidate"
+                                    )
+                                except Exception as e:
+                                    logger.warning(
+                                        f"[ICE] Failed to add candidate: {e}"
+                                    )
                         else:
                             logger.debug(
-                                "[ICE] Ignoring candidate: no PC or empty candidate "
-                                "(end-of-candidates signal)"
+                                "[ICE] Ignoring candidate: no PC or empty candidate"
                             )
 
                     elif msg_type == "ice_candidate":
