@@ -1943,6 +1943,7 @@ class SleapRTCDashboard {
             ws.onmessage = async (event) => {
                 let msg;
                 try { msg = JSON.parse(event.data); } catch { return; }
+                console.log('[SJ-ICE] WS message:', msg.type, msg);
 
                 if (msg.type === 'registered_auth') {
                     let iceServers = (msg.ice_servers ?? []).map(s => ({
@@ -1967,7 +1968,18 @@ class SleapRTCDashboard {
                     dc.onopen = () => settle(resolve, dc);
                     dc.onerror = (e) => settle(reject, e);
 
+                    pc.oniceconnectionstatechange = () => {
+                        console.log('[SJ-ICE] ICE state:', pc.iceConnectionState);
+                    };
+                    pc.onicegatheringstatechange = () => {
+                        console.log('[SJ-ICE] Gathering state:', pc.iceGatheringState);
+                    };
                     pc.onicecandidate = ({ candidate }) => {
+                        if (candidate) {
+                            console.log('[SJ-ICE] Local candidate:', candidate.type, candidate.address, candidate.port);
+                        } else {
+                            console.log('[SJ-ICE] Gathering complete (null candidate)');
+                        }
                         if (candidate && ws.readyState === WebSocket.OPEN) {
                             ws.send(JSON.stringify({
                                 type: 'candidate',
@@ -1988,9 +2000,12 @@ class SleapRTCDashboard {
                     }));
 
                 } else if (msg.type === 'answer') {
+                    console.log('[SJ-ICE] Received answer SDP, candidates in SDP:',
+                        (msg.sdp || '').split('\n').filter(l => l.startsWith('a=candidate')).length);
                     await this._sjPc?.setRemoteDescription(
                         new RTCSessionDescription({ type: 'answer', sdp: msg.sdp })
                     );
+                    console.log('[SJ-ICE] Remote description set, ICE state:', this._sjPc?.iceConnectionState);
 
                 } else if (msg.type === 'candidate') {
                     try {
