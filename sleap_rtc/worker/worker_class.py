@@ -517,17 +517,21 @@ class RTCWorkerClient:
         """
         ice_servers = self.mesh_ice_servers if for_mesh else self.ice_servers
 
-        # Build RTCConfiguration from ICE servers provided by the signaling
-        # server.  When no servers are configured we pass an explicit empty
-        # list so aiortc does NOT fall back to its hardcoded default
-        # (stun.l.google.com:19302).  That default STUN causes
-        # gather_candidates to hang indefinitely in containers that have no
-        # internet access (e.g. RunAI / Kubernetes GPU pods).  With an empty
-        # list, aioice skips STUN entirely and gathers only host candidates,
-        # which is sufficient when the client and worker share the same
-        # network (e.g. institution WiFi → HPC overlay).
+        # Build RTCConfiguration from ICE servers.  When the signaling server
+        # provides no ICE servers, fall back to public STUN so both the worker
+        # and browser discover their server-reflexive (public) IPs — needed for
+        # NAT hole-punching when the worker is behind a Kubernetes overlay and
+        # the browser is behind an institution NAT.
+        _FALLBACK_STUN = [{"urls": "stun:stun.l.google.com:19302"}]
+        if not ice_servers:
+            ice_servers = _FALLBACK_STUN
+            logging.info(
+                "No ICE servers from signaling server — using public STUN "
+                "fallback (stun.l.google.com)"
+            )
+
         ice_server_objects = []
-        for server in ice_servers or []:
+        for server in ice_servers:
             ice_server_objects.append(RTCIceServer(**server))
 
         config = RTCConfiguration(iceServers=ice_server_objects)

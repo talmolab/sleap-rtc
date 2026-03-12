@@ -456,28 +456,34 @@ class TestMeshCoordinatorICEServers:
         ), "_handle_client_offer must create a fresh RTCPeerConnection with ICE servers"
 
 
-class TestNoDefaultStun:
-    """RTCPeerConnection must never use aiortc's default STUN in containers."""
+class TestExplicitIceServers:
+    """RTCPeerConnection must always use explicit RTCConfiguration."""
 
     def test_create_peer_connection_passes_explicit_ice_servers(self):
         """_create_peer_connection must always pass RTCConfiguration(iceServers=...)
-        so aiortc does NOT fall back to its hardcoded stun.l.google.com default,
-        which hangs in internet-less containers (RunAI / Kubernetes)."""
+        so aiortc does NOT fall back to its hardcoded default in an uncontrolled way."""
         import inspect
         from sleap_rtc.worker.worker_class import RTCWorkerClient
 
         src = inspect.getsource(RTCWorkerClient._create_peer_connection)
         # Must always create an RTCConfiguration — no bare RTCPeerConnection()
         assert "RTCConfiguration" in src
-        # Must NOT contain a STUN fallback URL in executable code
-        # (comments mentioning it for context are fine)
         import re
 
-        # Match stun.l.google.com outside of comments and docstrings
         bare_pc = re.findall(r"^\s+pc\s*=\s*RTCPeerConnection\(\)", src, re.MULTILINE)
         assert (
             len(bare_pc) == 0
         ), "Found bare RTCPeerConnection() — must pass RTCConfiguration(iceServers=...)"
+
+    def test_stun_fallback_when_no_ice_servers(self):
+        """When signaling server provides no ICE servers, factory must fall
+        back to public STUN so workers behind NAT get srflx candidates."""
+        import inspect
+        from sleap_rtc.worker.worker_class import RTCWorkerClient
+
+        src = inspect.getsource(RTCWorkerClient._create_peer_connection)
+        assert "_FALLBACK_STUN" in src
+        assert "stun.l.google.com" in src
 
     def test_mesh_coordinator_uses_factory(self):
         """All RTCPeerConnection calls in mesh_coordinator must use the factory

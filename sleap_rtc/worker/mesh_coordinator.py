@@ -323,29 +323,9 @@ class MeshCoordinator:
         # Log ICE server config so we can diagnose HPC connectivity issues
         ice_count = len(self.worker.ice_servers) if self.worker.ice_servers else 0
         logger.info(
-            f"Creating client PC with {ice_count} ICE server(s): "
-            f"{[s.get('urls', s) for s in (self.worker.ice_servers or [])]}"
+            f"Creating client PC with {ice_count} ICE server(s) from signaling "
+            f"server (factory will add STUN fallback if 0)"
         )
-        if ice_count == 0:
-            logger.warning(
-                "No ICE servers configured — client-worker ICE will rely on "
-                "direct host candidates only. This will fail when the worker "
-                "is behind a firewall (e.g. HPC). Check that the signaling "
-                "server returns ice_servers in registered_auth."
-            )
-
-        # Diagnostic: log what addresses aioice would discover
-        try:
-            import ifaddr
-
-            addrs = []
-            for adapter in ifaddr.get_adapters():
-                for ip in adapter.ips:
-                    if isinstance(ip.ip, str) and ip.ip != "127.0.0.1":
-                        addrs.append(f"{adapter.nice_name}={ip.ip}")
-            logger.info(f"[ICE] Host addresses from ifaddr: {addrs}")
-        except Exception as e:
-            logger.warning(f"[ICE] ifaddr diagnostic failed: {e}")
 
         # Create a fresh RTCPeerConnection with ICE servers so TURN relay is
         # available. self.worker.pc was created before registered_auth delivered
