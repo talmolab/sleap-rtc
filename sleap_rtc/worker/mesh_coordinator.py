@@ -299,9 +299,10 @@ class MeshCoordinator:
 
         path = data.get("path", "/")
         req_id = data.get("req_id")
+        offset = data.get("offset", 0)
 
         # Build the protocol message: FS_LIST_DIR::path::offset
-        proto_msg = f"{MSG_FS_LIST_DIR}{MSG_SEPARATOR}{path}{MSG_SEPARATOR}0"
+        proto_msg = f"{MSG_FS_LIST_DIR}{MSG_SEPARATOR}{path}{MSG_SEPARATOR}{offset}"
         response = self.worker.handle_fs_message(proto_msg)
 
         # Parse the protocol response into JSON for relay

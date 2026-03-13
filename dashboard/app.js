@@ -661,10 +661,10 @@ class SleapRTCDashboard {
     /**
      * Request a directory listing from a worker's filesystem.
      */
-    async apiFsList(roomId, peerId, path, reqId) {
+    async apiFsList(roomId, peerId, path, reqId, offset = 0) {
         return this.apiRequest('/api/fs/list', {
             method: 'POST',
-            body: JSON.stringify({ room_id: roomId, peer_id: peerId, path, req_id: reqId }),
+            body: JSON.stringify({ room_id: roomId, peer_id: peerId, path, req_id: reqId, offset }),
         });
     }
 
@@ -2414,7 +2414,7 @@ class SleapRTCDashboard {
                     this._sjPendingRequests = this._sjPendingRequests || {};
                     this._sjPendingRequests[reqId] = { colIndex };
                     const offset = page * 100;
-                    this.apiFsList(this._sjRoomId, this._sjWorkerId, hasMorePath + `?offset=${offset}`, reqId);
+                    this.apiFsList(this._sjRoomId, this._sjWorkerId, hasMorePath, reqId, offset);
                     page++;
                     col.removeEventListener('scroll', scrollHandler);
                 }
