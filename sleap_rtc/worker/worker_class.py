@@ -1828,11 +1828,12 @@ class RTCWorkerClient:
                         sleap_nn_ver = _get_sleap_nn_version()
                         gpu_info = f"{self.gpu_model} ({self.gpu_memory_mb} MB) · CUDA {self.cuda_version}"
                         thin_line = "─" * 80
-                        bold_white = "\033[1;37m"
-                        reset = "\033[0m"
+                        bw = "\033[1;37m"  # bold white
+                        g = "\033[32m"  # green (match loguru SUCCESS)
+                        r = "\033[0m"  # reset
                         logger.success(
                             f"\n{thin_line}\n\n"
-                            f"  ✓ Worker {bold_white}{self.name}{reset} ready! Waiting for client requests...\n\n"
+                            f"  ✓ Worker {bw}{self.name}{r}{g} ready! Waiting for client requests...\n\n"
                             f"  Room:      {self.room_id}\n"
                             f"  Worker:    {self.name}\n"
                             f"  Peer ID:   {self.peer_id}\n"
