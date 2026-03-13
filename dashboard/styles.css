@@ -1807,6 +1807,30 @@ body::before {
     text-decoration: underline;
 }
 
+.sj-training-log {
+    width: 100%;
+    max-height: 200px;
+    overflow-y: auto;
+    background: var(--bg-primary);
+    border-radius: 8px;
+    padding: 12px;
+    margin-top: 12px;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--text-secondary);
+    text-align: left;
+}
+
+.sj-training-log .log-line {
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.sj-training-log .log-line.log-info {
+    color: var(--accent-secondary);
+}
+
 /* Error display */
 .sj-error {
     font-size: 13px;

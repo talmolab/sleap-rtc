@@ -2448,6 +2448,7 @@ class SleapRTCDashboard {
             this._sjJobSSE
                 .on('status', (data) => this._sjHandleJobStatus(data))
                 .on('job_status', (data) => this._sjHandleJobStatus(data))
+                .on('job_progress', (data) => this._sjHandleJobProgress(data))
                 .on('epoch', (data) => this._sjHandleJobEpoch(data));
 
             // Switch to status view
@@ -2505,6 +2506,48 @@ class SleapRTCDashboard {
                 link.classList.remove('hidden');
             }
         }
+    }
+
+    _sjHandleJobProgress(data) {
+        const event = data.event;
+        const what = data.what ? `[${data.what}] ` : '';
+
+        if (event === 'train_begin') {
+            this._sjAppendLog(`${what}Training started`);
+            if (data.wandb_url) {
+                const link = document.getElementById('sj-wandb-link');
+                if (link) {
+                    link.href = data.wandb_url;
+                    link.classList.remove('hidden');
+                }
+            }
+        } else if (event === 'epoch_end') {
+            const epoch = data.epoch;
+            const logs = data.logs || {};
+            const parts = Object.entries(logs)
+                .map(([k, v]) => `${k}: ${Number(v).toFixed(4)}`)
+                .join('  ');
+            this._sjAppendLog(`${what}Epoch ${epoch}  ${parts}`);
+            // Update status label with current epoch
+            const label = document.getElementById('sj-status-label');
+            const trainLoss = logs['train/loss'] != null ? Number(logs['train/loss']).toFixed(4) : null;
+            if (label && epoch != null) {
+                label.textContent = `Training — Epoch ${epoch}${trainLoss ? `, loss ${trainLoss}` : ''}`;
+            }
+        } else if (event === 'train_end') {
+            this._sjAppendLog(`${what}Training complete`, 'log-info');
+        }
+    }
+
+    _sjAppendLog(text, extraClass = '') {
+        const log = document.getElementById('sj-training-log');
+        if (!log) return;
+        log.classList.remove('hidden');
+        const line = document.createElement('div');
+        line.className = `log-line${extraClass ? ' ' + extraClass : ''}`;
+        line.textContent = text;
+        log.appendChild(line);
+        log.scrollTop = log.scrollHeight;
     }
 
     _sjShowCloseButton() {

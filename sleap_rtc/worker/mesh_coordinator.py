@@ -473,6 +473,29 @@ class MeshCoordinator:
                         relay_msg = {**_j.loads(payload), **_base, "status": "failed", "stage": "inference"}
                     except Exception:
                         relay_msg = {**_base, "status": "failed", "stage": "inference"}
+                elif message.startswith("PROGRESS_REPORT::"):
+                    # Forward only epoch-level events to avoid flooding relay
+                    try:
+                        import jsonpickle
+                        payload = message.split("::", 1)[1]
+                        msg = jsonpickle.decode(payload)
+                        event = msg.get("event") if isinstance(msg, dict) else None
+                        if event in ("train_begin", "epoch_end", "train_end"):
+                            progress_data = {
+                                "type": "job_progress",
+                                "job_id": self._job_id,
+                                "event": event,
+                            }
+                            if event == "train_begin" and msg.get("wandb_url"):
+                                progress_data["wandb_url"] = msg["wandb_url"]
+                            elif event == "epoch_end":
+                                progress_data["epoch"] = msg.get("epoch")
+                                progress_data["logs"] = msg.get("logs", {})
+                            if msg.get("what"):
+                                progress_data["what"] = msg["what"]
+                            relay_msg = progress_data
+                    except Exception:
+                        pass  # Silently drop malformed progress reports
                 # Log lines and other messages — skip to avoid flooding relay
 
                 if relay_msg:
