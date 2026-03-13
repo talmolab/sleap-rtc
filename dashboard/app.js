@@ -2176,7 +2176,7 @@ class SleapRTCDashboard {
             is_dir: e.is_dir ?? (e.type === 'directory'),
         }));
 
-        this._sjRenderColumn(entries, colIndex, data.has_more ? data.path : null);
+        this._sjRenderColumn(entries, colIndex);
     }
 
     _sjHandlePathOk(data) {
@@ -2342,7 +2342,7 @@ class SleapRTCDashboard {
 
     // ── File browser (column view via relay) ─────────────────────────────────
 
-    _sjRenderColumn(entries, colIndex, hasMorePath = null) {
+    _sjRenderColumn(entries, colIndex) {
         const container = document.getElementById('sj-file-columns');
         if (!container) return;
 
@@ -2409,23 +2409,6 @@ class SleapRTCDashboard {
             }
             col.appendChild(row);
         });
-
-        // Infinite scroll: request next page when scrolled to bottom
-        if (hasMorePath) {
-            let page = 1;
-            const scrollHandler = () => {
-                if (col.scrollTop + col.clientHeight >= col.scrollHeight - 20) {
-                    const reqId = crypto.randomUUID();
-                    this._sjPendingRequests = this._sjPendingRequests || {};
-                    this._sjPendingRequests[reqId] = { colIndex };
-                    const offset = page * 100;
-                    this.apiFsList(this._sjRoomId, this._sjWorkerId, hasMorePath, reqId, offset);
-                    page++;
-                    col.removeEventListener('scroll', scrollHandler);
-                }
-            };
-            col.addEventListener('scroll', scrollHandler);
-        }
 
         container.appendChild(col);
     }

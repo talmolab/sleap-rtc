@@ -415,6 +415,7 @@ class MeshCoordinator:
             def __init__(self, ws_ref, job_id_ref):
                 self._ws = ws_ref
                 self._job_id = job_id_ref
+                self.readyState = "open"
 
             def send(self, message: str):
                 """Forward protocol messages to relay via WebSocket."""
