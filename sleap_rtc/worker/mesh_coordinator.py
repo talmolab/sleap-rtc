@@ -426,34 +426,53 @@ class MeshCoordinator:
                 import json as _j
 
                 relay_msg = None
+                # Helper: build relay message, ensuring job_id is always the
+                # signaling server's ID (not the worker's internal per-model ID
+                # that may appear in spread payloads).
+                _base = {"type": "job_status", "job_id": self._job_id}
+
                 if message.startswith(f"{MSG_JOB_ACCEPTED}{MSG_SEPARATOR}"):
-                    relay_msg = {"type": "job_status", "job_id": self._job_id, "status": "accepted"}
+                    relay_msg = {**_base, "status": "accepted"}
                 elif message.startswith(f"{MSG_JOB_REJECTED}{MSG_SEPARATOR}"):
                     parts = message.split(MSG_SEPARATOR, 2)
                     error_json = parts[2] if len(parts) > 2 else "{}"
-                    relay_msg = {"type": "job_status", "job_id": self._job_id, "status": "rejected", "errors": _j.loads(error_json)}
+                    relay_msg = {**_base, "status": "rejected", "errors": _j.loads(error_json)}
                 elif message.startswith(f"{MSG_JOB_PROGRESS}{MSG_SEPARATOR}"):
                     payload = message.split(MSG_SEPARATOR, 1)[1]
                     try:
-                        relay_msg = {"type": "job_status", "job_id": self._job_id, "status": "running", **_j.loads(payload)}
+                        relay_msg = {**_j.loads(payload), **_base, "status": "running"}
                     except Exception:
-                        relay_msg = {"type": "job_status", "job_id": self._job_id, "status": "running", "message": payload}
+                        relay_msg = {**_base, "status": "running", "message": payload}
                 elif message.startswith(f"{MSG_JOB_COMPLETE}{MSG_SEPARATOR}"):
                     payload = message.split(MSG_SEPARATOR, 1)[1]
                     try:
-                        relay_msg = {"type": "job_status", "job_id": self._job_id, "status": "complete", **_j.loads(payload)}
+                        relay_msg = {**_j.loads(payload), **_base, "status": "complete"}
                     except Exception:
-                        relay_msg = {"type": "job_status", "job_id": self._job_id, "status": "complete"}
+                        relay_msg = {**_base, "status": "complete"}
                 elif message.startswith(f"{MSG_JOB_FAILED}{MSG_SEPARATOR}"):
                     payload = message.split(MSG_SEPARATOR, 1)[1]
                     try:
-                        relay_msg = {"type": "job_status", "job_id": self._job_id, "status": "failed", **_j.loads(payload)}
+                        relay_msg = {**_j.loads(payload), **_base, "status": "failed"}
                     except Exception:
-                        relay_msg = {"type": "job_status", "job_id": self._job_id, "status": "failed", "error": payload}
+                        relay_msg = {**_base, "status": "failed", "error": payload}
                 elif message.startswith("TRAIN_JOB_START::"):
-                    relay_msg = {"type": "job_status", "job_id": self._job_id, "status": "running", "message": message}
+                    relay_msg = {**_base, "status": "running", "message": message}
                 elif message == "TRAINING_JOBS_DONE":
-                    relay_msg = {"type": "job_status", "job_id": self._job_id, "status": "complete"}
+                    relay_msg = {**_base, "status": "complete"}
+                elif message.startswith("INFERENCE_BEGIN::"):
+                    relay_msg = {**_base, "status": "running", "stage": "inference"}
+                elif message.startswith("INFERENCE_COMPLETE::"):
+                    payload = message.split("::", 1)[1] if "::" in message else "{}"
+                    try:
+                        relay_msg = {**_j.loads(payload), **_base, "status": "complete", "stage": "inference"}
+                    except Exception:
+                        relay_msg = {**_base, "status": "complete", "stage": "inference"}
+                elif message.startswith("INFERENCE_FAILED::"):
+                    payload = message.split("::", 1)[1] if "::" in message else "{}"
+                    try:
+                        relay_msg = {**_j.loads(payload), **_base, "status": "failed", "stage": "inference"}
+                    except Exception:
+                        relay_msg = {**_base, "status": "failed", "stage": "inference"}
                 # Log lines and other messages — skip to avoid flooding relay
 
                 if relay_msg:

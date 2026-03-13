@@ -2468,9 +2468,16 @@ class SleapRTCDashboard {
     _sjHandleJobStatus(data) {
         const label = document.getElementById('sj-status-label');
         const status = data.status;
+        const stage = data.stage;
 
         if (status === 'running' || status === 'submitted') {
-            if (label) label.textContent = status === 'running' ? 'Running…' : 'Submitted…';
+            if (label) {
+                if (stage === 'inference') label.textContent = 'Running inference…';
+                else if (status === 'running') label.textContent = 'Training…';
+                else label.textContent = 'Submitted…';
+            }
+        } else if (status === 'accepted') {
+            if (label) label.textContent = 'Accepted — starting…';
         } else if (status === 'complete') {
             if (label) label.textContent = 'Complete';
             this._sjShowCloseButton();
