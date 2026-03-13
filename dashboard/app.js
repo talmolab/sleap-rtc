@@ -2433,6 +2433,32 @@ class SleapRTCDashboard {
 
     // ── File browser (column view via relay) ─────────────────────────────────
 
+    _sjFileIcon(isDir, isVideo, name) {
+        if (isDir) {
+            return `<svg class="sj-entry-icon" style="color: #fbbf24" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/>
+            </svg>`;
+        }
+        const ext = (name || '').split('.').pop().toLowerCase();
+        if (ext === 'slp') {
+            return `<svg class="sj-entry-icon" style="color: #a78bfa" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                <polyline points="14 2 14 8 20 8"/>
+                <circle cx="12" cy="14" r="3"/>
+            </svg>`;
+        }
+        if (isVideo || ['mp4', 'avi', 'mov'].includes(ext)) {
+            return `<svg class="sj-entry-icon" style="color: #38bdf8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <rect x="2" y="4" width="20" height="16" rx="2"/>
+                <polygon points="10 9 16 12 10 15"/>
+            </svg>`;
+        }
+        return `<svg class="sj-entry-icon" style="color: #9090a8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+            <polyline points="14 2 14 8 20 8"/>
+        </svg>`;
+    }
+
     _sjRenderColumn(entries, colIndex) {
         const container = document.getElementById('sj-file-columns');
         if (!container) return;
@@ -2463,7 +2489,7 @@ class SleapRTCDashboard {
             const name = entry.name ?? entry.path.split('/').pop();
             const row = document.createElement('div');
             row.className = 'sj-file-entry' + (entry.is_dir ? ' is-dir' : (isVideoMode ? ' is-video' : ' is-slp'));
-            row.textContent = name;
+            row.innerHTML = this._sjFileIcon(entry.is_dir, isVideoMode, name) + `<span>${this.escapeHtml(name)}</span>`;
 
             if (entry.is_dir) {
                 row.onclick = () => {

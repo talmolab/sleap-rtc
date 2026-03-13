@@ -1894,15 +1894,9 @@ body::before {
     color: var(--text-muted);
 }
 
-.sj-file-entry.is-dir::before {
-    content: '📁';
-    font-size: 12px;
-    flex-shrink: 0;
-}
-
-.sj-file-entry.is-slp::before {
-    content: '🎯';
-    font-size: 12px;
+.sj-entry-icon {
+    width: 16px;
+    height: 16px;
     flex-shrink: 0;
 }
 
@@ -2037,11 +2031,6 @@ body::before {
 }
 
 /* Video file entries in browser */
-.sj-file-entry.is-video::before {
-    content: '🎬';
-    font-size: 12px;
-    flex-shrink: 0;
-}
 
 /* Spinner */
 .sj-spinner {
