@@ -964,7 +964,35 @@ body::before {
     border-color: rgba(234, 179, 8, 0.3);
 }
 
-/* Nested workers */
+/* Room action bar (Row 2) */
+.room-action-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 20px;
+    border-top: 1px solid var(--border-subtle);
+    background: rgba(0, 0, 0, 0.15);
+}
+
+[data-theme="light"] .room-action-bar {
+    background: rgba(0, 0, 0, 0.03);
+}
+
+/* Submit Job button — purple accent */
+.btn-submit-job {
+    background: var(--accent-muted);
+    color: var(--accent-primary);
+    border: 1px solid rgba(139, 92, 246, 0.3);
+    font-weight: 600;
+}
+
+.btn-submit-job:hover {
+    background: var(--accent-primary);
+    color: white;
+    border-color: var(--accent-primary);
+}
+
+/* Nested workers (token cards only) */
 .nested-workers {
     border-top: 1px solid var(--border-subtle);
     background: var(--bg-tertiary);
@@ -1054,6 +1082,247 @@ body::before {
 .worker-connected {
     color: var(--text-muted);
     font-size: 12px;
+}
+
+/* Workers Modal */
+.modal-workers {
+    max-width: 640px;
+}
+
+.wm-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    padding: 24px 28px 0;
+}
+
+.wm-header h3 {
+    font-size: 17px;
+    font-weight: 600;
+}
+
+.wm-subtitle {
+    font-size: 13px;
+    color: var(--text-muted);
+    margin-top: 3px;
+}
+
+.wm-body {
+    padding: 20px 28px;
+}
+
+.wm-search-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-default);
+    border-radius: 8px;
+    margin-bottom: 16px;
+    transition: all 0.15s;
+}
+
+.wm-search-bar:focus-within {
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+.wm-search-bar svg {
+    width: 16px;
+    height: 16px;
+    color: var(--text-muted);
+    flex-shrink: 0;
+}
+
+.wm-search-bar input {
+    flex: 1;
+    background: none;
+    border: none;
+    outline: none;
+    color: var(--text-primary);
+    font-size: 13px;
+    font-family: inherit;
+}
+
+.wm-search-bar input::placeholder {
+    color: var(--text-muted);
+}
+
+.wm-filter-chips {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 12px;
+}
+
+.wm-filter-chip {
+    padding: 4px 10px;
+    border-radius: 20px;
+    font-size: 11px;
+    font-weight: 500;
+    background: var(--bg-elevated);
+    color: var(--text-secondary);
+    border: 1px solid var(--border-default);
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.wm-filter-chip:hover {
+    border-color: var(--accent-primary);
+    color: var(--text-primary);
+}
+
+.wm-filter-chip.active {
+    background: var(--accent-muted);
+    color: var(--accent-primary);
+    border-color: rgba(139, 92, 246, 0.3);
+}
+
+.wm-filter-count {
+    font-size: 10px;
+    font-weight: 600;
+    background: var(--bg-tertiary);
+    color: var(--text-muted);
+    padding: 0 5px;
+    border-radius: 8px;
+    margin-left: 4px;
+}
+
+.wm-filter-chip.active .wm-filter-count {
+    background: rgba(139, 92, 246, 0.25);
+    color: var(--accent-primary);
+}
+
+.wm-worker-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.wm-worker-row {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 14px 16px;
+    background: var(--bg-tertiary);
+    border: 1px solid transparent;
+    border-radius: 8px;
+    transition: all 0.15s;
+}
+
+.wm-worker-row:hover {
+    background: var(--bg-elevated);
+    border-color: var(--border-default);
+}
+
+.wm-worker-icon {
+    width: 36px;
+    height: 36px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-default);
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--accent-primary);
+    flex-shrink: 0;
+}
+
+.wm-worker-icon svg {
+    width: 18px;
+    height: 18px;
+}
+
+.wm-worker-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.wm-worker-name {
+    font-size: 13px;
+    font-weight: 600;
+    margin-bottom: 2px;
+}
+
+.wm-worker-specs {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-bottom: 4px;
+}
+
+.wm-worker-meta {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.wm-worker-status {
+    margin-left: auto;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 4px;
+    font-size: 12px;
+    flex-shrink: 0;
+}
+
+.wm-status-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    display: inline-block;
+    margin-right: 4px;
+}
+
+.wm-status-dot.available {
+    background: var(--status-success);
+    box-shadow: 0 0 6px var(--status-success);
+}
+
+.wm-status-dot.busy {
+    background: var(--status-warning);
+    box-shadow: 0 0 6px var(--status-warning);
+}
+
+.wm-connected-time {
+    font-size: 11px;
+    color: var(--text-muted);
+}
+
+.wm-empty-state {
+    text-align: center;
+    padding: 32px 16px;
+    color: var(--text-muted);
+}
+
+.wm-empty-state svg {
+    width: 28px;
+    height: 28px;
+    margin-bottom: 8px;
+}
+
+.wm-empty-state p {
+    font-size: 13px;
+    margin-bottom: 4px;
+}
+
+.wm-empty-state span {
+    font-size: 11px;
+}
+
+.wm-empty-state code {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    background: var(--bg-elevated);
+    padding: 1px 5px;
+    border-radius: 3px;
+}
+
+.wm-no-results {
+    text-align: center;
+    padding: 24px 16px;
+    color: var(--text-muted);
+    font-size: 13px;
 }
 
 /* Role badges */

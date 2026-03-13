@@ -965,6 +965,41 @@ auto_select = true</code></pre>
         </div>
     </div>
 
+    <!-- Workers Modal -->
+    <div id="workers-modal" class="modal hidden">
+        <div class="modal-content modal-workers">
+            <div class="wm-header">
+                <div>
+                    <h3>Workers</h3>
+                    <p id="wm-room-name" class="wm-subtitle"></p>
+                </div>
+                <button class="btn-icon" data-close-modal>
+                    <i data-lucide="x"></i>
+                </button>
+            </div>
+            <div class="wm-body">
+                <div class="wm-search-bar">
+                    <i data-lucide="search"></i>
+                    <input type="text" id="wm-search" placeholder="Search workers..." oninput="app.filterWorkersSearch()">
+                </div>
+                <div class="wm-filter-chips">
+                    <button class="wm-filter-chip active" data-filter="all" onclick="app.setWorkersFilter('all')">All <span class="wm-filter-count" id="wm-count-all">0</span></button>
+                    <button class="wm-filter-chip" data-filter="idle" onclick="app.setWorkersFilter('idle')">Idle <span class="wm-filter-count" id="wm-count-idle">0</span></button>
+                    <button class="wm-filter-chip" data-filter="busy" onclick="app.setWorkersFilter('busy')">Busy <span class="wm-filter-count" id="wm-count-busy">0</span></button>
+                </div>
+                <div id="wm-worker-list" class="wm-worker-list"></div>
+                <div id="wm-empty-state" class="wm-empty-state hidden">
+                    <i data-lucide="cloud-off"></i>
+                    <p>No workers connected to this room.</p>
+                    <span>Start a worker with <code>sleap-rtc worker --api-key TOKEN</code></span>
+                </div>
+            </div>
+            <div class="form-actions">
+                <button type="button" class="btn btn-primary" data-close-modal>Done</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Token Created Success Modal -->
     <div id="token-created-modal" class="modal hidden">
         <div class="modal-content modal-large">

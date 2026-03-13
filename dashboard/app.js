@@ -892,44 +892,36 @@ class SleapRTCDashboard {
                         <i data-lucide="zap-off"></i>
                         0 connected
                     </span>
-                    ${!isExpired ? `
-                        <button class="btn btn-primary btn-sm" data-room-id="${room.room_id}" onclick="app.openSubmitJobModal('${room.room_id}')">
-                            <i data-lucide="play"></i>
-                            Submit Job
+                    ${room.role === 'owner' ? `
+                        <button class="btn btn-secondary btn-sm" onclick="app.handleRoomSecret('${room.room_id}')">
+                            <i data-lucide="key"></i>
+                            Secret
                         </button>
-                        ${room.role === 'owner' ? `
-                            <button class="btn btn-secondary btn-sm" onclick="app.handleRoomSecret('${room.room_id}')">
-                                <i data-lucide="key"></i>
-                                Secret
-                            </button>
-                            <button class="btn btn-secondary btn-sm" onclick="app.handleInvite('${room.room_id}')">
-                                <i data-lucide="user-plus"></i>
-                                Invite
-                            </button>
-                            <button class="btn btn-danger btn-sm" onclick="app.handleDeleteRoom('${room.room_id}', '${this.escapeHtml(room.name || room.room_id)}')">
-                                <i data-lucide="trash-2"></i>
-                                Delete
-                            </button>
-                        ` : ''}
-                    ` : `
-                        <button class="btn btn-danger btn-sm" onclick="app.handleDeleteRoom('${room.room_id}', '${this.escapeHtml(room.name || room.room_id)}')">
-                            <i data-lucide="trash-2"></i>
-                            Delete
-                        </button>
-                    `}
+                    ` : ''}
+                    <button class="btn btn-danger btn-sm" onclick="app.handleDeleteRoom('${room.room_id}', '${this.escapeHtml(room.name || room.room_id)}')">
+                        <i data-lucide="trash-2"></i>
+                        Delete
+                    </button>
                 </div>
             </div>
-            ${!isExpired ? `
-                <div class="nested-workers">
-                    <div class="nested-header" onclick="app.toggleRoomWorkersList('${room.room_id}', this)">
-                        <span>Connected Workers</span>
-                        <i data-lucide="chevron-down"></i>
-                    </div>
-                    <div id="room-workers-list-${room.room_id}" class="nested-worker-list">
-                        <div class="nested-worker-row" style="justify-content: center; color: var(--text-muted);">Loading workers...</div>
-                    </div>
-                </div>
-            ` : ''}
+            <div class="room-action-bar">
+                ${!isExpired ? `
+                    <button class="btn btn-submit-job btn-sm" data-room-id="${room.room_id}" onclick="app.openSubmitJobModal('${room.room_id}')">
+                        <i data-lucide="play"></i>
+                        Submit Job
+                    </button>
+                ` : ''}
+                <button class="btn btn-ghost btn-sm" onclick="app.openWorkersModal('${room.room_id}')">
+                    <i data-lucide="cpu"></i>
+                    View Workers
+                </button>
+                ${!isExpired && room.role === 'owner' ? `
+                    <button class="btn btn-ghost btn-sm" onclick="app.handleInvite('${room.room_id}')">
+                        <i data-lucide="user-plus"></i>
+                        Invite
+                    </button>
+                ` : ''}
+            </div>
         </div>
         `;
     }
@@ -1567,7 +1559,6 @@ class SleapRTCDashboard {
         for (const room of this.rooms) {
             const workerData = this.roomWorkers[room.room_id] || { workers: [], count: 0 };
             const badge = document.getElementById(`room-worker-badge-${room.room_id}`);
-            const workersList = document.getElementById(`room-workers-list-${room.room_id}`);
 
             if (badge) {
                 const count = workerData.count;
@@ -1580,54 +1571,164 @@ class SleapRTCDashboard {
                 badge.className = `worker-count-badge ${count === 0 ? 'offline' : ''}`;
             }
 
-            if (workersList) {
-                if (workerData.workers.length === 0) {
-                    workersList.innerHTML = '<div class="nested-worker-row" style="justify-content: center; color: var(--text-muted);">No workers currently connected</div>';
-                } else {
-                    workersList.innerHTML = workerData.workers.map(worker => {
-                        // Metadata line: peer_id + PEER ID badge, then account key + ACCOUNT-KEY badge
-                        const keyItem = worker.account_key_id
-                            ? `<span class="worker-meta-item">
-                                    <i data-lucide="key"></i>
-                                    ${worker.account_key_id.slice(0, 20)}...
-                                    <span class="auth-badge account-key">ACCOUNT-KEY</span>
-                                </span>`
-                            : `<span class="worker-meta-item"><span class="auth-badge token">TOKEN</span></span>`;
-                        const metaLine = `<div class="worker-meta">
-                                    <span class="worker-meta-item">
-                                        <i data-lucide="hash"></i>
-                                        ${worker.peer_id}
-                                        <span class="auth-badge peer-id">PEER ID</span>
-                                    </span>
-                                    ${keyItem}
-                                </div>`;
-                        // Top: --name label if set, else just the meta line.
-                        const nameHtml = worker.worker_name
-                            ? `<div class="worker-name">${worker.worker_name}</div>${metaLine}`
-                            : metaLine;
-                        return `
-                            <div class="nested-worker-row">
-                                <div class="worker-cell">
-                                    <div class="worker-avatar">
-                                        <i data-lucide="monitor"></i>
-                                    </div>
-                                    <div>${nameHtml}</div>
-                                </div>
-                                <span class="worker-connected" title="${formatExactDate(worker.connected_at)}">
-                                    Connected ${formatRelativeTime(worker.connected_at)}
-                                </span>
-                            </div>
-                        `;
-                    }).join('');
-                }
-            }
-
             if (typeof lucide !== 'undefined') {
                 lucide.createIcons();
             }
         }
     }
 
+    // =========================================================================
+    // Workers Modal
+    // =========================================================================
+
+    openWorkersModal(roomId) {
+        this.currentWorkersRoomId = roomId;
+        this.workersFilter = 'all';
+        this.workersSearchQuery = '';
+
+        // Set room name in modal header
+        const room = this.rooms.find(r => r.room_id === roomId);
+        const roomName = room ? (room.name || roomId) : roomId;
+        const subtitle = document.getElementById('wm-room-name');
+        if (subtitle) subtitle.textContent = roomName;
+
+        // Reset search input
+        const searchInput = document.getElementById('wm-search');
+        if (searchInput) searchInput.value = '';
+
+        // Reset filter chips
+        document.querySelectorAll('#workers-modal .wm-filter-chip').forEach(c => c.classList.remove('active'));
+        const allChip = document.querySelector('#workers-modal .wm-filter-chip[data-filter="all"]');
+        if (allChip) allChip.classList.add('active');
+
+        this.renderWorkersModalList();
+        this.showModal('workers-modal');
+    }
+
+    renderWorkersModalList() {
+        const roomId = this.currentWorkersRoomId;
+        const workerData = this.roomWorkers[roomId] || { workers: [], count: 0 };
+        const workers = workerData.workers || [];
+        const container = document.getElementById('wm-worker-list');
+        const emptyState = document.getElementById('wm-empty-state');
+        if (!container) return;
+
+        const query = (this.workersSearchQuery || '').toLowerCase();
+        const filter = this.workersFilter || 'all';
+
+        // Count by status for filter chips
+        const idleCount = workers.filter(w => {
+            const status = (w.properties && w.properties.status) || 'available';
+            return status === 'available';
+        }).length;
+        const busyCount = workers.filter(w => {
+            const status = (w.properties && w.properties.status) || 'available';
+            return status === 'busy';
+        }).length;
+
+        // Update chip counts
+        const countAll = document.getElementById('wm-count-all');
+        const countIdle = document.getElementById('wm-count-idle');
+        const countBusy = document.getElementById('wm-count-busy');
+        if (countAll) countAll.textContent = workers.length;
+        if (countIdle) countIdle.textContent = idleCount;
+        if (countBusy) countBusy.textContent = busyCount;
+
+        // Apply filters
+        let filtered = workers;
+        if (filter === 'idle') {
+            filtered = filtered.filter(w => {
+                const status = (w.properties && w.properties.status) || 'available';
+                return status === 'available';
+            });
+        } else if (filter === 'busy') {
+            filtered = filtered.filter(w => {
+                const status = (w.properties && w.properties.status) || 'available';
+                return status === 'busy';
+            });
+        }
+
+        // Apply search
+        if (query) {
+            filtered = filtered.filter(w => {
+                const name = (w.worker_name || '').toLowerCase();
+                const gpu = (w.properties && w.properties.gpu_model || '').toLowerCase();
+                const peerId = (w.peer_id || '').toLowerCase();
+                return name.includes(query) || gpu.includes(query) || peerId.includes(query);
+            });
+        }
+
+        // Show empty state or worker list
+        if (workers.length === 0) {
+            container.innerHTML = '';
+            if (emptyState) emptyState.classList.remove('hidden');
+        } else if (filtered.length === 0) {
+            container.innerHTML = '<div class="wm-no-results">No workers match your search.</div>';
+            if (emptyState) emptyState.classList.add('hidden');
+        } else {
+            if (emptyState) emptyState.classList.add('hidden');
+            container.innerHTML = filtered.map(worker => {
+                const props = worker.properties || {};
+                const gpuModel = props.gpu_model || 'Unknown GPU';
+                const gpuMem = props.gpu_memory_mb ? `${Math.round(props.gpu_memory_mb / 1024)} GB` : '';
+                const cuda = props.cuda_version ? `CUDA ${props.cuda_version}` : '';
+                const sleapNn = props.sleap_nn_version ? `sleap-nn ${props.sleap_nn_version}` : '';
+                const specs = [gpuModel, gpuMem, cuda, sleapNn].filter(Boolean).join(' \u00B7 ');
+
+                const status = props.status || 'available';
+                const statusClass = status === 'busy' ? 'busy' : 'available';
+                const statusText = status === 'busy' ? 'Busy' : 'Idle';
+
+                const keyItem = worker.account_key_id
+                    ? `<span class="worker-meta-item">
+                            <i data-lucide="key"></i>
+                            ${worker.account_key_id.slice(0, 20)}...
+                            <span class="auth-badge account-key">ACCOUNT-KEY</span>
+                        </span>`
+                    : `<span class="worker-meta-item"><span class="auth-badge token">TOKEN</span></span>`;
+
+                return `
+                <div class="wm-worker-row">
+                    <div class="wm-worker-icon"><i data-lucide="cpu"></i></div>
+                    <div class="wm-worker-info">
+                        <div class="wm-worker-name">${worker.worker_name || extractWorkerHostname(worker.peer_id)}</div>
+                        <div class="wm-worker-specs">${specs}</div>
+                        <div class="wm-worker-meta">
+                            <span class="worker-meta-item">
+                                <i data-lucide="hash"></i>
+                                ${worker.peer_id}
+                                <span class="auth-badge peer-id">PEER ID</span>
+                            </span>
+                            ${keyItem}
+                        </div>
+                    </div>
+                    <div class="wm-worker-status">
+                        <div class="wm-status-dot ${statusClass}"></div>
+                        <span>${statusText}</span>
+                        ${worker.connected_at ? `<span class="wm-connected-time" title="${formatExactDate(worker.connected_at)}">Connected ${formatRelativeTime(worker.connected_at)}</span>` : ''}
+                    </div>
+                </div>`;
+            }).join('');
+        }
+
+        if (typeof lucide !== 'undefined') {
+            lucide.createIcons();
+        }
+    }
+
+    setWorkersFilter(filter) {
+        this.workersFilter = filter;
+        document.querySelectorAll('#workers-modal .wm-filter-chip').forEach(c => c.classList.remove('active'));
+        const activeChip = document.querySelector(`#workers-modal .wm-filter-chip[data-filter="${filter}"]`);
+        if (activeChip) activeChip.classList.add('active');
+        this.renderWorkersModalList();
+    }
+
+    filterWorkersSearch() {
+        const input = document.getElementById('wm-search');
+        this.workersSearchQuery = input ? input.value : '';
+        this.renderWorkersModalList();
+    }
 
     toggleWorkersList(tokenId, headerElement) {
         const list = document.getElementById(`workers-list-${tokenId}`);
@@ -1640,18 +1741,6 @@ class SleapRTCDashboard {
             }
         }
     }
-    toggleRoomWorkersList(roomId, headerElement) {
-        const list = document.getElementById(`room-workers-list-${roomId}`);
-        if (list && headerElement) {
-            const isExpanded = list.classList.toggle('expanded');
-            headerElement.classList.toggle('expanded', isExpanded);
-            if (typeof lucide !== 'undefined') {
-                lucide.createIcons();
-            }
-        }
-    }
-
-
     async handleRevokeToken(tokenId) {
         const confirmed = await this.showConfirmModal(
             'Revoke Token',
