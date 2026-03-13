@@ -258,9 +258,9 @@ class TestDashboardJobSubmission:
         assert "sleap_nn_version" in app_js
 
     def test_sj_status_dot_classes(self, app_js):
-        """Status dot must use idle/busy/maintenance CSS classes."""
+        """Status dot must use available/busy/maintenance CSS classes."""
         assert "sj-status-dot" in app_js
-        assert "idle" in app_js
+        assert "available" in app_js
         assert "busy" in app_js
 
     # ── Task 5: YAML config upload ────────────────────────────────────────────
@@ -289,57 +289,43 @@ class TestDashboardJobSubmission:
         """Parsed YAML content must be stored as _sjConfigContent."""
         assert "_sjConfigContent" in app_js
 
-    # ── Task 6: WebRTC signaling ──────────────────────────────────────────────
+    # ── Task 6: SSE relay connection ─────────────────────────────────────────
 
-    def test_connect_to_worker_method_defined(self, app_js):
-        """connectToWorker method must be defined."""
-        assert "connectToWorker(" in app_js
+    def test_sse_connect_method_defined(self, app_js):
+        """sseConnect method must be defined for relay SSE streams."""
+        assert "sseConnect(" in app_js
 
-    def test_disconnect_from_worker_method_defined(self, app_js):
-        """disconnectFromWorker method must be defined."""
-        assert "disconnectFromWorker(" in app_js
+    def test_worker_sse_opened_for_fs_browsing(self, app_js):
+        """Worker SSE channel must be opened for filesystem browsing."""
+        assert "_sjWorkerSSE" in app_js
 
-    def test_webrtc_offer_sent_with_client_role(self, app_js):
-        """Offer message must include role: 'client' so worker skips auth challenge."""
-        assert "role" in app_js
-        assert "client" in app_js
+    def test_job_sse_opened_for_status(self, app_js):
+        """Job SSE channel must be opened for status updates."""
+        assert "_sjJobSSE" in app_js
 
-    def test_datachannel_label_is_job(self, app_js):
-        """Data channel must be created with label 'job'."""
-        assert "createDataChannel" in app_js
-        assert "'job'" in app_js or '"job"' in app_js
-
-    def test_connect_timeout_handled(self, app_js):
-        """connectToWorker must handle connection timeout."""
-        assert "timeout" in app_js.lower() or "setTimeout" in app_js
+    def test_api_worker_message_defined(self, app_js):
+        """apiWorkerMessage method must be defined for relay messaging."""
+        assert "apiWorkerMessage(" in app_js
 
     # ── Task 7: filesystem browser ────────────────────────────────────────────
 
-    def test_send_fs_message_defined(self, app_js):
-        """sendFsMessage method must be defined."""
-        assert "sendFsMessage(" in app_js
+    def test_fs_list_res_handler_defined(self, app_js):
+        """fs_list_res SSE handler must be defined."""
+        assert "_sjHandleFsListRes" in app_js
 
-    def test_init_file_browser_defined(self, app_js):
-        """initFileBrowser method must be defined."""
-        assert "initFileBrowser(" in app_js
-
-    def test_render_column_defined(self, app_js):
-        """renderColumn method must be defined."""
-        assert "renderColumn(" in app_js
-
-    def test_fs_protocol_messages_used(self, app_js):
-        """FS_GET_MOUNTS and FS_LIST_DIR protocol strings must be sent."""
-        assert "FS_GET_MOUNTS" in app_js
-        assert "FS_LIST_DIR" in app_js
+    def test_fs_list_method_defined(self, app_js):
+        """apiFsList method must be defined for filesystem listing."""
+        assert "apiFsList(" in app_js
 
     def test_slp_file_selection_stored(self, app_js):
         """Selecting a .slp file must store path as _sjLabelsPath."""
         assert "_sjLabelsPath" in app_js
         assert ".slp" in app_js
 
-    def test_step3_triggers_connect(self, app_js):
-        """Entering step 3 must call connectToWorker."""
-        assert "connectToWorker" in app_js
+    def test_step3_opens_worker_sse(self, app_js):
+        """Entering step 3 must open worker SSE for filesystem browsing."""
+        assert "sseConnect" in app_js
+        assert "_sjWorkerSSE" in app_js
 
     # ── Task 8: job submission and status view ────────────────────────────────
 
@@ -347,34 +333,27 @@ class TestDashboardJobSubmission:
         """submitJob method must be defined."""
         assert "submitJob(" in app_js
 
-    def test_submit_job_uses_job_submit_protocol(self, app_js):
-        """submitJob must send JOB_SUBMIT message."""
-        assert "JOB_SUBMIT" in app_js
+    def test_submit_job_uses_api_endpoint(self, app_js):
+        """submitJob must POST to the jobs/submit API endpoint."""
+        assert "jobs/submit" in app_js
 
-    def test_submit_job_generates_job_id(self, app_js):
-        """submitJob must generate a job_id (crypto.randomUUID)."""
-        assert "randomUUID" in app_js
+    def test_job_status_handler_defined(self, app_js):
+        """job_status SSE handler must be present."""
+        assert "job_status" in app_js
+        assert "_sjHandleJobStatus" in app_js
 
-    def test_job_accepted_switches_to_status_view(self, app_js):
-        """JOB_ACCEPTED handler must switch to status view."""
-        assert "JOB_ACCEPTED" in app_js
-        assert "sj-status" in app_js
+    def test_job_progress_handler_defined(self, app_js):
+        """job_progress SSE handler must be present."""
+        assert "job_progress" in app_js
+        assert "_sjHandleJobProgress" in app_js
 
-    def test_job_rejected_shows_error(self, app_js):
-        """JOB_REJECTED handler must show an error."""
-        assert "JOB_REJECTED" in app_js
+    def test_job_status_complete_handled(self, app_js):
+        """Complete status must update the status label."""
+        assert "'complete'" in app_js or '"complete"' in app_js
 
-    def test_job_progress_handled(self, app_js):
-        """JOB_PROGRESS handler must be present."""
-        assert "JOB_PROGRESS" in app_js
-
-    def test_job_complete_updates_status(self, app_js):
-        """JOB_COMPLETE handler must update status label."""
-        assert "JOB_COMPLETE" in app_js
-
-    def test_job_failed_updates_status(self, app_js):
-        """JOB_FAILED handler must update status label."""
-        assert "JOB_FAILED" in app_js
+    def test_job_status_failed_handled(self, app_js):
+        """Failed status must update the status label."""
+        assert "'failed'" in app_js or '"failed"' in app_js
 
     def test_wandb_link_shown_on_progress(self, app_js):
         """wandb_url in JOB_PROGRESS must reveal the WandB link element."""
