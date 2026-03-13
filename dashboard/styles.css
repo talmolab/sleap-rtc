@@ -1085,7 +1085,7 @@ body::before {
 }
 
 /* Workers Modal */
-.modal-workers {
+.modal-content.modal-workers {
     max-width: 80%;
     width: 80%;
 }
