@@ -1688,24 +1688,26 @@ class SleapRTCDashboard {
                     : `<span class="worker-meta-item"><span class="auth-badge token">TOKEN</span></span>`;
 
                 return `
-                <div class="wm-worker-row">
-                    <div class="wm-worker-icon"><i data-lucide="cpu"></i></div>
-                    <div class="wm-worker-info">
-                        <div class="wm-worker-name">${worker.worker_name || extractWorkerHostname(worker.peer_id)}</div>
-                        <div class="wm-worker-specs">${specs}</div>
-                        <div class="wm-worker-meta">
-                            <span class="worker-meta-item">
-                                <i data-lucide="hash"></i>
-                                ${worker.peer_id}
-                                <span class="auth-badge peer-id">PEER ID</span>
-                            </span>
-                            ${keyItem}
+                <div class="wm-worker-card">
+                    <div class="wm-worker-row">
+                        <div class="wm-worker-icon"><i data-lucide="cpu"></i></div>
+                        <div class="wm-worker-info">
+                            <div class="wm-worker-name">${worker.worker_name || extractWorkerHostname(worker.peer_id)}</div>
+                            <div class="wm-worker-specs">${specs}</div>
+                        </div>
+                        <div class="wm-worker-status">
+                            <div class="wm-status-dot ${statusClass}"></div>
+                            <span>${statusText}</span>
+                            ${worker.connected_at ? `<span class="wm-connected-time" title="${formatExactDate(worker.connected_at)}">Connected ${formatRelativeTime(worker.connected_at)}</span>` : ''}
                         </div>
                     </div>
-                    <div class="wm-worker-status">
-                        <div class="wm-status-dot ${statusClass}"></div>
-                        <span>${statusText}</span>
-                        ${worker.connected_at ? `<span class="wm-connected-time" title="${formatExactDate(worker.connected_at)}">Connected ${formatRelativeTime(worker.connected_at)}</span>` : ''}
+                    <div class="wm-worker-meta">
+                        <span class="wm-meta-item">
+                            <i data-lucide="hash"></i>
+                            ${worker.peer_id}
+                            <span class="auth-badge peer-id">PEER ID</span>
+                        </span>
+                        ${keyItem}
                     </div>
                 </div>`;
             }).join('');
