@@ -1488,6 +1488,7 @@ class RTCWorkerClient:
                 "supported_models": self.supported_models,
                 "supported_job_types": self.supported_job_types,
                 "worker_name": self.name,
+                "mounts": self.file_manager.get_mounts(),
             }
 
             # Send register message with is_admin=True
@@ -3402,6 +3403,7 @@ class RTCWorkerClient:
                             "max_concurrent_jobs": self.max_concurrent_jobs,
                             "supported_models": self.supported_models,
                             "supported_job_types": self.supported_job_types,
+                            "mounts": self.file_manager.get_mounts(),
                         },
                     },
                 }
