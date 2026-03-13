@@ -2160,8 +2160,13 @@ class SleapRTCDashboard {
     _sjHandleFsListRes(data) {
         const reqId = data.req_id;
         const pending = this._sjPendingRequests?.[reqId];
-        const colIndex = pending?.colIndex ?? 1;
-        delete this._sjPendingRequests?.[reqId];
+        if (!pending) {
+            // No matching request — stale or duplicate response, ignore
+            console.warn('[SSE] Ignoring fs_list_res with unknown req_id:', reqId);
+            return;
+        }
+        const colIndex = pending.colIndex;
+        delete this._sjPendingRequests[reqId];
 
         // Normalize entries
         const parentPath = data.path?.replace(/\/$/, '') ?? '';
@@ -2459,6 +2464,7 @@ class SleapRTCDashboard {
             this._sjJobSSE = this.sseConnect(jobId);
             this._sjJobSSE
                 .on('status', (data) => this._sjHandleJobStatus(data))
+                .on('job_status', (data) => this._sjHandleJobStatus(data))
                 .on('epoch', (data) => this._sjHandleJobEpoch(data));
 
             // Switch to status view
