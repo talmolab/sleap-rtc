@@ -264,6 +264,16 @@ class MeshCoordinator:
                     elif msg_type == "error":
                         logger.error(f"Admin received error: {data.get('reason')}")
 
+                    # ── Relay-forwarded requests from dashboard ──────────
+                    elif msg_type == "fs_list_req":
+                        await self._handle_fs_list_req(data)
+
+                    elif msg_type == "use_worker_path":
+                        await self._handle_use_worker_path(data)
+
+                    elif msg_type == "fs_check_videos":
+                        await self._handle_fs_check_videos(data)
+
                     else:
                         logger.debug(f"Admin ignoring message type: {msg_type}")
 
@@ -276,6 +286,105 @@ class MeshCoordinator:
             logger.info("Admin WebSocket handler cancelled")
         except Exception as e:
             logger.error(f"Admin WebSocket handler error: {e}")
+
+    # ── Relay-forwarded request handlers ────────────────────────────────────
+
+    async def _handle_fs_list_req(self, data: Dict[str, Any]):
+        """Handle fs_list_req forwarded from dashboard via signaling server.
+
+        Translates to the worker's FS_LIST_DIR protocol, sends back fs_list_res
+        which the signaling server forwards to the relay SSE channel.
+        """
+        from sleap_rtc.protocol import MSG_FS_LIST_DIR, MSG_FS_LIST_RESPONSE, MSG_SEPARATOR
+
+        path = data.get("path", "/")
+        req_id = data.get("req_id")
+
+        # Build the protocol message: FS_LIST_DIR::path::offset
+        proto_msg = f"{MSG_FS_LIST_DIR}{MSG_SEPARATOR}{path}{MSG_SEPARATOR}0"
+        response = self.worker.handle_fs_message(proto_msg)
+
+        # Parse the protocol response into JSON for relay
+        if response.startswith(f"{MSG_FS_LIST_RESPONSE}{MSG_SEPARATOR}"):
+            json_str = response.split(MSG_SEPARATOR, 1)[1]
+            result = json.loads(json_str)
+            await self.websocket.send(json.dumps({
+                "type": "fs_list_res",
+                "req_id": req_id,
+                **result,
+            }))
+            logger.info(f"[RELAY] Sent fs_list_res for path={path}")
+        else:
+            # Error response
+            await self.websocket.send(json.dumps({
+                "type": "fs_list_res",
+                "req_id": req_id,
+                "error": response,
+                "entries": [],
+            }))
+            logger.warning(f"[RELAY] FS list error for path={path}: {response}")
+
+    async def _handle_use_worker_path(self, data: Dict[str, Any]):
+        """Handle use_worker_path forwarded from dashboard via signaling server.
+
+        Validates the path, then checks video accessibility if it's an SLP file.
+        Sends worker_path_ok/worker_path_error and optionally fs_check_videos_response.
+        """
+        from sleap_rtc.protocol import (
+            MSG_USE_WORKER_PATH, MSG_WORKER_PATH_OK, MSG_WORKER_PATH_ERROR,
+            MSG_FS_CHECK_VIDEOS_RESPONSE, MSG_SEPARATOR,
+        )
+
+        path = data.get("path", "")
+        proto_msg = f"{MSG_USE_WORKER_PATH}{MSG_SEPARATOR}{path}"
+        response = self.worker.handle_worker_path_message(proto_msg)
+
+        if response.startswith(f"{MSG_WORKER_PATH_OK}{MSG_SEPARATOR}"):
+            validated_path = response.split(MSG_SEPARATOR, 1)[1]
+            await self.websocket.send(json.dumps({
+                "type": "worker_path_ok",
+                "path": validated_path,
+            }))
+            logger.info(f"[RELAY] Sent worker_path_ok for {validated_path}")
+
+            # Check videos if SLP
+            video_response = self.worker._check_slp_videos_if_needed()
+            if video_response:
+                json_str = video_response.split(MSG_SEPARATOR, 1)[1]
+                result = json.loads(json_str)
+                await self.websocket.send(json.dumps({
+                    "type": "fs_check_videos_response",
+                    **result,
+                }))
+                logger.info(f"[RELAY] Sent fs_check_videos_response")
+        else:
+            error_msg = response.split(MSG_SEPARATOR, 1)[1] if MSG_SEPARATOR in response else response
+            await self.websocket.send(json.dumps({
+                "type": "worker_path_error",
+                "error": error_msg,
+            }))
+            logger.warning(f"[RELAY] Sent worker_path_error: {error_msg}")
+
+    async def _handle_fs_check_videos(self, data: Dict[str, Any]):
+        """Handle explicit fs_check_videos request from dashboard."""
+        from sleap_rtc.protocol import MSG_FS_CHECK_VIDEOS_RESPONSE, MSG_SEPARATOR
+
+        response = self.worker._check_slp_videos_if_needed()
+        if response:
+            json_str = response.split(MSG_SEPARATOR, 1)[1]
+            result = json.loads(json_str)
+            await self.websocket.send(json.dumps({
+                "type": "fs_check_videos_response",
+                **result,
+            }))
+            logger.info(f"[RELAY] Sent fs_check_videos_response")
+        else:
+            await self.websocket.send(json.dumps({
+                "type": "fs_check_videos_response",
+                "missing": [],
+                "accessible": 0,
+                "embedded": 0,
+            }))
 
     async def _handle_client_offer(self, data: Dict[str, Any]):
         """Handle client connection offer received on admin WebSocket.
