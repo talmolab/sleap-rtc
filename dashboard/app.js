@@ -1937,13 +1937,13 @@ class SleapRTCDashboard {
 
         container.innerHTML = workers.map(worker => {
             const props = worker.properties ?? {};
-            const status = props.status ?? 'idle';
+            const status = props.status ?? 'available';
             const gpuModel = props.gpu_model || 'Unknown GPU';
             const gpuMem = props.gpu_memory_mb ? `${Math.round(props.gpu_memory_mb / 1024)} GB` : '';
             const cuda = props.cuda_version ? `CUDA ${props.cuda_version}` : '';
             const sleapNnVersion = props.sleap_nn_version ? `sleap-nn ${props.sleap_nn_version}` : '';
-            // status is one of: idle, busy, maintenance
-            const isAvailable = status === 'idle';
+            // status is one of: available, busy, reserved, maintenance
+            const isAvailable = status === 'available';
             const disabledClass = isAvailable ? '' : ' disabled';
             const clickHandler = isAvailable
                 ? `onclick="app.sjSelectWorker('${worker.peer_id}')"`

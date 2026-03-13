@@ -1460,8 +1460,9 @@ body::before {
     background: var(--text-muted);
 }
 
-.sj-status-dot.idle { background: var(--status-success); }
+.sj-status-dot.available { background: var(--status-success); }
 .sj-status-dot.busy { background: var(--status-warning); }
+.sj-status-dot.reserved { background: var(--status-warning); }
 .sj-status-dot.maintenance { background: var(--status-error); }
 
 .sj-radio {
