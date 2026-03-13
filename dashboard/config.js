@@ -7,9 +7,14 @@ const CONFIG = {
     GITHUB_CLIENT_ID: 'Ov23liThtdK2nvPctNXU',
 
     // Signaling server HTTP API URL
-    // Production: https://sleap-rtc-signaling.duckdns.org (via Caddy reverse proxy)
+    // Production: https://signaling.sleap.ai (via Caddy reverse proxy)
     // Development: http://localhost:8001
-    SIGNALING_SERVER: 'https://sleap-rtc-signaling.duckdns.org',
+    SIGNALING_SERVER: 'https://signaling.sleap.ai',
+
+    // Relay server URL (SSE fanout for training logs and filesystem responses)
+    // Production: https://signaling.sleap.ai/relay (via Caddy reverse proxy)
+    // Development: http://localhost:8081
+    RELAY_SERVER: 'https://signaling.sleap.ai/relay',
 
     // OAuth callback URL (this dashboard's URL + /callback.html)
     // For GitHub Pages: https://yourusername.github.io/sleap-RTC/dashboard/callback.html

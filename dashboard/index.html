@@ -1170,17 +1170,19 @@ auto_select = true</code></pre>
                 </div>
             </div>
 
-            <!-- Step 3: File browser (.slp selection) -->
+            <!-- Step 3: File browser (.slp selection + video resolution) -->
             <div id="sj-step3" class="sj-view hidden">
                 <p class="sj-instruction">Navigate to your <code>.slp</code> labels file on the worker filesystem.</p>
                 <div id="sj-file-browser" class="sj-file-browser">
                     <div id="sj-browser-spinner" class="sj-spinner">
                         <i data-lucide="loader-2"></i>
-                        <span>Connecting to worker…</span>
+                        <span>Loading filesystem…</span>
                     </div>
                     <div id="sj-file-columns" class="sj-file-columns hidden"></div>
                 </div>
                 <p id="sj-selected-path" class="sj-selected-path hidden"></p>
+                <div id="sj-validation-status" class="sj-validation-status hidden"></div>
+                <div id="sj-missing-videos" class="sj-missing-videos hidden"></div>
                 <p id="sj-browser-error" class="sj-error hidden"></p>
                 <div class="form-actions">
                     <button class="btn btn-secondary" onclick="app.sjGoToStep(2)">
@@ -1200,6 +1202,7 @@ auto_select = true</code></pre>
                     <a id="sj-wandb-link" href="#" target="_blank" class="sj-wandb-link hidden">
                         Track in WandB →
                     </a>
+                    <div id="sj-training-log" class="sj-training-log hidden"></div>
                     <p id="sj-status-error" class="sj-error hidden"></p>
                 </div>
                 <div class="form-actions">

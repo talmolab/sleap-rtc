@@ -264,6 +264,19 @@ class MeshCoordinator:
                     elif msg_type == "error":
                         logger.error(f"Admin received error: {data.get('reason')}")
 
+                    # ── Relay-forwarded requests from dashboard ──────────
+                    elif msg_type == "fs_list_req":
+                        await self._handle_fs_list_req(data)
+
+                    elif msg_type == "use_worker_path":
+                        await self._handle_use_worker_path(data)
+
+                    elif msg_type == "fs_check_videos":
+                        await self._handle_fs_check_videos(data)
+
+                    elif msg_type == "job_assigned":
+                        await self._handle_job_assigned(data)
+
                     else:
                         logger.debug(f"Admin ignoring message type: {msg_type}")
 
@@ -276,6 +289,300 @@ class MeshCoordinator:
             logger.info("Admin WebSocket handler cancelled")
         except Exception as e:
             logger.error(f"Admin WebSocket handler error: {e}")
+
+    # ── Relay-forwarded request handlers ────────────────────────────────────
+
+    async def _handle_fs_list_req(self, data: Dict[str, Any]):
+        """Handle fs_list_req forwarded from dashboard via signaling server.
+
+        Translates to the worker's FS_LIST_DIR protocol, sends back fs_list_res
+        which the signaling server forwards to the relay SSE channel.
+        """
+        from sleap_rtc.protocol import (
+            MSG_FS_LIST_DIR,
+            MSG_FS_LIST_RESPONSE,
+            MSG_SEPARATOR,
+        )
+
+        path = data.get("path", "/")
+        req_id = data.get("req_id")
+        offset = data.get("offset", 0)
+
+        # Build the protocol message: FS_LIST_DIR::path::offset
+        proto_msg = f"{MSG_FS_LIST_DIR}{MSG_SEPARATOR}{path}{MSG_SEPARATOR}{offset}"
+        response = self.worker.handle_fs_message(proto_msg)
+
+        # Parse the protocol response into JSON for relay
+        if response.startswith(f"{MSG_FS_LIST_RESPONSE}{MSG_SEPARATOR}"):
+            json_str = response.split(MSG_SEPARATOR, 1)[1]
+            result = json.loads(json_str)
+            await self.websocket.send(
+                json.dumps(
+                    {
+                        "type": "fs_list_res",
+                        "req_id": req_id,
+                        **result,
+                    }
+                )
+            )
+            logger.info(f"[RELAY] Sent fs_list_res for path={path}")
+        else:
+            # Error response
+            await self.websocket.send(
+                json.dumps(
+                    {
+                        "type": "fs_list_res",
+                        "req_id": req_id,
+                        "error": response,
+                        "entries": [],
+                    }
+                )
+            )
+            logger.warning(f"[RELAY] FS list error for path={path}: {response}")
+
+    async def _handle_use_worker_path(self, data: Dict[str, Any]):
+        """Handle use_worker_path forwarded from dashboard via signaling server.
+
+        Validates the path, then checks video accessibility if it's an SLP file.
+        Sends worker_path_ok/worker_path_error and optionally fs_check_videos_response.
+        """
+        from sleap_rtc.protocol import (
+            MSG_USE_WORKER_PATH,
+            MSG_WORKER_PATH_OK,
+            MSG_WORKER_PATH_ERROR,
+            MSG_FS_CHECK_VIDEOS_RESPONSE,
+            MSG_SEPARATOR,
+        )
+
+        path = data.get("path", "")
+        proto_msg = f"{MSG_USE_WORKER_PATH}{MSG_SEPARATOR}{path}"
+        response = self.worker.handle_worker_path_message(proto_msg)
+
+        if response.startswith(f"{MSG_WORKER_PATH_OK}{MSG_SEPARATOR}"):
+            validated_path = response.split(MSG_SEPARATOR, 1)[1]
+            await self.websocket.send(
+                json.dumps(
+                    {
+                        "type": "worker_path_ok",
+                        "path": validated_path,
+                    }
+                )
+            )
+            logger.info(f"[RELAY] Sent worker_path_ok for {validated_path}")
+
+            # Check videos if SLP
+            video_response = self.worker._check_slp_videos_if_needed()
+            if video_response:
+                json_str = video_response.split(MSG_SEPARATOR, 1)[1]
+                result = json.loads(json_str)
+                await self.websocket.send(
+                    json.dumps(
+                        {
+                            "type": "fs_check_videos_response",
+                            **result,
+                        }
+                    )
+                )
+                logger.info(f"[RELAY] Sent fs_check_videos_response")
+        else:
+            error_msg = (
+                response.split(MSG_SEPARATOR, 1)[1]
+                if MSG_SEPARATOR in response
+                else response
+            )
+            await self.websocket.send(
+                json.dumps(
+                    {
+                        "type": "worker_path_error",
+                        "error": error_msg,
+                    }
+                )
+            )
+            logger.warning(f"[RELAY] Sent worker_path_error: {error_msg}")
+
+    async def _handle_fs_check_videos(self, data: Dict[str, Any]):
+        """Handle explicit fs_check_videos request from dashboard."""
+        from sleap_rtc.protocol import MSG_FS_CHECK_VIDEOS_RESPONSE, MSG_SEPARATOR
+
+        response = self.worker._check_slp_videos_if_needed()
+        if response:
+            json_str = response.split(MSG_SEPARATOR, 1)[1]
+            result = json.loads(json_str)
+            await self.websocket.send(
+                json.dumps(
+                    {
+                        "type": "fs_check_videos_response",
+                        **result,
+                    }
+                )
+            )
+            logger.info(f"[RELAY] Sent fs_check_videos_response")
+        else:
+            await self.websocket.send(
+                json.dumps(
+                    {
+                        "type": "fs_check_videos_response",
+                        "missing": [],
+                        "accessible": 0,
+                        "embedded": 0,
+                    }
+                )
+            )
+
+    async def _handle_job_assigned(self, data: Dict[str, Any]):
+        """Handle job_assigned forwarded from dashboard via signaling server.
+
+        Translates to the worker's existing handle_job_submit flow, using a
+        WebSocket-backed shim channel so responses go through the relay.
+        """
+        from sleap_rtc.protocol import MSG_SEPARATOR
+
+        job_id = data.get("job_id", "unknown")
+        config = data.get("config", {})
+        submitted_by = data.get("submitted_by", "unknown")
+
+        logger.info(f"[RELAY] Job assigned: {job_id} by {submitted_by}")
+
+        # Create a shim channel that sends responses via WebSocket→relay.
+        # channel.send() is synchronous in the RTC API, so we schedule async
+        # WebSocket sends on the event loop.
+        ws = self.websocket
+        loop = asyncio.get_event_loop()
+
+        class RelayChannel:
+            """Shim that mimics RTCDataChannel.send() but routes through WebSocket."""
+
+            def __init__(self, ws_ref, job_id_ref):
+                self._ws = ws_ref
+                self._job_id = job_id_ref
+                self.readyState = "open"
+
+            def send(self, message: str):
+                """Forward protocol messages to relay via WebSocket."""
+                from sleap_rtc.protocol import (
+                    MSG_JOB_ACCEPTED,
+                    MSG_JOB_REJECTED,
+                    MSG_JOB_PROGRESS,
+                    MSG_JOB_COMPLETE,
+                    MSG_JOB_FAILED,
+                    MSG_SEPARATOR,
+                )
+                import json as _j
+
+                relay_msg = None
+                # Helper: build relay message, ensuring job_id is always the
+                # signaling server's ID (not the worker's internal per-model ID
+                # that may appear in spread payloads).
+                _base = {"type": "job_status", "job_id": self._job_id}
+
+                if message.startswith(f"{MSG_JOB_ACCEPTED}{MSG_SEPARATOR}"):
+                    relay_msg = {**_base, "status": "accepted"}
+                elif message.startswith(f"{MSG_JOB_REJECTED}{MSG_SEPARATOR}"):
+                    parts = message.split(MSG_SEPARATOR, 2)
+                    error_json = parts[2] if len(parts) > 2 else "{}"
+                    relay_msg = {
+                        **_base,
+                        "status": "rejected",
+                        "errors": _j.loads(error_json),
+                    }
+                elif message.startswith(f"{MSG_JOB_PROGRESS}{MSG_SEPARATOR}"):
+                    payload = message.split(MSG_SEPARATOR, 1)[1]
+                    try:
+                        relay_msg = {**_j.loads(payload), **_base, "status": "running"}
+                    except Exception:
+                        relay_msg = {**_base, "status": "running", "message": payload}
+                elif message.startswith(f"{MSG_JOB_COMPLETE}{MSG_SEPARATOR}"):
+                    payload = message.split(MSG_SEPARATOR, 1)[1]
+                    try:
+                        relay_msg = {**_j.loads(payload), **_base, "status": "complete"}
+                    except Exception:
+                        relay_msg = {**_base, "status": "complete"}
+                elif message.startswith(f"{MSG_JOB_FAILED}{MSG_SEPARATOR}"):
+                    payload = message.split(MSG_SEPARATOR, 1)[1]
+                    try:
+                        relay_msg = {**_j.loads(payload), **_base, "status": "failed"}
+                    except Exception:
+                        relay_msg = {**_base, "status": "failed", "error": payload}
+                elif message.startswith("TRAIN_JOB_START::"):
+                    relay_msg = {**_base, "status": "running", "message": message}
+                elif message == "TRAINING_JOBS_DONE":
+                    relay_msg = {**_base, "status": "complete"}
+                elif message.startswith("INFERENCE_BEGIN::"):
+                    relay_msg = {**_base, "status": "running", "stage": "inference"}
+                elif message.startswith("INFERENCE_COMPLETE::"):
+                    payload = message.split("::", 1)[1] if "::" in message else "{}"
+                    try:
+                        relay_msg = {
+                            **_j.loads(payload),
+                            **_base,
+                            "status": "complete",
+                            "stage": "inference",
+                        }
+                    except Exception:
+                        relay_msg = {
+                            **_base,
+                            "status": "complete",
+                            "stage": "inference",
+                        }
+                elif message.startswith("INFERENCE_FAILED::"):
+                    payload = message.split("::", 1)[1] if "::" in message else "{}"
+                    try:
+                        relay_msg = {
+                            **_j.loads(payload),
+                            **_base,
+                            "status": "failed",
+                            "stage": "inference",
+                        }
+                    except Exception:
+                        relay_msg = {**_base, "status": "failed", "stage": "inference"}
+                elif message.startswith("PROGRESS_REPORT::"):
+                    # Forward only epoch-level events to avoid flooding relay
+                    try:
+                        import jsonpickle
+
+                        payload = message.split("::", 1)[1]
+                        msg = jsonpickle.decode(payload)
+                        event = msg.get("event") if isinstance(msg, dict) else None
+                        if event in ("train_begin", "epoch_end", "train_end"):
+                            progress_data = {
+                                "type": "job_progress",
+                                "job_id": self._job_id,
+                                "event": event,
+                            }
+                            if event == "train_begin" and msg.get("wandb_url"):
+                                progress_data["wandb_url"] = msg["wandb_url"]
+                            elif event == "epoch_end":
+                                progress_data["epoch"] = msg.get("epoch")
+                                progress_data["logs"] = msg.get("logs", {})
+                            if msg.get("what"):
+                                progress_data["what"] = msg["what"]
+                            relay_msg = progress_data
+                    except Exception:
+                        pass  # Silently drop malformed progress reports
+                # Log lines and other messages — skip to avoid flooding relay
+
+                if relay_msg:
+                    asyncio.run_coroutine_threadsafe(
+                        self._ws.send(_j.dumps(relay_msg)), loop
+                    )
+
+            @property
+            def label(self):
+                return f"relay-job-{self._job_id}"
+
+        relay_channel = RelayChannel(ws, job_id)
+
+        # Build the protocol message: JOB_SUBMIT::{job_id}::{json_spec}
+        import json as _json
+
+        spec_json = _json.dumps(config)
+        from sleap_rtc.protocol import MSG_JOB_SUBMIT
+
+        proto_msg = f"{MSG_JOB_SUBMIT}{MSG_SEPARATOR}{job_id}{MSG_SEPARATOR}{spec_json}"
+
+        # Call the worker's existing job submit handler
+        await self.worker.handle_job_submit(relay_channel, proto_msg)
+        logger.info(f"[RELAY] Job submit handler complete for {job_id}")
 
     async def _handle_client_offer(self, data: Dict[str, Any]):
         """Handle client connection offer received on admin WebSocket.

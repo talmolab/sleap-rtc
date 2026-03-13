@@ -616,6 +616,79 @@ class SleapRTCDashboard {
     }
 
     // =========================================================================
+    // Relay SSE + Worker API Helpers
+    // =========================================================================
+
+    /**
+     * Open an SSE connection to a relay channel.
+     * @param {string} channel - Channel name (e.g., "worker:{peer_id}" or "job_{id}")
+     * @returns {{on: function, close: function, raw: EventSource}}
+     */
+    sseConnect(channel) {
+        const url = `${CONFIG.RELAY_SERVER}/stream/${encodeURIComponent(channel)}`;
+        const es = new EventSource(url);
+        const handlers = {};
+
+        es.onmessage = (event) => {
+            let data;
+            try { data = JSON.parse(event.data); } catch { return; }
+            const type = data.type;
+            if (type && handlers[type]) handlers[type](data);
+            if (handlers['*']) handlers['*'](data);
+        };
+
+        es.onerror = () => {
+            console.warn(`[SSE] Error on channel ${channel}`);
+        };
+
+        return {
+            on(type, cb) { handlers[type] = cb; return this; },
+            close() { es.close(); },
+            raw: es,
+        };
+    }
+
+    /**
+     * Forward an arbitrary message to a worker via the signaling server.
+     */
+    async apiWorkerMessage(roomId, peerId, message) {
+        return this.apiRequest('/api/worker/message', {
+            method: 'POST',
+            body: JSON.stringify({ room_id: roomId, peer_id: peerId, message }),
+        });
+    }
+
+    /**
+     * Request a directory listing from a worker's filesystem.
+     */
+    async apiFsList(roomId, peerId, path, reqId, offset = 0) {
+        return this.apiRequest('/api/fs/list', {
+            method: 'POST',
+            body: JSON.stringify({ room_id: roomId, peer_id: peerId, path, req_id: reqId, offset }),
+        });
+    }
+
+    /**
+     * Submit a training job to a worker.
+     */
+    async apiJobSubmit(roomId, peerId, config) {
+        return this.apiRequest('/api/jobs/submit', {
+            method: 'POST',
+            body: JSON.stringify({ room_id: roomId, peer_id: peerId, config }),
+        });
+    }
+
+    /**
+     * Cancel a running training job.
+     */
+    async apiJobCancel(jobId, roomId, peerId) {
+        return this.apiRequest(`/api/jobs/${jobId}/cancel`, {
+            method: 'POST',
+            body: JSON.stringify({ room_id: roomId, peer_id: peerId }),
+        });
+    }
+
+    // =========================================================================
     // Rooms
     // =========================================================================
 
@@ -1864,13 +1937,13 @@ class SleapRTCDashboard {
 
         container.innerHTML = workers.map(worker => {
             const props = worker.properties ?? {};
-            const status = props.status ?? 'idle';
+            const status = props.status ?? 'available';
             const gpuModel = props.gpu_model || 'Unknown GPU';
             const gpuMem = props.gpu_memory_mb ? `${Math.round(props.gpu_memory_mb / 1024)} GB` : '';
             const cuda = props.cuda_version ? `CUDA ${props.cuda_version}` : '';
             const sleapNnVersion = props.sleap_nn_version ? `sleap-nn ${props.sleap_nn_version}` : '';
-            // status is one of: idle, busy, maintenance
-            const isAvailable = status === 'idle';
+            // status is one of: available, busy, reserved, maintenance
+            const isAvailable = status === 'available';
             const disabledClass = isAvailable ? '' : ' disabled';
             const clickHandler = isAvailable
                 ? `onclick="app.sjSelectWorker('${worker.peer_id}')"`
@@ -1900,135 +1973,17 @@ class SleapRTCDashboard {
 
     closeSubmitJobModal() {
         this.hideModal('submit-job-modal');
-        this.disconnectFromWorker();
+        this._sjCleanupSSE();
     }
 
-    // ── Task 6: WebRTC signaling ──────────────────────────────────────────────
-
-    connectToWorker(workerId, roomId, roomToken) {
-        return new Promise((resolve, reject) => {
-            const TIMEOUT_MS = 120000;  // 2 min — generous for ICE debugging
-            let settled = false;
-
-            const settle = (fn, val) => {
-                if (settled) return;
-                settled = true;
-                clearTimeout(timer);
-                fn(val);
-            };
-
-            const timer = setTimeout(() => {
-                settle(reject, new Error('WebRTC connection timed out after 120 s'));
-                this.disconnectFromWorker();
-            }, TIMEOUT_MS);
-
-            // Derive client peer_id from JWT claims (username)
-            const peerId = this.user?.username ?? 'dashboard-client';
-
-            const wsUrl = CONFIG.SIGNALING_SERVER.replace(/^http/, 'ws') + '/ws';
-            const ws = new WebSocket(wsUrl);
-            this._sjWs = ws;
-
-            ws.onopen = () => {
-                ws.send(JSON.stringify({
-                    type: 'register',
-                    peer_id: peerId,
-                    room_id: roomId,
-                    token: roomToken,
-                    role: 'client',
-                    jwt: this.jwt,
-                }));
-            };
-
-            ws.onmessage = async (event) => {
-                let msg;
-                try { msg = JSON.parse(event.data); } catch { return; }
-                console.log('[SJ-ICE] WS message:', msg.type, msg);
-
-                if (msg.type === 'registered_auth') {
-                    let iceServers = (msg.ice_servers ?? []).map(s => ({
-                        urls: s.urls,
-                        ...(s.username ? { username: s.username } : {}),
-                        ...(s.credential ? { credential: s.credential } : {}),
-                    }));
-                    // When the signaling server provides no ICE servers, add
-                    // a public STUN so the browser discovers its real IP
-                    // (server-reflexive candidate) instead of only sending
-                    // mDNS-obfuscated host candidates that the worker can't
-                    // resolve in a container without multicast.
-                    if (iceServers.length === 0) {
-                        iceServers = [{ urls: 'stun:stun.l.google.com:19302' }];
-                    }
-                    const pc = new RTCPeerConnection({ iceServers });
-                    this._sjPc = pc;
-
-                    const dc = pc.createDataChannel('job');
-                    this._sjDc = dc;
-
-                    dc.onopen = () => settle(resolve, dc);
-                    dc.onerror = (e) => settle(reject, e);
-
-                    pc.oniceconnectionstatechange = () => {
-                        console.log('[SJ-ICE] ICE state:', pc.iceConnectionState);
-                    };
-                    pc.onicegatheringstatechange = () => {
-                        console.log('[SJ-ICE] Gathering state:', pc.iceGatheringState);
-                    };
-                    pc.onicecandidate = ({ candidate }) => {
-                        if (candidate) {
-                            console.log('[SJ-ICE] Local candidate:', candidate.type, candidate.address, candidate.port);
-                        } else {
-                            console.log('[SJ-ICE] Gathering complete (null candidate)');
-                        }
-                        if (candidate && ws.readyState === WebSocket.OPEN) {
-                            ws.send(JSON.stringify({
-                                type: 'candidate',
-                                sender: peerId,
-                                target: workerId,
-                                candidate: candidate.toJSON(),
-                            }));
-                        }
-                    };
-
-                    await pc.setLocalDescription(await pc.createOffer());
-                    ws.send(JSON.stringify({
-                        type: 'offer',
-                        sender: peerId,
-                        target: workerId,
-                        role: 'client',
-                        sdp: pc.localDescription.sdp,
-                    }));
-
-                } else if (msg.type === 'answer') {
-                    console.log('[SJ-ICE] Received answer SDP, candidates in SDP:',
-                        (msg.sdp || '').split('\n').filter(l => l.startsWith('a=candidate')).length);
-                    await this._sjPc?.setRemoteDescription(
-                        new RTCSessionDescription({ type: 'answer', sdp: msg.sdp })
-                    );
-                    console.log('[SJ-ICE] Remote description set, ICE state:', this._sjPc?.iceConnectionState);
-
-                } else if (msg.type === 'candidate') {
-                    try {
-                        await this._sjPc?.addIceCandidate(new RTCIceCandidate(msg.candidate));
-                    } catch { /* ignore stale candidates */ }
-
-                } else if (msg.type === 'error') {
-                    settle(reject, new Error(msg.message ?? 'Signaling error'));
-                }
-            };
-
-            ws.onerror = () => settle(reject, new Error('WebSocket error'));
-            ws.onclose = () => { if (!settled) settle(reject, new Error('WebSocket closed')); };
-        });
-    }
-
-    disconnectFromWorker() {
-        this._sjDc?.close();
-        this._sjPc?.close();
-        this._sjWs?.close();
-        this._sjDc = null;
-        this._sjPc = null;
-        this._sjWs = null;
+    /**
+     * Close all active SSE connections for the submit job modal.
+     */
+    _sjCleanupSSE() {
+        this._sjWorkerSSE?.close();
+        this._sjJobSSE?.close();
+        this._sjWorkerSSE = null;
+        this._sjJobSSE = null;
     }
 
     // ── Task 5: YAML config upload ────────────────────────────────────────────
@@ -2135,148 +2090,259 @@ class SleapRTCDashboard {
         });
     }
 
-    // ── Task 7: column filesystem browser ────────────────────────────────────
+    // ── File browser + validation + job submission (via relay) ──────────────
 
     async sjEnterStep3() {
         this.sjGoToStep(3);
 
-        // Show spinner, hide columns
+        // Reset state
+        this._sjLabelsPath = null;
+        this._sjPathMappings = {};
+        this._sjMissingVideos = [];
+        this._sjBrowseMode = 'slp'; // 'slp' or 'video'
+        this._sjResolvingVideoIndex = null;
+
+        // Show spinner, hide columns and panels
         document.getElementById('sj-browser-spinner')?.classList.remove('hidden');
         document.getElementById('sj-file-columns')?.classList.add('hidden');
         document.getElementById('sj-browser-error')?.classList.add('hidden');
-
-        // Look up room token from cached rooms list
-        const room = this.rooms?.find(r => r.room_id === this._sjRoomId);
-        const roomToken = room?.token ?? null;
+        document.getElementById('sj-validation-status')?.classList.add('hidden');
+        document.getElementById('sj-missing-videos')?.classList.add('hidden');
+        document.getElementById('sj-selected-path')?.classList.add('hidden');
+        document.getElementById('sj-submit-btn').disabled = true;
 
         try {
-            const dc = await this.connectToWorker(this._sjWorkerId, this._sjRoomId, roomToken);
-            dc.onmessage = (event) => this.onDataChannelMessage(event);
+            // Open SSE connection to worker channel
+            this._sjWorkerSSE = this.sseConnect(`worker:${this._sjWorkerId}`);
+
+            // Route SSE events for file browsing
+            this._sjWorkerSSE
+                .on('fs_list_res', (data) => this._sjHandleFsListRes(data))
+                .on('worker_path_ok', (data) => this._sjHandlePathOk(data))
+                .on('worker_path_error', (data) => this._sjHandlePathError(data))
+                .on('fs_check_videos_response', (data) => this._sjHandleVideoCheck(data));
+
+            // Get mount points from cached worker metadata
+            const workers = this.roomWorkers[this._sjRoomId]?.workers ?? [];
+            const worker = workers.find(w => w.peer_id === this._sjWorkerId);
+            const mounts = worker?.properties?.mounts ?? [];
+
             document.getElementById('sj-browser-spinner')?.classList.add('hidden');
             document.getElementById('sj-file-columns')?.classList.remove('hidden');
-            this.initFileBrowser();
+
+            if (mounts.length > 0) {
+                // Render mount points as initial column
+                const entries = mounts.map(m => ({
+                    name: m.label || m.path,
+                    path: m.path,
+                    is_dir: true,
+                }));
+                this._sjRenderColumn(entries, 0);
+            } else {
+                // No mounts in metadata — request root listing
+                const reqId = crypto.randomUUID();
+                this._sjPendingRequests = this._sjPendingRequests || {};
+                this._sjPendingRequests[reqId] = { colIndex: 0 };
+                await this.apiFsList(this._sjRoomId, this._sjWorkerId, '/', reqId);
+            }
         } catch (err) {
             document.getElementById('sj-browser-spinner')?.classList.add('hidden');
             const errEl = document.getElementById('sj-browser-error');
             if (errEl) {
-                errEl.textContent = `Connection failed: ${err.message}`;
+                errEl.textContent = `Failed to connect: ${err.message}`;
                 errEl.classList.remove('hidden');
             }
         }
     }
 
-    sendFsMessage(msg) {
-        if (this._sjDc?.readyState === 'open') {
-            this._sjDc.send(msg);
+    // ── SSE event handlers ───────────────────────────────────────────────────
+
+    _sjHandleFsListRes(data) {
+        const reqId = data.req_id;
+        const pending = this._sjPendingRequests?.[reqId];
+        if (!pending) {
+            // No matching request — stale or duplicate response, ignore
+            console.warn('[SSE] Ignoring fs_list_res with unknown req_id:', reqId);
+            return;
+        }
+        const colIndex = pending.colIndex;
+        delete this._sjPendingRequests[reqId];
+
+        // Normalize entries
+        const parentPath = data.path?.replace(/\/$/, '') ?? '';
+        const entries = (data.entries || []).map(e => ({
+            name: e.name,
+            path: e.path ?? `${parentPath}/${e.name}`,
+            is_dir: e.is_dir ?? (e.type === 'directory'),
+        }));
+
+        this._sjRenderColumn(entries, colIndex);
+    }
+
+    _sjHandlePathOk(data) {
+        const statusEl = document.getElementById('sj-validation-status');
+        if (statusEl) {
+            statusEl.innerHTML = '<i data-lucide="loader-2" class="spin"></i> Checking videos…';
+            statusEl.className = 'sj-validation-status validating';
+            statusEl.classList.remove('hidden');
+            if (typeof lucide !== 'undefined') lucide.createIcons();
         }
     }
 
-    onDataChannelMessage(event) {
-        const text = event.data;
-        const sep = '::';
-        const firstSep = text.indexOf(sep);
-        if (firstSep === -1) return;
-        const msgType = text.slice(0, firstSep);
-        const payload = text.slice(firstSep + sep.length);
+    _sjHandlePathError(data) {
+        const statusEl = document.getElementById('sj-validation-status');
+        const msg = data.error || data.message || 'Path rejected by worker';
+        if (statusEl) {
+            statusEl.innerHTML = `<i data-lucide="x-circle"></i> ${this._escapeHtml(msg)}`;
+            statusEl.className = 'sj-validation-status error';
+            statusEl.classList.remove('hidden');
+            if (typeof lucide !== 'undefined') lucide.createIcons();
+        }
+        // Re-enable file browser for user to pick a different file
+        document.getElementById('sj-submit-btn').disabled = true;
+    }
 
-        if (msgType === 'FS_MOUNTS_RESPONSE') {
-            let mounts;
-            try { mounts = JSON.parse(payload); } catch { return; }
-            const entries = mounts.map(m => ({ name: m.label || m.path, path: m.path, is_dir: true }));
-            this.renderColumn(entries, 0);
+    _sjHandleVideoCheck(data) {
+        const statusEl = document.getElementById('sj-validation-status');
+        const missing = data.missing || [];
+        const total = data.total_videos || 0;
+        const accessible = data.accessible || 0;
 
-        } else if (msgType === 'FS_LIST_RESPONSE') {
-            let data;
-            try { data = JSON.parse(payload); } catch { return; }
-            // Normalize: worker returns {name, type:"directory"|"file"} — convert
-            // to the {name, path, is_dir} shape that renderColumn expects.
-            const parentPath = data.path?.replace(/\/$/, '') ?? '';
-            const entries = (data.entries || []).map(e => ({
-                name: e.name,
-                path: e.path ?? `${parentPath}/${e.name}`,
-                is_dir: e.is_dir ?? (e.type === 'directory'),
-            }));
-            const colIndex = this._sjPendingColIndex ?? 1;
-            this.renderColumn(entries, colIndex, data.has_more ? data.path : null);
-            delete this._sjPendingColIndex;
-
-        } else if (msgType === 'JOB_ACCEPTED') {
-            this.sjGoToStep('status');
-            const label = document.getElementById('sj-status-label');
-            if (label) label.textContent = 'Running…';
-
-        } else if (msgType === 'JOB_REJECTED') {
-            // payload: {job_id}::{json_errors}
-            const rejSep = payload.indexOf('::');
-            const errJson = rejSep !== -1 ? payload.slice(rejSep + 2) : payload;
-            let msg = 'Job rejected by worker.';
-            try {
-                const data = JSON.parse(errJson);
-                const errors = data.errors ?? [];
-                if (errors.length) msg = errors.map(e => e.message).join(' ');
-            } catch { /* use default msg */ }
-            const errEl = document.getElementById('sj-browser-error');
-            if (errEl) { errEl.textContent = msg; errEl.classList.remove('hidden'); }
-
-        } else if (msgType === 'JOB_PROGRESS') {
-            let data;
-            try { data = JSON.parse(payload); } catch { return; }
-            const label = document.getElementById('sj-status-label');
-            const epoch = data.epoch;
-            const loss = data.loss != null ? data.loss.toFixed(4) : null;
-            if (label && epoch != null) {
-                label.textContent = `Running — Epoch ${epoch}${loss ? `, loss ${loss}` : ''}`;
+        if (missing.length === 0) {
+            // All videos found — ready to submit
+            if (statusEl) {
+                statusEl.innerHTML = `<i data-lucide="check-circle"></i> All ${total} videos found`;
+                statusEl.className = 'sj-validation-status success';
+                statusEl.classList.remove('hidden');
+                if (typeof lucide !== 'undefined') lucide.createIcons();
             }
-            if (data.wandb_url) {
-                const link = document.getElementById('sj-wandb-link');
-                if (link) {
-                    link.href = data.wandb_url;
-                    link.classList.remove('hidden');
-                }
+            document.getElementById('sj-submit-btn').disabled = false;
+        } else {
+            // Missing videos — show resolution UI
+            this._sjMissingVideos = missing;
+            if (statusEl) {
+                statusEl.innerHTML = `<i data-lucide="alert-triangle"></i> ${missing.length} of ${total} videos not found`;
+                statusEl.className = 'sj-validation-status warning';
+                statusEl.classList.remove('hidden');
+                if (typeof lucide !== 'undefined') lucide.createIcons();
             }
-
-        } else if (msgType === 'JOB_COMPLETE') {
-            const label = document.getElementById('sj-status-label');
-            if (label) label.textContent = 'Complete ✓';
-            this._sjShowCloseButton();
-
-        } else if (msgType === 'JOB_FAILED') {
-            const label = document.getElementById('sj-status-label');
-            let errMsg = 'Job failed.';
-            try {
-                const data = JSON.parse(payload);
-                errMsg = data.message ?? errMsg;
-            } catch { /* use default */ }
-            if (label) label.textContent = `Failed: ${errMsg}`;
-            this._sjShowCloseButton();
+            this._sjRenderMissingVideos();
         }
     }
 
-    submitJob() {
-        const jobId = crypto.randomUUID();
-        const spec = {
-            type: 'train',
-            config_content: this._sjConfigContent,
-            labels_path: this._sjLabelsPath,
-            model_types: [],
-        };
-        this.sendFsMessage(`JOB_SUBMIT::${jobId}::${JSON.stringify(spec)}`);
-    }
+    // ── Path validation ──────────────────────────────────────────────────────
 
-    _sjShowCloseButton() {
-        // Replace Submit button with a Close button in status view
-        const actions = document.querySelector('#sj-status .form-actions');
-        if (actions) {
-            actions.innerHTML = `<button class="btn btn-secondary" onclick="app.closeSubmitJobModal()">Close</button>`;
+    async _sjValidatePath(path) {
+        const statusEl = document.getElementById('sj-validation-status');
+        if (statusEl) {
+            statusEl.innerHTML = '<i data-lucide="loader-2" class="spin"></i> Validating path…';
+            statusEl.className = 'sj-validation-status validating';
+            statusEl.classList.remove('hidden');
+            if (typeof lucide !== 'undefined') lucide.createIcons();
+        }
+        document.getElementById('sj-submit-btn').disabled = true;
+
+        try {
+            await this.apiWorkerMessage(this._sjRoomId, this._sjWorkerId, {
+                type: 'use_worker_path',
+                path,
+            });
+        } catch (err) {
+            if (statusEl) {
+                statusEl.innerHTML = `<i data-lucide="x-circle"></i> ${this._escapeHtml(err.message)}`;
+                statusEl.className = 'sj-validation-status error';
+                statusEl.classList.remove('hidden');
+                if (typeof lucide !== 'undefined') lucide.createIcons();
+            }
         }
     }
 
-    initFileBrowser() {
+    // ── Missing videos resolution ────────────────────────────────────────────
+
+    _sjRenderMissingVideos() {
+        const container = document.getElementById('sj-missing-videos');
+        if (!container) return;
+
+        const resolved = Object.keys(this._sjPathMappings).length;
+        const total = this._sjMissingVideos.length;
+
+        let html = `<div class="sj-missing-header">
+            <strong>Missing Videos (${total - resolved} unresolved)</strong>
+            <span class="sj-resolve-count">Resolved: ${resolved}/${total}</span>
+        </div>`;
+
+        html += this._sjMissingVideos.map((video, i) => {
+            const originalPath = video.original_path || video.filename;
+            const resolvedPath = this._sjPathMappings[originalPath];
+            const isResolved = !!resolvedPath;
+
+            return `<div class="sj-video-item ${isResolved ? 'resolved' : ''}">
+                <div class="sj-video-info">
+                    <span class="sj-video-icon">${isResolved ? '<i data-lucide="check-circle"></i>' : '<i data-lucide="circle"></i>'}</span>
+                    <div>
+                        <div class="sj-video-filename">${this._escapeHtml(video.filename)}</div>
+                        <div class="sj-video-original">${this._escapeHtml(originalPath)}</div>
+                        ${isResolved ? `<div class="sj-video-mapped">&rarr; ${this._escapeHtml(resolvedPath)}</div>` : ''}
+                    </div>
+                </div>
+                <button class="btn btn-secondary btn-sm" onclick="app._sjBrowseForVideo(${i})">
+                    ${isResolved ? 'Change' : 'Browse'}
+                </button>
+            </div>`;
+        }).join('');
+
+        container.innerHTML = html;
+        container.classList.remove('hidden');
+        if (typeof lucide !== 'undefined') lucide.createIcons();
+
+        // Enable submit if all resolved
+        if (resolved === total) {
+            document.getElementById('sj-submit-btn').disabled = false;
+        }
+    }
+
+    _sjBrowseForVideo(index) {
+        this._sjBrowseMode = 'video';
+        this._sjResolvingVideoIndex = index;
+
+        // Show file browser again for video selection
+        document.getElementById('sj-file-columns')?.classList.remove('hidden');
         document.getElementById('sj-file-columns').innerHTML = '';
-        this.sendFsMessage('FS_GET_MOUNTS');
+
+        // Render mounts as initial column
+        const workers = this.roomWorkers[this._sjRoomId]?.workers ?? [];
+        const worker = workers.find(w => w.peer_id === this._sjWorkerId);
+        const mounts = worker?.properties?.mounts ?? [];
+
+        if (mounts.length > 0) {
+            const entries = mounts.map(m => ({
+                name: m.label || m.path,
+                path: m.path,
+                is_dir: true,
+            }));
+            this._sjRenderColumn(entries, 0);
+        }
     }
 
-    renderColumn(entries, colIndex, hasMorePath = null) {
+    _sjResolveVideo(path) {
+        const video = this._sjMissingVideos[this._sjResolvingVideoIndex];
+        if (!video) return;
+
+        const originalPath = video.original_path || video.filename;
+        this._sjPathMappings[originalPath] = path;
+
+        // Switch back to slp mode and hide browser
+        this._sjBrowseMode = 'slp';
+        this._sjResolvingVideoIndex = null;
+        document.getElementById('sj-file-columns')?.classList.add('hidden');
+
+        // Re-render missing videos list
+        this._sjRenderMissingVideos();
+    }
+
+    // ── File browser (column view via relay) ─────────────────────────────────
+
+    _sjRenderColumn(entries, colIndex) {
         const container = document.getElementById('sj-file-columns');
         if (!container) return;
 
@@ -2284,8 +2350,19 @@ class SleapRTCDashboard {
         const existing = container.querySelectorAll('.sj-file-column');
         existing.forEach((col, i) => { if (i >= colIndex) col.remove(); });
 
-        // Filter: show only directories and .slp files
-        const visible = entries.filter(e => e.is_dir || (e.name ?? e.path ?? '').endsWith('.slp'));
+        // Determine file filter based on browse mode
+        const isVideoMode = this._sjBrowseMode === 'video';
+        const videoExtensions = ['.mp4', '.avi', '.mov', '.mkv', '.h5', '.hdf5'];
+
+        // Filter: show directories + relevant files
+        const visible = entries.filter(e => {
+            if (e.is_dir) return true;
+            const name = (e.name ?? e.path ?? '').toLowerCase();
+            if (isVideoMode) {
+                return videoExtensions.some(ext => name.endsWith(ext));
+            }
+            return name.endsWith('.slp');
+        });
 
         const col = document.createElement('div');
         col.className = 'sj-file-column';
@@ -2294,19 +2371,28 @@ class SleapRTCDashboard {
         visible.forEach(entry => {
             const name = entry.name ?? entry.path.split('/').pop();
             const row = document.createElement('div');
-            row.className = 'sj-file-entry' + (entry.is_dir ? ' is-dir' : ' is-slp');
+            row.className = 'sj-file-entry' + (entry.is_dir ? ' is-dir' : (isVideoMode ? ' is-video' : ' is-slp'));
             row.textContent = name;
 
             if (entry.is_dir) {
                 row.onclick = () => {
-                    this._sjPendingColIndex = colIndex + 1;
-                    this.sendFsMessage(`FS_LIST_DIR::${entry.path}::0`);
+                    const reqId = crypto.randomUUID();
+                    this._sjPendingRequests = this._sjPendingRequests || {};
+                    this._sjPendingRequests[reqId] = { colIndex: colIndex + 1 };
+                    this.apiFsList(this._sjRoomId, this._sjWorkerId, entry.path, reqId);
                     // Highlight selected dir
                     col.querySelectorAll('.sj-file-entry').forEach(r => r.classList.remove('selected'));
                     row.classList.add('selected');
                 };
+            } else if (isVideoMode) {
+                // Video file selection (for resolving missing videos)
+                row.onclick = () => {
+                    container.querySelectorAll('.sj-file-entry').forEach(r => r.classList.remove('selected'));
+                    row.classList.add('selected');
+                    this._sjResolveVideo(entry.path);
+                };
             } else {
-                // .slp file
+                // .slp file selection
                 row.onclick = () => {
                     this._sjLabelsPath = entry.path;
                     const pathEl = document.getElementById('sj-selected-path');
@@ -2314,29 +2400,161 @@ class SleapRTCDashboard {
                         pathEl.textContent = `Selected: ${entry.path}`;
                         pathEl.classList.remove('hidden');
                     }
-                    document.getElementById('sj-submit-btn').disabled = false;
                     // Highlight
                     container.querySelectorAll('.sj-file-entry').forEach(r => r.classList.remove('selected'));
                     row.classList.add('selected');
+                    // Trigger path validation
+                    this._sjValidatePath(entry.path);
                 };
             }
             col.appendChild(row);
         });
 
-        // Infinite scroll: request next page when scrolled to bottom
-        if (hasMorePath) {
-            let page = 1;
-            col.addEventListener('scroll', () => {
-                if (col.scrollTop + col.clientHeight >= col.scrollHeight - 20) {
-                    const offset = page * 100; // default page size
-                    this.sendFsMessage(`FS_LIST_DIR::${hasMorePath}::${offset}`);
-                    page++;
-                    col.removeEventListener('scroll', col._scrollHandler);
-                }
-            });
-        }
-
         container.appendChild(col);
+    }
+
+    _escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text || '';
+        return div.innerHTML;
+    }
+
+    // ── Job submission + status (via relay) ───────────────────────────────────
+
+    async submitJob() {
+        const submitBtn = document.getElementById('sj-submit-btn');
+        if (submitBtn) submitBtn.disabled = true;
+
+        try {
+            const config = {
+                type: 'train',
+                config_content: this._sjConfigContent,
+                labels_path: this._sjLabelsPath,
+                path_mappings: this._sjPathMappings,
+                model_types: [],
+            };
+
+            const result = await this.apiJobSubmit(
+                this._sjRoomId, this._sjWorkerId, config
+            );
+            const jobId = result.job_id;
+
+            // Close worker SSE (no longer needed)
+            this._sjWorkerSSE?.close();
+            this._sjWorkerSSE = null;
+
+            // Open job SSE for status updates
+            this._sjJobSSE = this.sseConnect(jobId);
+            this._sjJobSSE
+                .on('status', (data) => this._sjHandleJobStatus(data))
+                .on('job_status', (data) => this._sjHandleJobStatus(data))
+                .on('job_progress', (data) => this._sjHandleJobProgress(data))
+                .on('epoch', (data) => this._sjHandleJobEpoch(data));
+
+            // Switch to status view
+            this.sjGoToStep('status');
+            const label = document.getElementById('sj-status-label');
+            if (label) label.textContent = 'Submitted…';
+
+        } catch (err) {
+            const errEl = document.getElementById('sj-browser-error');
+            if (errEl) {
+                errEl.textContent = `Submit failed: ${err.message}`;
+                errEl.classList.remove('hidden');
+            }
+            if (submitBtn) submitBtn.disabled = false;
+        }
+    }
+
+    _sjHandleJobStatus(data) {
+        const label = document.getElementById('sj-status-label');
+        const status = data.status;
+        const stage = data.stage;
+
+        if (status === 'running' || status === 'submitted') {
+            if (label) {
+                if (stage === 'inference') label.textContent = 'Running inference…';
+                else if (status === 'running') label.textContent = 'Training…';
+                else label.textContent = 'Submitted…';
+            }
+        } else if (status === 'accepted') {
+            if (label) label.textContent = 'Accepted — starting…';
+        } else if (status === 'complete') {
+            if (label) label.textContent = 'Complete';
+            this._sjShowCloseButton();
+        } else if (status === 'failed') {
+            const msg = data.message || data.error || 'Job failed';
+            if (label) label.textContent = `Failed: ${msg}`;
+            this._sjShowCloseButton();
+        } else if (status === 'cancelled') {
+            if (label) label.textContent = 'Cancelled';
+            this._sjShowCloseButton();
+        }
+    }
+
+    _sjHandleJobEpoch(data) {
+        const label = document.getElementById('sj-status-label');
+        const epoch = data.epoch;
+        const loss = data.loss != null ? Number(data.loss).toFixed(4) : null;
+        if (label && epoch != null) {
+            label.textContent = `Running — Epoch ${epoch}${loss ? `, loss ${loss}` : ''}`;
+        }
+        if (data.wandb_url) {
+            const link = document.getElementById('sj-wandb-link');
+            if (link) {
+                link.href = data.wandb_url;
+                link.classList.remove('hidden');
+            }
+        }
+    }
+
+    _sjHandleJobProgress(data) {
+        const event = data.event;
+        const what = data.what ? `[${data.what}] ` : '';
+
+        if (event === 'train_begin') {
+            this._sjAppendLog(`${what}Training started`);
+            if (data.wandb_url) {
+                const link = document.getElementById('sj-wandb-link');
+                if (link) {
+                    link.href = data.wandb_url;
+                    link.classList.remove('hidden');
+                }
+            }
+        } else if (event === 'epoch_end') {
+            const epoch = data.epoch;
+            const logs = data.logs || {};
+            const parts = Object.entries(logs)
+                .map(([k, v]) => `${k}: ${Number(v).toFixed(4)}`)
+                .join('  ');
+            this._sjAppendLog(`${what}Epoch ${epoch}  ${parts}`);
+            // Update status label with current epoch
+            const label = document.getElementById('sj-status-label');
+            const trainLoss = logs['train/loss'] != null ? Number(logs['train/loss']).toFixed(4) : null;
+            if (label && epoch != null) {
+                label.textContent = `Training — Epoch ${epoch}${trainLoss ? `, loss ${trainLoss}` : ''}`;
+            }
+        } else if (event === 'train_end') {
+            this._sjAppendLog(`${what}Training complete`, 'log-info');
+        }
+    }
+
+    _sjAppendLog(text, extraClass = '') {
+        const log = document.getElementById('sj-training-log');
+        if (!log) return;
+        log.classList.remove('hidden');
+        const line = document.createElement('div');
+        line.className = `log-line${extraClass ? ' ' + extraClass : ''}`;
+        line.textContent = text;
+        log.appendChild(line);
+        log.scrollTop = log.scrollHeight;
+    }
+
+    _sjShowCloseButton() {
+        const actions = document.querySelector('#sj-status .form-actions');
+        if (actions) {
+            actions.innerHTML = `<button class="btn btn-secondary" onclick="app.closeSubmitJobModal()">Close</button>`;
+        }
     }
 
     sjGoToStep(step) {
