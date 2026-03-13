@@ -1832,14 +1832,14 @@ class RTCWorkerClient:
                         g = "\033[32m"  # green (match loguru SUCCESS)
                         r = "\033[0m"  # reset
                         logger.success(
-                            f"\n{thin_line}\n\n"
+                            f"\n{g}{thin_line}\n\n"
                             f"  ✓ Worker {bw}{self.name}{r}{g} ready! Waiting for client requests...\n\n"
                             f"  Room:      {self.room_id}\n"
                             f"  Worker:    {self.name}\n"
                             f"  Peer ID:   {self.peer_id}\n"
                             f"  GPU:       {gpu_info}\n"
                             f"  sleap-nn:  {sleap_nn_ver}\n\n"
-                            f"{thin_line}"
+                            f"{thin_line}{r}"
                         )
 
                         # If admin, wait for admin WebSocket handler instead of continuing this loop
