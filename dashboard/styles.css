@@ -1086,7 +1086,8 @@ body::before {
 
 /* Workers Modal */
 .modal-workers {
-    max-width: 640px;
+    max-width: 80%;
+    width: 80%;
 }
 
 .wm-header {
