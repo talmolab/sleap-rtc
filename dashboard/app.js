@@ -2112,7 +2112,7 @@ class SleapRTCDashboard {
             ['WandB entity', fields.wandb_entity],
         ];
         container.innerHTML = rows.map(([label, val]) =>
-            `<div class="sj-hyperparam-row"><span class="sj-hyperparam-label">${label}</span><span class="sj-hyperparam-value">${val}</span></div>`
+            `<div class="sj-hyperparam-item"><span class="sj-hyperparam-label">${label}</span><span class="sj-hyperparam-value">${val}</span></div>`
         ).join('');
         container.classList.remove('hidden');
     }
