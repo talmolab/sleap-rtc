@@ -2601,9 +2601,6 @@ class SleapRTCDashboard {
         } else if (status === 'complete') {
             if (label) label.textContent = 'Complete';
             this._sjUpdateStatusIcon('complete');
-            // Fill progress bar to 100%
-            const fill = document.getElementById('sj-progress-fill');
-            if (fill) fill.style.width = '100%';
             this._sjShowCloseButton();
         } else if (status === 'failed') {
             const msg = data.message || data.error || 'Job failed';
@@ -2695,8 +2692,6 @@ class SleapRTCDashboard {
         if (cur) cur.textContent = '0';
         const total = document.getElementById('sj-epoch-total');
         if (total) total.textContent = this._sjMaxEpochs ? ` / ${this._sjMaxEpochs}` : '';
-        const fill = document.getElementById('sj-progress-fill');
-        if (fill) fill.style.width = '0%';
         // Clear log
         const log = document.getElementById('sj-training-log');
         if (log) log.innerHTML = '';
@@ -2743,13 +2738,6 @@ class SleapRTCDashboard {
         document.getElementById('sj-epoch-section')?.classList.remove('hidden');
         const cur = document.getElementById('sj-epoch-current');
         if (cur) cur.textContent = epoch;
-
-        // Update progress bar
-        if (this._sjMaxEpochs) {
-            const pct = Math.min(100, Math.round(((epoch + 1) / this._sjMaxEpochs) * 100));
-            const fill = document.getElementById('sj-progress-fill');
-            if (fill) fill.style.width = `${pct}%`;
-        }
     }
 
     _sjAppendLog(text, extraClass = '') {

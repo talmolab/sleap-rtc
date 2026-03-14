@@ -1606,6 +1606,7 @@ body::before {
     display: flex;
     align-items: center;
     margin-bottom: 28px;
+    max-width: 560px;
 }
 
 .sj-step {
@@ -2085,20 +2086,28 @@ body::before {
     color: var(--accent-primary);
 }
 
-.sj-status-spinner i {
+.sj-status-spinner i,
+.sj-status-spinner svg {
     width: 20px;
     height: 20px;
     animation: spin 1s linear infinite;
 }
 
-.sj-status-spinner.complete i {
+.sj-status-spinner.complete i,
+.sj-status-spinner.complete svg,
+.sj-status-spinner.failed i,
+.sj-status-spinner.failed svg,
+.sj-status-spinner.cancelled i,
+.sj-status-spinner.cancelled svg {
     animation: none;
+}
+
+.sj-status-spinner.complete {
     color: var(--status-available);
 }
 
-.sj-status-spinner.failed i,
-.sj-status-spinner.cancelled i {
-    animation: none;
+.sj-status-spinner.failed,
+.sj-status-spinner.cancelled {
     color: var(--status-error);
 }
 
@@ -2131,21 +2140,6 @@ body::before {
     font-size: 14px;
     font-weight: 400;
     color: var(--text-muted);
-}
-
-.sj-progress-bar {
-    height: 6px;
-    background: var(--bg-primary);
-    border-radius: 3px;
-    overflow: hidden;
-}
-
-.sj-progress-fill {
-    height: 100%;
-    background: var(--accent-primary);
-    border-radius: 3px;
-    transition: width 0.3s ease;
-    width: 0%;
 }
 
 /* Metric rows */
