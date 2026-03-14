@@ -412,7 +412,7 @@ class SleapRTCDashboard {
             'rooms': 'Rooms',
             'tokens': 'Worker Tokens',
             'quickstart': 'Quickstart Guide',
-            'about': 'About SLEAP-RTC'
+            'about': 'About SLEAP-CONNECT'
         };
         document.getElementById('page-title').textContent = titles[tabName] || tabName;
 
