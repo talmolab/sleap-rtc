@@ -2127,6 +2127,7 @@ class SleapRTCDashboard {
             try {
                 const fields = this.parseTrainingConfig(text);
                 this._sjConfigContent = text;
+                this._sjMaxEpochs = fields.max_epochs !== 'unknown' ? Number(fields.max_epochs) : null;
                 this._sjRenderHyperparams(fields);
                 errorEl.classList.add('hidden');
                 next2.disabled = false;
@@ -2568,8 +2569,9 @@ class SleapRTCDashboard {
                 .on('job_progress', (data) => this._sjHandleJobProgress(data))
                 .on('epoch', (data) => this._sjHandleJobEpoch(data));
 
-            // Switch to status view
+            // Switch to status view and reset progress panel
             this.sjGoToStep('status');
+            this._sjResetProgressPanel();
             const label = document.getElementById('sj-status-label');
             if (label) label.textContent = 'Submitted…';
 
@@ -2598,13 +2600,19 @@ class SleapRTCDashboard {
             if (label) label.textContent = 'Accepted — starting…';
         } else if (status === 'complete') {
             if (label) label.textContent = 'Complete';
+            this._sjUpdateStatusIcon('complete');
+            // Fill progress bar to 100%
+            const fill = document.getElementById('sj-progress-fill');
+            if (fill) fill.style.width = '100%';
             this._sjShowCloseButton();
         } else if (status === 'failed') {
             const msg = data.message || data.error || 'Job failed';
             if (label) label.textContent = `Failed: ${msg}`;
+            this._sjUpdateStatusIcon('failed');
             this._sjShowCloseButton();
         } else if (status === 'cancelled') {
             if (label) label.textContent = 'Cancelled';
+            this._sjUpdateStatusIcon('cancelled');
             this._sjShowCloseButton();
         }
     }
@@ -2614,7 +2622,10 @@ class SleapRTCDashboard {
         const epoch = data.epoch;
         const loss = data.loss != null ? Number(data.loss).toFixed(4) : null;
         if (label && epoch != null) {
-            label.textContent = `Running — Epoch ${epoch}${loss ? `, loss ${loss}` : ''}`;
+            label.textContent = `Training — Epoch ${epoch}${loss ? `, loss ${loss}` : ''}`;
+        }
+        if (epoch != null) {
+            this._sjUpdateEpoch(epoch);
         }
         if (data.wandb_url) {
             const link = document.getElementById('sj-wandb-link');
@@ -2645,21 +2656,105 @@ class SleapRTCDashboard {
                 .map(([k, v]) => `${k}: ${Number(v).toFixed(4)}`)
                 .join('  ');
             this._sjAppendLog(`${what}Epoch ${epoch}  ${parts}`);
-            // Update status label with current epoch
+
+            // Update left panel: status label, epoch counter, metrics
             const label = document.getElementById('sj-status-label');
             const trainLoss = logs['train/loss'] != null ? Number(logs['train/loss']).toFixed(4) : null;
             if (label && epoch != null) {
                 label.textContent = `Training — Epoch ${epoch}${trainLoss ? `, loss ${trainLoss}` : ''}`;
             }
+            this._sjUpdateEpoch(epoch);
+            this._sjUpdateMetrics(logs);
         } else if (event === 'train_end') {
             this._sjAppendLog(`${what}Training complete`, 'log-info');
+        }
+    }
+
+    _sjResetProgressPanel() {
+        // Reset spinner to loading state
+        const spinner = document.getElementById('sj-status-spinner');
+        if (spinner) {
+            spinner.className = 'sj-status-spinner';
+            spinner.innerHTML = '<i data-lucide="loader-2"></i>';
+        }
+        // Reset label
+        const label = document.getElementById('sj-status-label');
+        if (label) {
+            label.className = 'sj-status-label';
+        }
+        // Hide epoch section and metrics until training starts
+        document.getElementById('sj-epoch-section')?.classList.add('hidden');
+        document.getElementById('sj-metrics')?.classList.add('hidden');
+        // Reset metric values
+        ['sj-metric-train-loss', 'sj-metric-val-loss', 'sj-metric-train-time', 'sj-metric-lr'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.textContent = '—';
+        });
+        // Reset epoch
+        const cur = document.getElementById('sj-epoch-current');
+        if (cur) cur.textContent = '0';
+        const total = document.getElementById('sj-epoch-total');
+        if (total) total.textContent = this._sjMaxEpochs ? ` / ${this._sjMaxEpochs}` : '';
+        const fill = document.getElementById('sj-progress-fill');
+        if (fill) fill.style.width = '0%';
+        // Clear log
+        const log = document.getElementById('sj-training-log');
+        if (log) log.innerHTML = '';
+        // Re-init lucide icons
+        if (window.lucide) lucide.createIcons();
+    }
+
+    _sjUpdateStatusIcon(state) {
+        const spinner = document.getElementById('sj-status-spinner');
+        const label = document.getElementById('sj-status-label');
+        if (!spinner) return;
+
+        if (state === 'complete') {
+            spinner.className = 'sj-status-spinner complete';
+            spinner.innerHTML = '<i data-lucide="check-circle"></i>';
+            if (label) label.className = 'sj-status-label complete';
+        } else if (state === 'failed' || state === 'cancelled') {
+            spinner.className = 'sj-status-spinner failed';
+            spinner.innerHTML = '<i data-lucide="x-circle"></i>';
+            if (label) label.className = 'sj-status-label failed';
+        }
+        if (window.lucide) lucide.createIcons();
+    }
+
+    _sjUpdateMetrics(logs) {
+        // Show metrics section
+        document.getElementById('sj-metrics')?.classList.remove('hidden');
+
+        const updates = {
+            'sj-metric-train-loss': logs['train/loss'] != null ? Number(logs['train/loss']).toFixed(4) : null,
+            'sj-metric-val-loss': logs['val/loss'] != null ? Number(logs['val/loss']).toFixed(4) : null,
+            'sj-metric-train-time': logs['train/time'] != null ? `${Number(logs['train/time']).toFixed(1)}s` : null,
+            'sj-metric-lr': logs['train/lr'] != null ? Number(logs['train/lr']).toFixed(6) : null,
+        };
+        for (const [id, val] of Object.entries(updates)) {
+            if (val != null) {
+                const el = document.getElementById(id);
+                if (el) el.textContent = val;
+            }
+        }
+    }
+
+    _sjUpdateEpoch(epoch) {
+        document.getElementById('sj-epoch-section')?.classList.remove('hidden');
+        const cur = document.getElementById('sj-epoch-current');
+        if (cur) cur.textContent = epoch;
+
+        // Update progress bar
+        if (this._sjMaxEpochs) {
+            const pct = Math.min(100, Math.round(((epoch + 1) / this._sjMaxEpochs) * 100));
+            const fill = document.getElementById('sj-progress-fill');
+            if (fill) fill.style.width = `${pct}%`;
         }
     }
 
     _sjAppendLog(text, extraClass = '') {
         const log = document.getElementById('sj-training-log');
         if (!log) return;
-        log.classList.remove('hidden');
         const line = document.createElement('div');
         line.className = `log-line${extraClass ? ' ' + extraClass : ''}`;
         line.textContent = text;

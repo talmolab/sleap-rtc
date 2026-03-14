@@ -1231,14 +1231,57 @@ auto_select = true</code></pre>
 
             <!-- Status view (replaces steps after job accepted) -->
             <div id="sj-status" class="sj-view hidden">
-                <div class="sj-status-body">
-                    <div id="sj-status-icon" class="sj-status-icon"></div>
-                    <p id="sj-status-label" class="sj-status-label">Running…</p>
-                    <a id="sj-wandb-link" href="#" target="_blank" class="sj-wandb-link hidden">
-                        Track in WandB →
-                    </a>
-                    <div id="sj-training-log" class="sj-training-log hidden"></div>
-                    <p id="sj-status-error" class="sj-error hidden"></p>
+                <div class="sj-status-split">
+                    <!-- Left: Progress panel -->
+                    <div class="sj-progress-panel">
+                        <div class="sj-progress-header">
+                            <span id="sj-status-spinner" class="sj-status-spinner">
+                                <i data-lucide="loader-2"></i>
+                            </span>
+                            <span id="sj-status-label" class="sj-status-label">Running…</span>
+                        </div>
+
+                        <div id="sj-epoch-section" class="sj-epoch-section hidden">
+                            <div class="sj-metric-label">Epoch</div>
+                            <div class="sj-epoch-value">
+                                <span id="sj-epoch-current">0</span>
+                                <span id="sj-epoch-total" class="sj-epoch-total"></span>
+                            </div>
+                            <div class="sj-progress-bar">
+                                <div id="sj-progress-fill" class="sj-progress-fill"></div>
+                            </div>
+                        </div>
+
+                        <div id="sj-metrics" class="sj-metrics hidden">
+                            <div class="sj-metric-row">
+                                <span class="sj-metric-label">Train Loss</span>
+                                <span id="sj-metric-train-loss" class="sj-metric-value">—</span>
+                            </div>
+                            <div class="sj-metric-row">
+                                <span class="sj-metric-label">Val Loss</span>
+                                <span id="sj-metric-val-loss" class="sj-metric-value">—</span>
+                            </div>
+                            <div class="sj-metric-row">
+                                <span class="sj-metric-label">Train Time</span>
+                                <span id="sj-metric-train-time" class="sj-metric-value">—</span>
+                            </div>
+                            <div class="sj-metric-row">
+                                <span class="sj-metric-label">Learn Rate</span>
+                                <span id="sj-metric-lr" class="sj-metric-value">—</span>
+                            </div>
+                        </div>
+
+                        <a id="sj-wandb-link" href="#" target="_blank" class="sj-wandb-link hidden">
+                            Track in WandB →
+                        </a>
+                        <p id="sj-status-error" class="sj-error hidden"></p>
+                    </div>
+
+                    <!-- Right: Worker logs -->
+                    <div class="sj-log-panel">
+                        <div class="sj-log-label">Worker Logs</div>
+                        <div id="sj-training-log" class="sj-training-log"></div>
+                    </div>
                 </div>
                 <div class="form-actions">
                     <button class="btn btn-primary" id="sj-close-btn" onclick="app.closeSubmitJobModal()">Close</button>
