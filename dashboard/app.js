@@ -864,9 +864,10 @@ class SleapRTCDashboard {
                     <div class="room-info">
                         <h3>${room.name || 'Unnamed Room'}</h3>
                         <div class="room-meta">
-                            <span class="room-meta-item">
+                            <span class="room-meta-item room-id-copy" title="Click to copy Room ID" onclick="event.stopPropagation(); app.copyToClipboard('${room.room_id}')">
                                 <i data-lucide="hash"></i>
                                 ${room.room_id}
+                                <i data-lucide="copy" class="copy-hint-icon"></i>
                             </span>
                             <span class="room-meta-item" title="${formatExactDate(room.joined_at)}">
                                 <i data-lucide="calendar"></i>
