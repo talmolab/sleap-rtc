@@ -2090,10 +2090,15 @@ class SleapRTCDashboard {
         // learning rate lives under optimizer.lr in sleap-nn configs
         const learning_rate = trainer?.optimizer?.lr
             ?? trainer.learning_rate ?? doc?.learning_rate ?? 'unknown';
+        // Detect model type from head_configs (the non-null key)
+        const headConfigs = doc?.model_config?.head_configs ?? trainer?.head_configs ?? {};
+        const model_type = Object.entries(headConfigs)
+            .find(([, v]) => v != null)?.[0] ?? 'unknown';
         return {
             batch_size,
             learning_rate,
             max_epochs: trainer.max_epochs ?? doc?.max_epochs ?? 'unknown',
+            model_type,
             run_name: trainer.run_name ?? wandb.name ?? wandb.run_name ?? doc?.run_name ?? 'unknown',
             wandb_project: wandb.project ?? 'unknown',
             wandb_entity: wandb.entity ?? 'unknown',
@@ -2128,6 +2133,7 @@ class SleapRTCDashboard {
                 const fields = this.parseTrainingConfig(text);
                 this._sjConfigContent = text;
                 this._sjMaxEpochs = fields.max_epochs !== 'unknown' ? Number(fields.max_epochs) : null;
+                this._sjModelType = fields.model_type !== 'unknown' ? fields.model_type : null;
                 this._sjRenderHyperparams(fields);
                 errorEl.classList.add('hidden');
                 next2.disabled = false;
@@ -2589,15 +2595,16 @@ class SleapRTCDashboard {
         const label = document.getElementById('sj-status-label');
         const status = data.status;
         const stage = data.stage;
+        const modelLabel = this._sjModelType || 'model';
 
         if (status === 'running' || status === 'submitted') {
             if (label) {
                 if (stage === 'inference') label.textContent = 'Running inference…';
-                else if (status === 'running') label.textContent = 'Training…';
+                else if (status === 'running') label.textContent = `Training ${modelLabel}…`;
                 else label.textContent = 'Submitted…';
             }
         } else if (status === 'accepted') {
-            if (label) label.textContent = 'Accepted — starting…';
+            if (label) label.textContent = 'Worker accepted! Starting training job…';
         } else if (status === 'complete') {
             if (label) label.textContent = 'Complete';
             this._sjUpdateStatusIcon('complete');
@@ -2618,8 +2625,9 @@ class SleapRTCDashboard {
         const label = document.getElementById('sj-status-label');
         const epoch = data.epoch;
         const loss = data.loss != null ? Number(data.loss).toFixed(4) : null;
+        const modelLabel = this._sjModelType || 'model';
         if (label && epoch != null) {
-            label.textContent = `Training — Epoch ${epoch}${loss ? `, loss ${loss}` : ''}`;
+            label.textContent = `Training ${modelLabel} — Epoch ${epoch}${loss ? `, loss ${loss}` : ''}`;
         }
         if (epoch != null) {
             this._sjUpdateEpoch(epoch);
@@ -2656,9 +2664,10 @@ class SleapRTCDashboard {
 
             // Update left panel: status label, epoch counter, metrics
             const label = document.getElementById('sj-status-label');
+            const modelLabel = this._sjModelType || 'model';
             const trainLoss = logs['train/loss'] != null ? Number(logs['train/loss']).toFixed(4) : null;
             if (label && epoch != null) {
-                label.textContent = `Training — Epoch ${epoch}${trainLoss ? `, loss ${trainLoss}` : ''}`;
+                label.textContent = `Training ${modelLabel} — Epoch ${epoch}${trainLoss ? `, loss ${trainLoss}` : ''}`;
             }
             this._sjUpdateEpoch(epoch);
             this._sjUpdateMetrics(logs);
@@ -2678,6 +2687,12 @@ class SleapRTCDashboard {
         const label = document.getElementById('sj-status-label');
         if (label) {
             label.className = 'sj-status-label';
+        }
+        // Show job queue tracker
+        const queue = document.getElementById('sj-job-queue');
+        if (queue) {
+            queue.textContent = 'Job 1 / 1';
+            queue.classList.remove('hidden');
         }
         // Hide epoch section and metrics until training starts
         document.getElementById('sj-epoch-section')?.classList.add('hidden');
