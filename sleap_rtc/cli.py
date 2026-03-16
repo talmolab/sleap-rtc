@@ -162,19 +162,13 @@ def login(timeout):
     from sleap_rtc.auth.credentials import (
         get_account_key,
         get_private_key_b64,
+        get_public_key_registered,
         get_user,
         is_logged_in,
         save_account_key,
         save_jwt,
-        save_private_key_b64,
     )
     from sleap_rtc.auth.github import github_login
-    from sleap_rtc.auth.keypair import (
-        generate_keypair,
-        private_key_to_b64,
-        public_key_to_b64,
-    )
-    from sleap_rtc.config import get_config
 
     if is_logged_in():
         user = get_user()
@@ -196,30 +190,17 @@ def login(timeout):
                 f"\nStore it as: export SLEAP_RTC_ACCOUNT_KEY={result['account_key']}"
             )
 
-        # Generate Ed25519 keypair if we don't have one yet
-        if not get_private_key_b64():
-            click.echo("\nGenerating Ed25519 keypair for P2P authentication...")
-            private_key, public_key = generate_keypair()
-            priv_b64 = private_key_to_b64(private_key)
-            pub_b64 = public_key_to_b64(public_key)
-            save_private_key_b64(priv_b64)
+        # Ensure Ed25519 keypair exists and is registered for P2P auth
+        from sleap_rtc.api import _ensure_keypair_registered
 
-            # Register public key with server
-            config = get_config()
-            auth = get_account_key() or result.get("jwt")
-            try:
-                resp = requests.post(
-                    f"{config.get_http_url()}/api/auth/public-keys",
-                    headers={"Authorization": f"Bearer {auth}"},
-                    json={"public_key": pub_b64, "device_name": "cli"},
-                    timeout=10,
-                )
-                if resp.status_code == 200:
-                    click.echo("Public key registered with server.")
-                else:
-                    click.echo(f"Warning: could not register public key: {resp.text}")
-            except Exception as e:
-                click.echo(f"Warning: could not register public key: {e}")
+        had_keypair = bool(get_private_key_b64())
+        had_registered = get_public_key_registered()
+        auth = get_account_key() or result.get("jwt")
+        _ensure_keypair_registered(auth_token=auth, device_name="cli")
+        if not had_keypair:
+            click.echo("Generated Ed25519 keypair for P2P authentication.")
+        if not had_registered and get_public_key_registered():
+            click.echo("Public key registered with server.")
 
         user = result["user"]
         click.echo(f"\nLogged in as {user.get('username', 'unknown')}")
