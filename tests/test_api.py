@@ -151,9 +151,10 @@ class TestLogin:
         mock_result = {"jwt": "test-jwt", "user": mock_user_data}
         with patch("sleap_rtc.auth.github.github_login", return_value=mock_result):
             with patch("sleap_rtc.auth.credentials.save_jwt") as mock_save:
-                user = login()
-                assert user.username == "testuser"
-                mock_save.assert_called_once_with("test-jwt", mock_user_data)
+                with patch("sleap_rtc.api._ensure_keypair_registered"):
+                    user = login()
+                    assert user.username == "testuser"
+                    mock_save.assert_called_once_with("test-jwt", mock_user_data)
 
     def test_login_with_callback(self, mock_user_data):
         """Should pass callback to github_login."""
@@ -162,10 +163,11 @@ class TestLogin:
 
         with patch("sleap_rtc.auth.github.github_login", return_value=mock_result) as mock_login:
             with patch("sleap_rtc.auth.credentials.save_jwt"):
-                login(on_url_ready=callback)
-                mock_login.assert_called_once()
-                call_kwargs = mock_login.call_args[1]
-                assert call_kwargs["on_url_ready"] == callback
+                with patch("sleap_rtc.api._ensure_keypair_registered"):
+                    login(on_url_ready=callback)
+                    mock_login.assert_called_once()
+                    call_kwargs = mock_login.call_args[1]
+                    assert call_kwargs["on_url_ready"] == callback
 
     def test_login_failure_raises_auth_error(self):
         """Should raise AuthenticationError on failure."""
@@ -178,9 +180,28 @@ class TestLogin:
         mock_result = {"jwt": "test-jwt", "user": mock_user_data}
         with patch("sleap_rtc.auth.github.github_login", return_value=mock_result) as mock_login:
             with patch("sleap_rtc.auth.credentials.save_jwt"):
-                login(timeout=60)
-                call_kwargs = mock_login.call_args[1]
-                assert call_kwargs["timeout"] == 60
+                with patch("sleap_rtc.api._ensure_keypair_registered"):
+                    login(timeout=60)
+                    call_kwargs = mock_login.call_args[1]
+                    assert call_kwargs["timeout"] == 60
+
+    def test_login_calls_ensure_keypair(self, mock_user_data):
+        """Should call _ensure_keypair_registered after saving JWT."""
+        mock_result = {"jwt": "test-jwt", "user": mock_user_data}
+        with patch("sleap_rtc.auth.github.github_login", return_value=mock_result):
+            with patch("sleap_rtc.auth.credentials.save_jwt"):
+                with patch("sleap_rtc.api._ensure_keypair_registered") as mock_ensure:
+                    login()
+                    mock_ensure.assert_called_once_with(auth_token="test-jwt")
+
+    def test_login_succeeds_even_if_keypair_registration_fails(self, mock_user_data):
+        """Login should succeed even if keypair registration raises."""
+        mock_result = {"jwt": "test-jwt", "user": mock_user_data}
+        with patch("sleap_rtc.auth.github.github_login", return_value=mock_result):
+            with patch("sleap_rtc.auth.credentials.save_jwt"):
+                with patch("sleap_rtc.api._ensure_keypair_registered", side_effect=Exception("boom")):
+                    user = login()
+                    assert user.username == "testuser"
 
 
 # =============================================================================

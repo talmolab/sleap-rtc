@@ -445,7 +445,8 @@ def login(
     """Initiate the login flow via browser-based OAuth.
 
     Opens the default browser to the authentication page and waits for
-    the user to complete authentication.
+    the user to complete authentication. After saving the JWT, ensures
+    an Ed25519 keypair exists and is registered for P2P authentication.
 
     Args:
         timeout: Maximum time to wait for authentication in seconds.
@@ -464,11 +465,21 @@ def login(
     try:
         result = github_login(timeout=timeout, on_url_ready=on_url_ready, silent=True)
         save_jwt(result["jwt"], result["user"])
+
+        # Ensure Ed25519 keypair exists and is registered for P2P auth.
+        # Non-fatal: if registration fails, it will retry on next login.
+        try:
+            _ensure_keypair_registered(auth_token=result["jwt"])
+        except Exception:
+            logger.warning("Keypair registration failed, will retry on next login")
+
         return User(
             id=result["user"].get("id", ""),
             username=result["user"].get("username", ""),
             avatar_url=result["user"].get("avatar_url"),
         )
+    except AuthenticationError:
+        raise
     except Exception as e:
         raise AuthenticationError(f"Login failed: {e}") from e
 
