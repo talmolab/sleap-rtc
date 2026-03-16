@@ -829,12 +829,36 @@ def room_create(name, expires):
     click.echo("")
     click.echo(f"  Room ID:  {data['room_id']}")
     click.echo(f"  Expires:  {expires_str}")
+
+    # Offer to set as default room
+    from sleap_rtc.auth.credentials import get_default_room, save_default_room
+
+    current_default = get_default_room()
+    if current_default is None:
+        # No default set — offer to make this the default
+        if click.confirm(
+            "\nSet this as your default room? "
+            "(workers will use it when --room is not specified)",
+            default=True,
+        ):
+            save_default_room(data["room_id"])
+            click.echo(f"Default room set to: {data['room_id']}")
+    elif current_default != data["room_id"]:
+        # Different default exists — offer to replace
+        if click.confirm(
+            f"\nReplace your current default room ({current_default}) with this one?"
+        ):
+            save_default_room(data["room_id"])
+            click.echo(f"Default room updated to: {data['room_id']}")
+
     click.echo("")
     click.echo("Next steps:")
     click.echo(
-        f"  1. Create a worker token: sleap-rtc token create --room {data['room_id']} --name my-worker"
+        f"  1. Set up an account key: sleap-rtc key create --save"
     )
-    click.echo(f"  2. Start a worker with the token")
+    click.echo(
+        f"  2. Start a worker: sleap-rtc worker --name \"My GPU Server\""
+    )
     click.echo("")
 
 
@@ -1107,6 +1131,26 @@ def room_join(code):
     click.echo("")
     click.echo(f"  Room ID: {data['room_id']}")
     click.echo(f"  Role:    {data.get('role', 'member')}")
+
+    # Offer to set as default room
+    from sleap_rtc.auth.credentials import get_default_room, save_default_room
+
+    current_default = get_default_room()
+    if current_default is None:
+        if click.confirm(
+            "\nSet this as your default room? "
+            "(workers will use it when --room is not specified)",
+            default=True,
+        ):
+            save_default_room(data["room_id"])
+            click.echo(f"Default room set to: {data['room_id']}")
+    elif current_default != data["room_id"]:
+        if click.confirm(
+            f"\nReplace your current default room ({current_default}) with this one?"
+        ):
+            save_default_room(data["room_id"])
+            click.echo(f"Default room updated to: {data['room_id']}")
+
     click.echo("")
 
 
