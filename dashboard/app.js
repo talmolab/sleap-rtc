@@ -132,6 +132,7 @@ class SleapRTCDashboard {
         this.roomWorkers = {}; // Cache of connected workers by room_id
         this.tokens = [];
         this.tokenWorkers = {}; // Cache of connected workers by token_id
+        this.accountKeys = [];
 
         // Filter/sort state with localStorage persistence
         this.roomsFilter = localStorage.getItem('sleap_rooms_filter') || 'all';
@@ -303,6 +304,13 @@ class SleapRTCDashboard {
         document.getElementById('create-token-btn')?.addEventListener('click', () => this.showCreateTokenModal());
         document.getElementById('create-token-form')?.addEventListener('submit', (e) => this.handleCreateToken(e));
 
+        // Account keys
+        document.getElementById('refresh-account-keys-btn')?.addEventListener('click', () => {
+            this.loadAccountKeys();
+            this.showToast('Account keys refreshed');
+        });
+        document.getElementById('create-account-key-form')?.addEventListener('submit', (e) => this.handleCreateAccountKey(e));
+
         // Settings button
         document.getElementById('settings-btn')?.addEventListener('click', () => this.showModal('settings-modal'));
 
@@ -408,9 +416,15 @@ class SleapRTCDashboard {
         });
 
         // Update page title
+        // Load account keys on first switch to the tab
+        if (tabName === 'account-keys' && this.accountKeys.length === 0) {
+            this.loadAccountKeys();
+        }
+
         const titles = {
             'rooms': 'Rooms',
             'tokens': 'Worker Tokens',
+            'account-keys': 'Account Keys',
             'quickstart': 'Quickstart Guide',
             'about': 'About SLEAP-CONNECT'
         };
@@ -737,10 +751,13 @@ class SleapRTCDashboard {
         // Update sidebar badges
         document.getElementById('rooms-count').textContent = this.rooms.length;
         document.getElementById('tokens-count').textContent = this.tokens.length;
+        const activeAccountKeys = this.accountKeys.filter(k => !k.revoked_at);
+        document.getElementById('account-keys-count').textContent = activeAccountKeys.length;
 
         // Update section titles
         document.getElementById('rooms-title-count').textContent = this.rooms.length;
         document.getElementById('tokens-title-count').textContent = this.tokens.length;
+        document.getElementById('account-keys-title-count').textContent = this.accountKeys.length;
     }
 
     renderRooms() {
@@ -1804,6 +1821,299 @@ class SleapRTCDashboard {
      */
     deleteRoomSecret(roomId) {
         localStorage.removeItem(this.getRoomSecretKey(roomId));
+    }
+
+    // =========================================================================
+    // =========================================================================
+    // Account Keys
+    // =========================================================================
+
+    async loadAccountKeys() {
+        const container = document.getElementById('account-keys-list');
+        container.innerHTML = '<p class="loading">Loading account keys...</p>';
+
+        try {
+            const data = await this.apiRequest('/api/auth/account-keys');
+            this.accountKeys = data.keys || [];
+            this.renderAccountKeys();
+            this.updateCounts();
+        } catch (e) {
+            console.error('Failed to load account keys:', e);
+            container.innerHTML = `<p class="loading" style="color: var(--status-error);">Failed to load account keys: ${e.message}</p>`;
+        }
+    }
+
+    renderAccountKeys() {
+        const container = document.getElementById('account-keys-list');
+
+        if (this.accountKeys.length === 0) {
+            container.innerHTML = `
+                <div class="empty-state">
+                    <div class="empty-icon">
+                        <i data-lucide="shield"></i>
+                    </div>
+                    <h3>No account keys yet</h3>
+                    <p>Account keys let you authenticate workers without logging in.<br>Give a key to any machine that needs to run as a worker.</p>
+                    <button class="btn btn-primary" onclick="app.showCreateAccountKeyModal()">
+                        <i data-lucide="plus"></i>
+                        Create Account Key
+                    </button>
+                </div>
+            `;
+            if (typeof lucide !== 'undefined') lucide.createIcons();
+            return;
+        }
+
+        const activeKeys = this.accountKeys.filter(k => !k.revoked_at);
+        const revokedKeys = this.accountKeys.filter(k => !!k.revoked_at);
+        const revokedExpanded = localStorage.getItem('sleap_revoked_keys_expanded') === 'true';
+
+        let html = '';
+
+        if (activeKeys.length === 0 && revokedKeys.length > 0) {
+            html += `
+            <div class="empty-state" style="padding: 40px 20px;">
+                <div class="empty-icon">
+                    <i data-lucide="shield"></i>
+                </div>
+                <h3>No active account keys</h3>
+                <p>All your account keys have been revoked. Create a new key to authenticate workers.</p>
+                <button class="btn btn-primary" onclick="app.showCreateAccountKeyModal()">
+                    <i data-lucide="plus"></i>
+                    Create Account Key
+                </button>
+            </div>`;
+        } else {
+            if (activeKeys.length > 0) {
+                html += `<div class="acctkeys-section-header">
+                    <h3>Active Keys (${activeKeys.length})</h3>
+                </div>`;
+                html += activeKeys.map(key => this.renderAccountKeyCard(key, false)).join('');
+            }
+
+            html += `
+                <div class="create-item-row">
+                    <button class="btn btn-primary btn-create-inline" onclick="app.showCreateAccountKeyModal()">
+                        <i data-lucide="plus"></i>
+                        Create Account Key
+                    </button>
+                </div>`;
+        }
+
+        if (revokedKeys.length > 0) {
+            html += `
+            <div class="acctkeys-section-header inactive-section ${revokedExpanded ? 'expanded' : ''}" onclick="app.toggleRevokedKeysSection(this)">
+                <div class="section-toggle">
+                    <i data-lucide="${revokedExpanded ? 'chevron-down' : 'chevron-right'}"></i>
+                    <h3>Revoked Keys (${revokedKeys.length})</h3>
+                </div>
+                <button class="btn btn-danger btn-sm" onclick="event.stopPropagation(); app.handleDeleteAllRevokedKeys()">
+                    <i data-lucide="trash-2"></i>
+                    Delete All
+                </button>
+            </div>
+            <div class="revoked-keys-list" style="display: ${revokedExpanded ? 'block' : 'none'};">
+                ${revokedKeys.map(key => this.renderAccountKeyCard(key, true)).join('')}
+            </div>`;
+        }
+
+        container.innerHTML = html;
+        if (typeof lucide !== 'undefined') lucide.createIcons();
+    }
+
+    renderAccountKeyCard(key, isRevoked) {
+        const storedSecret = this.getStoredAccountKeySecret(key.key_id);
+
+        return `
+        <div class="acctkey-card ${isRevoked ? 'inactive' : ''} ${storedSecret ? 'has-key' : ''}">
+            <div class="acctkey-header">
+                <div class="acctkey-main">
+                    <div class="acctkey-icon" ${isRevoked ? 'style="opacity: 0.5;"' : ''}>
+                        <i data-lucide="shield"></i>
+                    </div>
+                    <div class="acctkey-info">
+                        <h3>${key.name || 'unnamed'}</h3>
+                        <div class="acctkey-meta">
+                            <span class="acctkey-meta-item acctkey-key-id">
+                                <i data-lucide="fingerprint"></i>
+                                ${key.key_id.substring(0, 20)}...
+                            </span>
+                            <span class="acctkey-meta-item" title="${formatExactDate(key.created_at)}">
+                                <i data-lucide="calendar"></i>
+                                Created ${formatRelativeTime(key.created_at)}
+                            </span>
+                            ${isRevoked ? `
+                                <span class="acctkey-meta-item error">
+                                    <i data-lucide="x-circle"></i>
+                                    Revoked ${key.revoked_at ? formatRelativeTime(key.revoked_at) : ''}
+                                </span>
+                            ` : ''}
+                        </div>
+                    </div>
+                </div>
+                <div class="acctkey-actions">
+                    ${!isRevoked ? `
+                        <button class="btn btn-danger btn-sm" onclick="app.handleRevokeAccountKey('${key.key_id}', '${(key.name || 'unnamed').replace(/'/g, "\\'")}')">
+                            <i data-lucide="trash-2"></i>
+                            Revoke
+                        </button>
+                    ` : `
+                        <button class="btn btn-danger btn-sm" onclick="app.handleDeleteAccountKey('${key.key_id}', '${(key.name || 'unnamed').replace(/'/g, "\\'")}')">
+                            <i data-lucide="trash-2"></i>
+                            Delete
+                        </button>
+                    `}
+                </div>
+            </div>
+            ${storedSecret && !isRevoked ? `
+                <div class="api-key-available">
+                    <div class="api-key-header">
+                        <i data-lucide="alert-circle"></i>
+                        <span>Account key available for this session only</span>
+                    </div>
+                    <div class="api-key-content">
+                        <code class="worker-command">export SLEAP_RTC_ACCOUNT_KEY=${storedSecret}</code>
+                        <div class="api-key-actions">
+                            <button class="btn btn-secondary btn-sm" onclick="app.copyToClipboard('export SLEAP_RTC_ACCOUNT_KEY=${storedSecret}')">
+                                <i data-lucide="copy"></i>
+                                Copy Command
+                            </button>
+                            <button class="btn btn-ghost btn-sm" onclick="app.dismissAccountKeySecret('${key.key_id}')">
+                                <i data-lucide="check"></i>
+                                I've copied it
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            ` : ''}
+        </div>
+        `;
+    }
+
+    showCreateAccountKeyModal() {
+        document.getElementById('account-key-name').value = '';
+        this.showModal('create-account-key-modal');
+    }
+
+    async handleCreateAccountKey(e) {
+        e.preventDefault();
+        const name = document.getElementById('account-key-name').value.trim();
+        if (!name) return;
+
+        try {
+            const data = await this.apiRequest('/api/auth/account-keys', {
+                method: 'POST',
+                body: JSON.stringify({ name }),
+            });
+
+            // Store the full key in sessionStorage (shown only once)
+            this.storeAccountKeySecret(data.key_id, data.key_id);
+
+            // Close modal and reload
+            document.getElementById('create-account-key-modal').classList.add('hidden');
+            this.showToast('Account key created');
+            await this.loadAccountKeys();
+        } catch (e) {
+            console.error('Failed to create account key:', e);
+            this.showToast(`Failed to create key: ${e.message}`);
+        }
+    }
+
+    async handleRevokeAccountKey(keyId, keyName) {
+        const confirmed = await this.showConfirmModal(
+            'Revoke Account Key',
+            `Are you sure you want to revoke "${keyName}"? Any workers using this key will lose access immediately.`,
+            'Revoke'
+        );
+        if (!confirmed) return;
+
+        try {
+            await this.apiRequest(`/api/auth/account-keys/${keyId}`, {
+                method: 'DELETE',
+            });
+            this.showToast('Account key revoked');
+            await this.loadAccountKeys();
+        } catch (e) {
+            console.error('Failed to revoke account key:', e);
+            this.showToast(`Failed to revoke key: ${e.message}`);
+        }
+    }
+
+    async handleDeleteAccountKey(keyId, keyName) {
+        const confirmed = await this.showConfirmModal(
+            'Delete Account Key',
+            `Are you sure you want to permanently delete "${keyName}"? This cannot be undone.`,
+            'Delete'
+        );
+        if (!confirmed) return;
+
+        try {
+            await this.apiRequest(`/api/auth/account-keys/${keyId}`, {
+                method: 'DELETE',
+            });
+            this.showToast('Account key deleted');
+            await this.loadAccountKeys();
+        } catch (e) {
+            console.error('Failed to delete account key:', e);
+            this.showToast(`Failed to delete key: ${e.message}`);
+        }
+    }
+
+    async handleDeleteAllRevokedKeys() {
+        const revokedCount = this.accountKeys.filter(k => !!k.revoked_at).length;
+        const confirmed = await this.showConfirmModal(
+            'Delete All Revoked Keys',
+            `Delete all ${revokedCount} revoked keys? This will permanently remove them.`,
+            'Delete All'
+        );
+        if (!confirmed) return;
+
+        try {
+            const revokedKeys = this.accountKeys.filter(k => !!k.revoked_at);
+            await Promise.all(
+                revokedKeys.map(k =>
+                    this.apiRequest(`/api/auth/account-keys/${k.key_id}`, { method: 'DELETE' })
+                )
+            );
+            this.showToast(`Deleted ${revokedKeys.length} revoked keys`);
+            await this.loadAccountKeys();
+        } catch (e) {
+            console.error('Failed to delete revoked keys:', e);
+            this.showToast(`Failed to delete keys: ${e.message}`);
+        }
+    }
+
+    toggleRevokedKeysSection(header) {
+        const isExpanded = header.classList.toggle('expanded');
+        const list = header.nextElementSibling;
+        const icon = header.querySelector('[data-lucide]');
+
+        list.style.display = isExpanded ? 'block' : 'none';
+        localStorage.setItem('sleap_revoked_keys_expanded', isExpanded);
+
+        if (icon) {
+            icon.setAttribute('data-lucide', isExpanded ? 'chevron-down' : 'chevron-right');
+            if (typeof lucide !== 'undefined') lucide.createIcons();
+        }
+    }
+
+    // Account Key Secret Session Storage
+    storeAccountKeySecret(keyId, fullKey) {
+        const pending = JSON.parse(sessionStorage.getItem('pendingAccountKeys') || '{}');
+        pending[keyId] = fullKey;
+        sessionStorage.setItem('pendingAccountKeys', JSON.stringify(pending));
+    }
+
+    getStoredAccountKeySecret(keyId) {
+        const pending = JSON.parse(sessionStorage.getItem('pendingAccountKeys') || '{}');
+        return pending[keyId] || null;
+    }
+
+    dismissAccountKeySecret(keyId) {
+        const pending = JSON.parse(sessionStorage.getItem('pendingAccountKeys') || '{}');
+        delete pending[keyId];
+        sessionStorage.setItem('pendingAccountKeys', JSON.stringify(pending));
+        this.renderAccountKeys();
     }
 
     // =========================================================================

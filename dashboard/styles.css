@@ -1017,6 +1017,197 @@ body::before {
     border-color: var(--accent-primary);
 }
 
+/* ── Account Key Cards ─────────────────────────────────────────────────── */
+
+.account-keys-help-text {
+    color: var(--text-muted);
+    font-size: 13px;
+    margin-bottom: 20px;
+    line-height: 1.6;
+}
+
+.acctkey-card {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-subtle);
+    border-radius: 10px;
+    overflow: hidden;
+    transition: border-color 0.15s;
+}
+
+.acctkey-card:hover {
+    border-color: var(--border-default);
+}
+
+.acctkey-card.inactive {
+    opacity: 0.7;
+    border-color: var(--border-subtle);
+}
+
+.acctkey-card.inactive:hover {
+    opacity: 0.85;
+}
+
+.acctkey-card.has-key {
+    border-color: rgba(234, 179, 8, 0.3);
+}
+
+.acctkey-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 20px;
+}
+
+.acctkey-main {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+}
+
+.acctkey-icon {
+    width: 40px;
+    height: 40px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-default);
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--accent-primary);
+}
+
+.acctkey-icon svg {
+    width: 20px;
+    height: 20px;
+}
+
+.acctkey-info h3 {
+    font-size: 14px;
+    font-weight: 600;
+    margin-bottom: 4px;
+}
+
+.acctkey-meta {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+.acctkey-meta-item {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.acctkey-meta-item svg {
+    width: 14px;
+    height: 14px;
+}
+
+.acctkey-meta-item.error {
+    color: var(--status-error);
+}
+
+.acctkey-key-id {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.acctkey-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+/* Account key section headers */
+.acctkeys-section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 0;
+    margin-bottom: 8px;
+}
+
+.acctkeys-section-header h3 {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    margin: 0;
+}
+
+.acctkeys-section-header.inactive-section {
+    background: var(--bg-tertiary);
+    border-radius: var(--radius);
+    padding: 12px 16px;
+    margin-top: 24px;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.acctkeys-section-header.inactive-section:hover {
+    background: var(--bg-elevated);
+}
+
+.acctkeys-section-header .section-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.acctkeys-section-header .section-toggle svg {
+    width: 16px;
+    height: 16px;
+    color: var(--text-muted);
+}
+
+.revoked-keys-list {
+    margin-top: 8px;
+}
+
+.revoked-keys-list .acctkey-card {
+    margin-bottom: 12px;
+}
+
+.revoked-keys-list .acctkey-card:last-child {
+    margin-bottom: 0;
+}
+
+/* Security warning (create account key modal) */
+.security-warning {
+    display: flex;
+    gap: 10px;
+    padding: 12px 14px;
+    background: rgba(234, 179, 8, 0.08);
+    border: 1px solid rgba(234, 179, 8, 0.2);
+    border-radius: 8px;
+    margin-top: 4px;
+}
+
+.security-warning-icon {
+    color: var(--status-warning);
+    flex-shrink: 0;
+    margin-top: 1px;
+}
+
+.security-warning-icon svg {
+    width: 16px;
+    height: 16px;
+}
+
+.security-warning-text {
+    font-size: 13px;
+    color: var(--text-secondary);
+    line-height: 1.5;
+}
+
+.security-warning-text strong {
+    color: var(--status-warning);
+    font-weight: 600;
+}
+
 /* Nested workers (token cards only) */
 .nested-workers {
     border-top: 1px solid var(--border-subtle);

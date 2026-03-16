@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SLEAP-CONNECT Dashboard</title>
+    <link rel="icon" type="image/png" href="sleap-logo.png">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="styles.css">
     <!-- Lucide Icons -->
@@ -52,6 +53,11 @@
                     <i data-lucide="key-round"></i>
                     Tokens
                     <span id="tokens-count" class="nav-badge">0</span>
+                </button>
+                <button class="nav-item" data-tab="account-keys">
+                    <i data-lucide="shield"></i>
+                    Account Keys
+                    <span id="account-keys-count" class="nav-badge">0</span>
                 </button>
                 <div class="nav-label" style="margin-top: 16px;">Actions</div>
                 <button class="nav-item" id="join-room-btn">
@@ -171,6 +177,35 @@
 
                     <div id="tokens-list" class="card-list">
                         <p class="loading">Loading tokens...</p>
+                    </div>
+                </div>
+
+                <!-- Account Keys Tab -->
+                <div id="account-keys-tab" class="tab-content">
+                    <div class="section-header">
+                        <h2 class="section-title">Account Keys (<span id="account-keys-title-count">0</span>)</h2>
+                        <div class="section-actions">
+                            <button class="btn btn-ghost btn-sm" id="refresh-account-keys-btn">
+                                <i data-lucide="refresh-cw"></i>
+                                Refresh
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="security-warning" style="margin-bottom: 20px;">
+                        <div class="security-warning-icon">
+                            <i data-lucide="alert-triangle"></i>
+                        </div>
+                        <div class="security-warning-text">
+                            Account keys are long-lived credentials for authenticating workers and CLI tools.
+                            <strong>Each key grants full access to your account.</strong>
+                            Direct connections between clients and workers are additionally secured with Ed25519 public-key encryption.
+                            You can create multiple keys and revoke them individually.
+                        </div>
+                    </div>
+
+                    <div id="account-keys-list" class="card-list">
+                        <p class="loading">Loading account keys...</p>
                     </div>
                 </div>
 
@@ -946,6 +981,36 @@ auto_select = true</code></pre>
                 <div class="form-actions">
                     <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
                     <button type="submit" class="btn btn-primary">Create</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Create Account Key Modal -->
+    <div id="create-account-key-modal" class="modal hidden">
+        <div class="modal-content">
+            <h3>Create Account Key</h3>
+            <form id="create-account-key-form">
+                <div class="form-group">
+                    <label for="account-key-name">Key Name</label>
+                    <input type="text" id="account-key-name" placeholder="e.g. hpc-cluster, lab-gpu-1, training-server" required>
+                </div>
+                <div class="security-warning">
+                    <div class="security-warning-icon">
+                        <i data-lucide="alert-triangle"></i>
+                    </div>
+                    <div class="security-warning-text">
+                        <strong>Keep this key secure.</strong> It grants full access to your account
+                        and will only be shown once after creation. Never share keys in public channels
+                        or commit them to version control.
+                    </div>
+                </div>
+                <div class="form-actions">
+                    <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
+                    <button type="submit" class="btn btn-primary">
+                        <i data-lucide="plus"></i>
+                        Create
+                    </button>
                 </div>
             </form>
         </div>
