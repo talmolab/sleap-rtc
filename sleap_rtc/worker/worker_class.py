@@ -19,6 +19,8 @@ import time
 from datetime import datetime
 from typing import Optional
 
+from loguru import logger
+
 from aiortc import (
     RTCPeerConnection,
     RTCSessionDescription,
@@ -1821,6 +1823,24 @@ class RTCWorkerClient:
                             peer_metadata=peer_metadata,
                         )
                         self.mesh_initialized = True
+
+                        # Print ready banner
+                        sleap_nn_ver = _get_sleap_nn_version()
+                        gpu_info = f"{self.gpu_model} ({self.gpu_memory_mb} MB) · CUDA {self.cuda_version}"
+                        thin_line = "─" * 80
+                        bw = "\033[1;37m"  # bold white
+                        g = "\033[32m"  # green (match loguru SUCCESS)
+                        r = "\033[0m"  # reset
+                        logger.success(
+                            f"\n{g}{thin_line}\n\n"
+                            f"  ✓ Worker {bw}{self.name}{r}{g} ready! Waiting for client requests...\n\n"
+                            f"  Room:      {self.room_id}\n"
+                            f"  Worker:    {self.name}\n"
+                            f"  Peer ID:   {self.peer_id}\n"
+                            f"  GPU:       {gpu_info}\n"
+                            f"  sleap-nn:  {sleap_nn_ver}\n\n"
+                            f"{thin_line}{r}"
+                        )
 
                         # If admin, wait for admin WebSocket handler instead of continuing this loop
                         # This prevents two coroutines from reading the same WebSocket

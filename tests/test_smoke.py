@@ -377,3 +377,52 @@ class TestDashboardJobSubmission:
         assert 'data-tab="tokens"' in index_html
         assert 'data-tab="quickstart"' in index_html
         assert 'data-tab="about"' in index_html
+
+    # ── Room card UX redesign + Workers modal ────────────────────────────────
+
+    def test_room_action_bar_present(self, app_js):
+        """Room cards must include a room-action-bar with action buttons."""
+        assert "room-action-bar" in app_js
+
+    def test_btn_submit_job_class_present(self, app_js):
+        """Submit Job button must use btn-submit-job class for purple accent styling."""
+        assert "btn-submit-job" in app_js
+
+    def test_view_workers_button_present(self, app_js):
+        """Room cards must include a View Workers button."""
+        assert "View Workers" in app_js
+
+    def test_open_workers_modal_method_defined(self, app_js):
+        """openWorkersModal method must be defined on the app class."""
+        assert "openWorkersModal(" in app_js
+
+    def test_render_workers_modal_list_method_defined(self, app_js):
+        """renderWorkersModalList method must be defined."""
+        assert "renderWorkersModalList(" in app_js
+
+    def test_set_workers_filter_method_defined(self, app_js):
+        """setWorkersFilter method must be defined for filter chips."""
+        assert "setWorkersFilter(" in app_js
+
+    def test_filter_workers_search_method_defined(self, app_js):
+        """filterWorkersSearch method must be defined for search."""
+        assert "filterWorkersSearch(" in app_js
+
+    def test_workers_modal_present(self, index_html):
+        """workers-modal wrapper must exist in index.html."""
+        assert 'id="workers-modal"' in index_html
+
+    def test_workers_modal_filter_chips_present(self, index_html):
+        """Workers modal must include filter chips (All, Idle, Busy)."""
+        assert "wm-filter-chip" in index_html
+        assert 'data-filter="all"' in index_html
+        assert 'data-filter="idle"' in index_html
+        assert 'data-filter="busy"' in index_html
+
+    def test_workers_modal_search_present(self, index_html):
+        """Workers modal must include a search input."""
+        assert 'id="wm-search"' in index_html
+
+    def test_workers_modal_worker_list_container(self, index_html):
+        """Workers modal must include a worker list container."""
+        assert 'id="wm-worker-list"' in index_html

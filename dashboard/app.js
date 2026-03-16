@@ -412,7 +412,7 @@ class SleapRTCDashboard {
             'rooms': 'Rooms',
             'tokens': 'Worker Tokens',
             'quickstart': 'Quickstart Guide',
-            'about': 'About SLEAP-RTC'
+            'about': 'About SLEAP-CONNECT'
         };
         document.getElementById('page-title').textContent = titles[tabName] || tabName;
 
@@ -864,9 +864,10 @@ class SleapRTCDashboard {
                     <div class="room-info">
                         <h3>${room.name || 'Unnamed Room'}</h3>
                         <div class="room-meta">
-                            <span class="room-meta-item">
+                            <span class="room-meta-item room-id-copy" title="Click to copy Room ID" onclick="event.stopPropagation(); app.copyToClipboard('${room.room_id}')">
                                 <i data-lucide="hash"></i>
                                 ${room.room_id}
+                                <i data-lucide="copy" class="copy-hint-icon"></i>
                             </span>
                             <span class="room-meta-item" title="${formatExactDate(room.joined_at)}">
                                 <i data-lucide="calendar"></i>
@@ -892,44 +893,36 @@ class SleapRTCDashboard {
                         <i data-lucide="zap-off"></i>
                         0 connected
                     </span>
-                    ${!isExpired ? `
-                        <button class="btn btn-primary btn-sm" data-room-id="${room.room_id}" onclick="app.openSubmitJobModal('${room.room_id}')">
-                            <i data-lucide="play"></i>
-                            Submit Job
+                    ${room.role === 'owner' ? `
+                        <button class="btn btn-secondary btn-sm" onclick="app.handleRoomSecret('${room.room_id}')">
+                            <i data-lucide="key"></i>
+                            Secret
                         </button>
-                        ${room.role === 'owner' ? `
-                            <button class="btn btn-secondary btn-sm" onclick="app.handleRoomSecret('${room.room_id}')">
-                                <i data-lucide="key"></i>
-                                Secret
-                            </button>
-                            <button class="btn btn-secondary btn-sm" onclick="app.handleInvite('${room.room_id}')">
-                                <i data-lucide="user-plus"></i>
-                                Invite
-                            </button>
-                            <button class="btn btn-danger btn-sm" onclick="app.handleDeleteRoom('${room.room_id}', '${this.escapeHtml(room.name || room.room_id)}')">
-                                <i data-lucide="trash-2"></i>
-                                Delete
-                            </button>
-                        ` : ''}
-                    ` : `
-                        <button class="btn btn-danger btn-sm" onclick="app.handleDeleteRoom('${room.room_id}', '${this.escapeHtml(room.name || room.room_id)}')">
-                            <i data-lucide="trash-2"></i>
-                            Delete
-                        </button>
-                    `}
+                    ` : ''}
+                    <button class="btn btn-danger btn-sm" onclick="app.handleDeleteRoom('${room.room_id}', '${this.escapeHtml(room.name || room.room_id)}')">
+                        <i data-lucide="trash-2"></i>
+                        Delete
+                    </button>
                 </div>
             </div>
-            ${!isExpired ? `
-                <div class="nested-workers">
-                    <div class="nested-header" onclick="app.toggleRoomWorkersList('${room.room_id}', this)">
-                        <span>Connected Workers</span>
-                        <i data-lucide="chevron-down"></i>
-                    </div>
-                    <div id="room-workers-list-${room.room_id}" class="nested-worker-list">
-                        <div class="nested-worker-row" style="justify-content: center; color: var(--text-muted);">Loading workers...</div>
-                    </div>
-                </div>
-            ` : ''}
+            <div class="room-action-bar">
+                ${!isExpired ? `
+                    <button class="btn btn-submit-job btn-sm" data-room-id="${room.room_id}" onclick="app.openSubmitJobModal('${room.room_id}')">
+                        <i data-lucide="play"></i>
+                        Submit Job
+                    </button>
+                ` : ''}
+                <button class="btn btn-ghost btn-sm" onclick="app.openWorkersModal('${room.room_id}')">
+                    <i data-lucide="cpu"></i>
+                    View Workers
+                </button>
+                ${!isExpired && room.role === 'owner' ? `
+                    <button class="btn btn-ghost btn-sm" onclick="app.handleInvite('${room.room_id}')">
+                        <i data-lucide="user-plus"></i>
+                        Invite
+                    </button>
+                ` : ''}
+            </div>
         </div>
         `;
     }
@@ -1567,7 +1560,6 @@ class SleapRTCDashboard {
         for (const room of this.rooms) {
             const workerData = this.roomWorkers[room.room_id] || { workers: [], count: 0 };
             const badge = document.getElementById(`room-worker-badge-${room.room_id}`);
-            const workersList = document.getElementById(`room-workers-list-${room.room_id}`);
 
             if (badge) {
                 const count = workerData.count;
@@ -1580,54 +1572,166 @@ class SleapRTCDashboard {
                 badge.className = `worker-count-badge ${count === 0 ? 'offline' : ''}`;
             }
 
-            if (workersList) {
-                if (workerData.workers.length === 0) {
-                    workersList.innerHTML = '<div class="nested-worker-row" style="justify-content: center; color: var(--text-muted);">No workers currently connected</div>';
-                } else {
-                    workersList.innerHTML = workerData.workers.map(worker => {
-                        // Metadata line: peer_id + PEER ID badge, then account key + ACCOUNT-KEY badge
-                        const keyItem = worker.account_key_id
-                            ? `<span class="worker-meta-item">
-                                    <i data-lucide="key"></i>
-                                    ${worker.account_key_id.slice(0, 20)}...
-                                    <span class="auth-badge account-key">ACCOUNT-KEY</span>
-                                </span>`
-                            : `<span class="worker-meta-item"><span class="auth-badge token">TOKEN</span></span>`;
-                        const metaLine = `<div class="worker-meta">
-                                    <span class="worker-meta-item">
-                                        <i data-lucide="hash"></i>
-                                        ${worker.peer_id}
-                                        <span class="auth-badge peer-id">PEER ID</span>
-                                    </span>
-                                    ${keyItem}
-                                </div>`;
-                        // Top: --name label if set, else just the meta line.
-                        const nameHtml = worker.worker_name
-                            ? `<div class="worker-name">${worker.worker_name}</div>${metaLine}`
-                            : metaLine;
-                        return `
-                            <div class="nested-worker-row">
-                                <div class="worker-cell">
-                                    <div class="worker-avatar">
-                                        <i data-lucide="monitor"></i>
-                                    </div>
-                                    <div>${nameHtml}</div>
-                                </div>
-                                <span class="worker-connected" title="${formatExactDate(worker.connected_at)}">
-                                    Connected ${formatRelativeTime(worker.connected_at)}
-                                </span>
-                            </div>
-                        `;
-                    }).join('');
-                }
-            }
-
             if (typeof lucide !== 'undefined') {
                 lucide.createIcons();
             }
         }
     }
 
+    // =========================================================================
+    // Workers Modal
+    // =========================================================================
+
+    openWorkersModal(roomId) {
+        this.currentWorkersRoomId = roomId;
+        this.workersFilter = 'all';
+        this.workersSearchQuery = '';
+
+        // Set room name in modal header
+        const room = this.rooms.find(r => r.room_id === roomId);
+        const roomName = room ? (room.name || roomId) : roomId;
+        const subtitle = document.getElementById('wm-room-name');
+        if (subtitle) subtitle.textContent = roomName;
+
+        // Reset search input
+        const searchInput = document.getElementById('wm-search');
+        if (searchInput) searchInput.value = '';
+
+        // Reset filter chips
+        document.querySelectorAll('#workers-modal .wm-filter-chip').forEach(c => c.classList.remove('active'));
+        const allChip = document.querySelector('#workers-modal .wm-filter-chip[data-filter="all"]');
+        if (allChip) allChip.classList.add('active');
+
+        this.renderWorkersModalList();
+        this.showModal('workers-modal');
+    }
+
+    renderWorkersModalList() {
+        const roomId = this.currentWorkersRoomId;
+        const workerData = this.roomWorkers[roomId] || { workers: [], count: 0 };
+        const workers = workerData.workers || [];
+        const container = document.getElementById('wm-worker-list');
+        const emptyState = document.getElementById('wm-empty-state');
+        if (!container) return;
+
+        const query = (this.workersSearchQuery || '').toLowerCase();
+        const filter = this.workersFilter || 'all';
+
+        // Count by status for filter chips
+        const idleCount = workers.filter(w => {
+            const status = (w.properties && w.properties.status) || 'available';
+            return status === 'available';
+        }).length;
+        const busyCount = workers.filter(w => {
+            const status = (w.properties && w.properties.status) || 'available';
+            return status === 'busy';
+        }).length;
+
+        // Update chip counts
+        const countAll = document.getElementById('wm-count-all');
+        const countIdle = document.getElementById('wm-count-idle');
+        const countBusy = document.getElementById('wm-count-busy');
+        if (countAll) countAll.textContent = workers.length;
+        if (countIdle) countIdle.textContent = idleCount;
+        if (countBusy) countBusy.textContent = busyCount;
+
+        // Apply filters
+        let filtered = workers;
+        if (filter === 'idle') {
+            filtered = filtered.filter(w => {
+                const status = (w.properties && w.properties.status) || 'available';
+                return status === 'available';
+            });
+        } else if (filter === 'busy') {
+            filtered = filtered.filter(w => {
+                const status = (w.properties && w.properties.status) || 'available';
+                return status === 'busy';
+            });
+        }
+
+        // Apply search
+        if (query) {
+            filtered = filtered.filter(w => {
+                const name = (w.worker_name || '').toLowerCase();
+                const gpu = (w.properties && w.properties.gpu_model || '').toLowerCase();
+                const peerId = (w.peer_id || '').toLowerCase();
+                return name.includes(query) || gpu.includes(query) || peerId.includes(query);
+            });
+        }
+
+        // Show empty state or worker list
+        if (workers.length === 0) {
+            container.innerHTML = '';
+            if (emptyState) emptyState.classList.remove('hidden');
+        } else if (filtered.length === 0) {
+            container.innerHTML = '<div class="wm-no-results">No workers match your search.</div>';
+            if (emptyState) emptyState.classList.add('hidden');
+        } else {
+            if (emptyState) emptyState.classList.add('hidden');
+            container.innerHTML = filtered.map(worker => {
+                const props = worker.properties || {};
+                const gpuModel = props.gpu_model || 'Unknown GPU';
+                const gpuMem = props.gpu_memory_mb ? `${Math.round(props.gpu_memory_mb / 1024)} GB` : '';
+                const cuda = props.cuda_version ? `CUDA ${props.cuda_version}` : '';
+                const sleapNn = props.sleap_nn_version ? `sleap-nn ${props.sleap_nn_version}` : '';
+                const specs = [gpuModel, gpuMem, cuda, sleapNn].filter(Boolean).join(' \u00B7 ');
+
+                const status = props.status || 'available';
+                const statusClass = status === 'busy' ? 'busy' : 'available';
+                const statusText = status === 'busy' ? 'Busy' : 'Idle';
+
+                const keyItem = worker.account_key_id
+                    ? `<span class="worker-meta-item">
+                            <i data-lucide="key"></i>
+                            ${worker.account_key_id.slice(0, 20)}...
+                            <span class="auth-badge account-key">ACCOUNT-KEY</span>
+                        </span>`
+                    : `<span class="worker-meta-item"><span class="auth-badge token">TOKEN</span></span>`;
+
+                return `
+                <div class="wm-worker-card">
+                    <div class="wm-worker-row">
+                        <div class="wm-worker-icon"><i data-lucide="cpu"></i></div>
+                        <div class="wm-worker-info">
+                            <div class="wm-worker-name">${worker.worker_name || extractWorkerHostname(worker.peer_id)}</div>
+                            <div class="wm-worker-specs">${specs}</div>
+                        </div>
+                        <div class="wm-worker-status">
+                            <div class="wm-status-dot ${statusClass}"></div>
+                            <span>${statusText}</span>
+                            ${worker.connected_at ? `<span class="wm-connected-time" title="${formatExactDate(worker.connected_at)}">Connected ${formatRelativeTime(worker.connected_at)}</span>` : ''}
+                        </div>
+                    </div>
+                    <div class="wm-worker-meta">
+                        <span class="wm-meta-item">
+                            <i data-lucide="hash"></i>
+                            ${worker.peer_id}
+                            <span class="auth-badge peer-id">PEER ID</span>
+                        </span>
+                        ${keyItem}
+                    </div>
+                </div>`;
+            }).join('');
+        }
+
+        if (typeof lucide !== 'undefined') {
+            lucide.createIcons();
+        }
+    }
+
+    setWorkersFilter(filter) {
+        this.workersFilter = filter;
+        document.querySelectorAll('#workers-modal .wm-filter-chip').forEach(c => c.classList.remove('active'));
+        const activeChip = document.querySelector(`#workers-modal .wm-filter-chip[data-filter="${filter}"]`);
+        if (activeChip) activeChip.classList.add('active');
+        this.renderWorkersModalList();
+    }
+
+    filterWorkersSearch() {
+        const input = document.getElementById('wm-search');
+        this.workersSearchQuery = input ? input.value : '';
+        this.renderWorkersModalList();
+    }
 
     toggleWorkersList(tokenId, headerElement) {
         const list = document.getElementById(`workers-list-${tokenId}`);
@@ -1640,18 +1744,6 @@ class SleapRTCDashboard {
             }
         }
     }
-    toggleRoomWorkersList(roomId, headerElement) {
-        const list = document.getElementById(`room-workers-list-${roomId}`);
-        if (list && headerElement) {
-            const isExpanded = list.classList.toggle('expanded');
-            headerElement.classList.toggle('expanded', isExpanded);
-            if (typeof lucide !== 'undefined') {
-                lucide.createIcons();
-            }
-        }
-    }
-
-
     async handleRevokeToken(tokenId) {
         const confirmed = await this.showConfirmModal(
             'Revoke Token',
@@ -1999,10 +2091,15 @@ class SleapRTCDashboard {
         // learning rate lives under optimizer.lr in sleap-nn configs
         const learning_rate = trainer?.optimizer?.lr
             ?? trainer.learning_rate ?? doc?.learning_rate ?? 'unknown';
+        // Detect model type from head_configs (the non-null key)
+        const headConfigs = doc?.model_config?.head_configs ?? trainer?.head_configs ?? {};
+        const model_type = Object.entries(headConfigs)
+            .find(([, v]) => v != null)?.[0] ?? 'unknown';
         return {
             batch_size,
             learning_rate,
             max_epochs: trainer.max_epochs ?? doc?.max_epochs ?? 'unknown',
+            model_type,
             run_name: trainer.run_name ?? wandb.name ?? wandb.run_name ?? doc?.run_name ?? 'unknown',
             wandb_project: wandb.project ?? 'unknown',
             wandb_entity: wandb.entity ?? 'unknown',
@@ -2021,7 +2118,7 @@ class SleapRTCDashboard {
             ['WandB entity', fields.wandb_entity],
         ];
         container.innerHTML = rows.map(([label, val]) =>
-            `<div class="sj-hyperparam-row"><span class="sj-hyperparam-label">${label}</span><span class="sj-hyperparam-value">${val}</span></div>`
+            `<div class="sj-hyperparam-item"><span class="sj-hyperparam-label">${label}</span><span class="sj-hyperparam-value">${val}</span></div>`
         ).join('');
         container.classList.remove('hidden');
     }
@@ -2036,6 +2133,8 @@ class SleapRTCDashboard {
             try {
                 const fields = this.parseTrainingConfig(text);
                 this._sjConfigContent = text;
+                this._sjMaxEpochs = fields.max_epochs !== 'unknown' ? Number(fields.max_epochs) : null;
+                this._sjModelType = fields.model_type !== 'unknown' ? fields.model_type : null;
                 this._sjRenderHyperparams(fields);
                 errorEl.classList.add('hidden');
                 next2.disabled = false;
@@ -2342,6 +2441,32 @@ class SleapRTCDashboard {
 
     // ── File browser (column view via relay) ─────────────────────────────────
 
+    _sjFileIcon(isDir, isVideo, name) {
+        if (isDir) {
+            return `<svg class="sj-entry-icon" style="color: #fbbf24" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/>
+            </svg>`;
+        }
+        const ext = (name || '').split('.').pop().toLowerCase();
+        if (ext === 'slp') {
+            return `<svg class="sj-entry-icon" style="color: #a78bfa" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                <polyline points="14 2 14 8 20 8"/>
+                <circle cx="12" cy="14" r="3"/>
+            </svg>`;
+        }
+        if (isVideo || ['mp4', 'avi', 'mov'].includes(ext)) {
+            return `<svg class="sj-entry-icon" style="color: #38bdf8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <rect x="2" y="4" width="20" height="16" rx="2"/>
+                <polygon points="10 9 16 12 10 15"/>
+            </svg>`;
+        }
+        return `<svg class="sj-entry-icon" style="color: #9090a8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+            <polyline points="14 2 14 8 20 8"/>
+        </svg>`;
+    }
+
     _sjRenderColumn(entries, colIndex) {
         const container = document.getElementById('sj-file-columns');
         if (!container) return;
@@ -2372,7 +2497,7 @@ class SleapRTCDashboard {
             const name = entry.name ?? entry.path.split('/').pop();
             const row = document.createElement('div');
             row.className = 'sj-file-entry' + (entry.is_dir ? ' is-dir' : (isVideoMode ? ' is-video' : ' is-slp'));
-            row.textContent = name;
+            row.innerHTML = this._sjFileIcon(entry.is_dir, isVideoMode, name) + `<span>${this.escapeHtml(name)}</span>`;
 
             if (entry.is_dir) {
                 row.onclick = () => {
@@ -2451,8 +2576,9 @@ class SleapRTCDashboard {
                 .on('job_progress', (data) => this._sjHandleJobProgress(data))
                 .on('epoch', (data) => this._sjHandleJobEpoch(data));
 
-            // Switch to status view
+            // Switch to status view and reset progress panel
             this.sjGoToStep('status');
+            this._sjResetProgressPanel();
             const label = document.getElementById('sj-status-label');
             if (label) label.textContent = 'Submitted…';
 
@@ -2470,24 +2596,28 @@ class SleapRTCDashboard {
         const label = document.getElementById('sj-status-label');
         const status = data.status;
         const stage = data.stage;
+        const modelLabel = this._sjModelType || 'model';
 
         if (status === 'running' || status === 'submitted') {
             if (label) {
                 if (stage === 'inference') label.textContent = 'Running inference…';
-                else if (status === 'running') label.textContent = 'Training…';
+                else if (status === 'running') label.textContent = `Training ${modelLabel}…`;
                 else label.textContent = 'Submitted…';
             }
         } else if (status === 'accepted') {
-            if (label) label.textContent = 'Accepted — starting…';
+            if (label) label.textContent = 'Worker accepted! Starting training job…';
         } else if (status === 'complete') {
             if (label) label.textContent = 'Complete';
+            this._sjUpdateStatusIcon('complete');
             this._sjShowCloseButton();
         } else if (status === 'failed') {
             const msg = data.message || data.error || 'Job failed';
             if (label) label.textContent = `Failed: ${msg}`;
+            this._sjUpdateStatusIcon('failed');
             this._sjShowCloseButton();
         } else if (status === 'cancelled') {
             if (label) label.textContent = 'Cancelled';
+            this._sjUpdateStatusIcon('cancelled');
             this._sjShowCloseButton();
         }
     }
@@ -2496,8 +2626,12 @@ class SleapRTCDashboard {
         const label = document.getElementById('sj-status-label');
         const epoch = data.epoch;
         const loss = data.loss != null ? Number(data.loss).toFixed(4) : null;
+        const modelLabel = this._sjModelType || 'model';
         if (label && epoch != null) {
-            label.textContent = `Running — Epoch ${epoch}${loss ? `, loss ${loss}` : ''}`;
+            label.textContent = `Training ${modelLabel} — Epoch ${epoch}${loss ? `, loss ${loss}` : ''}`;
+        }
+        if (epoch != null) {
+            this._sjUpdateEpoch(epoch);
         }
         if (data.wandb_url) {
             const link = document.getElementById('sj-wandb-link');
@@ -2528,21 +2662,103 @@ class SleapRTCDashboard {
                 .map(([k, v]) => `${k}: ${Number(v).toFixed(4)}`)
                 .join('  ');
             this._sjAppendLog(`${what}Epoch ${epoch}  ${parts}`);
-            // Update status label with current epoch
+
+            // Update left panel: status label, epoch counter, metrics
             const label = document.getElementById('sj-status-label');
+            const modelLabel = this._sjModelType || 'model';
             const trainLoss = logs['train/loss'] != null ? Number(logs['train/loss']).toFixed(4) : null;
             if (label && epoch != null) {
-                label.textContent = `Training — Epoch ${epoch}${trainLoss ? `, loss ${trainLoss}` : ''}`;
+                label.textContent = `Training ${modelLabel} — Epoch ${epoch}${trainLoss ? `, loss ${trainLoss}` : ''}`;
             }
+            this._sjUpdateEpoch(epoch);
+            this._sjUpdateMetrics(logs);
         } else if (event === 'train_end') {
             this._sjAppendLog(`${what}Training complete`, 'log-info');
         }
     }
 
+    _sjResetProgressPanel() {
+        // Reset spinner to loading state
+        const spinner = document.getElementById('sj-status-spinner');
+        if (spinner) {
+            spinner.className = 'sj-status-spinner';
+            spinner.innerHTML = '<i data-lucide="loader-2"></i>';
+        }
+        // Reset label
+        const label = document.getElementById('sj-status-label');
+        if (label) {
+            label.className = 'sj-status-label';
+        }
+        // Show job queue tracker
+        const queue = document.getElementById('sj-job-queue');
+        if (queue) {
+            queue.textContent = 'Job 1 / 1';
+            queue.classList.remove('hidden');
+        }
+        // Hide epoch section and metrics until training starts
+        document.getElementById('sj-epoch-section')?.classList.add('hidden');
+        document.getElementById('sj-metrics')?.classList.add('hidden');
+        // Reset metric values
+        ['sj-metric-train-loss', 'sj-metric-val-loss', 'sj-metric-train-time', 'sj-metric-lr'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.textContent = '—';
+        });
+        // Reset epoch
+        const cur = document.getElementById('sj-epoch-current');
+        if (cur) cur.textContent = '0';
+        const total = document.getElementById('sj-epoch-total');
+        if (total) total.textContent = this._sjMaxEpochs ? ` / ${this._sjMaxEpochs}` : '';
+        // Clear log
+        const log = document.getElementById('sj-training-log');
+        if (log) log.innerHTML = '';
+        // Re-init lucide icons
+        if (window.lucide) lucide.createIcons();
+    }
+
+    _sjUpdateStatusIcon(state) {
+        const spinner = document.getElementById('sj-status-spinner');
+        const label = document.getElementById('sj-status-label');
+        if (!spinner) return;
+
+        if (state === 'complete') {
+            spinner.className = 'sj-status-spinner complete';
+            spinner.innerHTML = '<i data-lucide="check-circle"></i>';
+            if (label) label.className = 'sj-status-label complete';
+        } else if (state === 'failed' || state === 'cancelled') {
+            spinner.className = 'sj-status-spinner failed';
+            spinner.innerHTML = '<i data-lucide="x-circle"></i>';
+            if (label) label.className = 'sj-status-label failed';
+        }
+        if (window.lucide) lucide.createIcons();
+    }
+
+    _sjUpdateMetrics(logs) {
+        // Show metrics section
+        document.getElementById('sj-metrics')?.classList.remove('hidden');
+
+        const updates = {
+            'sj-metric-train-loss': logs['train/loss'] != null ? Number(logs['train/loss']).toFixed(4) : null,
+            'sj-metric-val-loss': logs['val/loss'] != null ? Number(logs['val/loss']).toFixed(4) : null,
+            'sj-metric-train-time': logs['train/time'] != null ? `${Number(logs['train/time']).toFixed(1)}s` : null,
+            'sj-metric-lr': logs['train/lr'] != null ? Number(logs['train/lr']).toFixed(6) : null,
+        };
+        for (const [id, val] of Object.entries(updates)) {
+            if (val != null) {
+                const el = document.getElementById(id);
+                if (el) el.textContent = val;
+            }
+        }
+    }
+
+    _sjUpdateEpoch(epoch) {
+        document.getElementById('sj-epoch-section')?.classList.remove('hidden');
+        const cur = document.getElementById('sj-epoch-current');
+        if (cur) cur.textContent = epoch;
+    }
+
     _sjAppendLog(text, extraClass = '') {
         const log = document.getElementById('sj-training-log');
         if (!log) return;
-        log.classList.remove('hidden');
         const line = document.createElement('div');
         line.className = `log-line${extraClass ? ' ' + extraClass : ''}`;
         line.textContent = text;
