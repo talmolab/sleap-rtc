@@ -191,10 +191,16 @@
                         </div>
                     </div>
 
-                    <p class="account-keys-help-text">
-                        Account keys are long-lived credentials for authenticating workers and CLI tools.
-                        Each key grants full access to your account. You can create multiple keys and revoke them individually.
-                    </p>
+                    <div class="security-warning" style="margin-bottom: 20px;">
+                        <div class="security-warning-icon">
+                            <i data-lucide="alert-triangle"></i>
+                        </div>
+                        <div class="security-warning-text">
+                            Account keys are long-lived credentials for authenticating workers and CLI tools.
+                            <strong>Each key grants full access to your account.</strong>
+                            You can create multiple keys and revoke them individually.
+                        </div>
+                    </div>
 
                     <div id="account-keys-list" class="card-list">
                         <p class="loading">Loading account keys...</p>
