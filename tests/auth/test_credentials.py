@@ -296,3 +296,35 @@ class TestPrivateKeyB64:
         data = json.loads(temp_credentials_dir.read_text())
         assert data["account_key"] == "slp_acct_x"
         assert data["private_key"] == "priv_key_b64"
+
+
+class TestPublicKeyRegistered:
+    """Tests for get_public_key_registered() and set_public_key_registered()."""
+
+    def test_defaults_to_false_when_absent(self, temp_credentials_dir):
+        assert credentials.get_public_key_registered() is False
+
+    def test_defaults_to_false_when_no_file(self, temp_credentials_dir):
+        assert credentials.get_public_key_registered() is False
+
+    def test_set_true_and_get(self, temp_credentials_dir):
+        credentials.set_public_key_registered(True)
+        assert credentials.get_public_key_registered() is True
+
+    def test_set_false_and_get(self, temp_credentials_dir):
+        credentials.set_public_key_registered(True)
+        credentials.set_public_key_registered(False)
+        assert credentials.get_public_key_registered() is False
+
+    def test_preserves_other_credentials(self, temp_credentials_dir):
+        temp_credentials_dir.write_text(json.dumps({"jwt": "my_jwt"}))
+        credentials.set_public_key_registered(True)
+        data = json.loads(temp_credentials_dir.read_text())
+        assert data["jwt"] == "my_jwt"
+        assert data["public_key_registered"] is True
+
+    def test_save_private_key_resets_flag(self, temp_credentials_dir):
+        credentials.set_public_key_registered(True)
+        assert credentials.get_public_key_registered() is True
+        credentials.save_private_key_b64("new_key_b64")
+        assert credentials.get_public_key_registered() is False

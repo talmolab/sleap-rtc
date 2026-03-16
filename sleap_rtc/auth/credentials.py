@@ -357,13 +357,39 @@ def get_private_key_b64() -> Optional[str]:
 def save_private_key_b64(private_key_b64: str) -> None:
     """Save an Ed25519 private key (base64-encoded) to credentials.
 
+    Also resets ``public_key_registered`` to False since the new key needs
+    registration with the server.
+
     Args:
         private_key_b64: URL-safe base64-encoded private key bytes.
     """
     creds = get_credentials()
     creds["private_key"] = private_key_b64
+    creds["public_key_registered"] = False
     save_credentials(creds)
     logger.debug("Saved private key to credentials")
+
+
+def get_public_key_registered() -> bool:
+    """Check if the local Ed25519 public key has been registered with the server.
+
+    Returns:
+        True if registered, False if not registered or unknown.
+    """
+    creds = get_credentials()
+    return creds.get("public_key_registered", False)
+
+
+def set_public_key_registered(value: bool) -> None:
+    """Mark whether the local Ed25519 public key is registered with the server.
+
+    Args:
+        value: True if registered, False if not.
+    """
+    creds = get_credentials()
+    creds["public_key_registered"] = value
+    save_credentials(creds)
+    logger.debug(f"Set public_key_registered = {value}")
 
 
 def remove_room_secret(room_id: str) -> bool:
