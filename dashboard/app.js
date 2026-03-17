@@ -155,6 +155,17 @@ class SleapRTCDashboard {
     // =========================================================================
 
     init() {
+        // DEBUG: intercept lucide.createIcons to trace unscoped calls that reset ALL icon SVGs
+        if (typeof lucide !== 'undefined') {
+            const _origCreateIcons = lucide.createIcons.bind(lucide);
+            lucide.createIcons = function(opts) {
+                if (!opts?.nodes) {
+                    console.warn('[DEBUG-lucide] Unscoped createIcons() — resets all SVGs including modal spinner\n', new Error().stack);
+                }
+                return _origCreateIcons(opts);
+            };
+        }
+
         // Load stored credentials
         this.loadStoredCredentials();
 
@@ -1714,17 +1725,18 @@ class SleapRTCDashboard {
                 const sleapNn = props.sleap_nn_version ? `sleap-nn ${props.sleap_nn_version}` : '';
                 const specs = [gpuModel, gpuMem, cuda, sleapNn].filter(Boolean).join(' \u00B7 ');
 
-                const status = props.status || 'available';
+                const serverStatus = props.status || 'available';
+                // Check local activeJobs first — server may report available even while training
+                const activeJob = Array.from(this.activeJobs.values()).find(
+                    j => j.workerId === worker.peer_id && j.roomId === roomId &&
+                         j.status !== 'complete' && j.status !== 'failed' && j.status !== 'cancelled'
+                );
+                const status = activeJob ? 'busy' : serverStatus;
+                console.log(`[DEBUG-workerStatus] WM worker=${worker.peer_id} server=${serverStatus} activeJob=${activeJob?.jobId?.slice(0,8) ?? 'none'} → effective=${status}`);
                 const statusClass = status === 'busy' ? 'busy' : 'available';
                 const statusText = status === 'busy' ? 'Busy' : 'Idle';
 
                 const isBusy = status === 'busy' || status === 'reserved';
-                const activeJob = isBusy
-                    ? Array.from(this.activeJobs.values()).find(
-                        j => j.workerId === worker.peer_id && j.roomId === roomId &&
-                             j.status !== 'complete' && j.status !== 'failed'
-                      )
-                    : null;
                 const busyClickable = activeJob ? 'busy-clickable' : '';
                 const clickHandler = activeJob
                     ? `onclick="app.hideModal('workers-modal');app.reopenJobModal('${activeJob.jobId}')"`
@@ -2377,6 +2389,11 @@ class SleapRTCDashboard {
         const container = document.getElementById('sj-worker-list');
         if (!container) return;
 
+        // DEBUG: log activeJobs state so we can verify worker status derivation
+        console.log('[DEBUG-workerStatus] _sjRenderWorkerList roomId=%s activeJobs:', this._sjRoomId,
+            Array.from(this.activeJobs.entries()).map(([id, j]) =>
+                `${id.slice(0,8)} worker=${j.workerId} room=${j.roomId} status=${j.status}`));
+
         const workers = this.roomWorkers[this._sjRoomId]?.workers ?? [];
         if (workers.length === 0) {
             container.innerHTML = '<p class="text-muted">No workers connected to this room.</p>';
@@ -2385,30 +2402,32 @@ class SleapRTCDashboard {
 
         container.innerHTML = workers.map(worker => {
             const props = worker.properties ?? {};
-            const status = props.status ?? 'available';
+            const serverStatus = props.status ?? 'available';
             const gpuModel = props.gpu_model || 'Unknown GPU';
             const gpuMem = props.gpu_memory_mb ? `${Math.round(props.gpu_memory_mb / 1024)} GB` : '';
             const cuda = props.cuda_version ? `CUDA ${props.cuda_version}` : '';
             const sleapNnVersion = props.sleap_nn_version ? `sleap-nn ${props.sleap_nn_version}` : '';
+            const specs = [gpuModel, gpuMem, cuda, sleapNnVersion].filter(Boolean).join(' · ');
+
+            // Check local activeJobs first — server may report available even while training
+            const activeJob = Array.from(this.activeJobs.values()).find(
+                j => j.workerId === worker.peer_id && j.roomId === this._sjRoomId &&
+                     j.status !== 'complete' && j.status !== 'failed' && j.status !== 'cancelled'
+            );
             // status is one of: available, busy, reserved, maintenance
+            const status = activeJob ? 'busy' : serverStatus;
+            console.log(`[DEBUG-workerStatus] SJ worker=${worker.peer_id} server=${serverStatus} activeJob=${activeJob?.jobId?.slice(0,8) ?? 'none'} → effective=${status}`);
             const isAvailable = status === 'available';
             const disabledClass = isAvailable ? '' : ' disabled';
             const clickHandler = isAvailable
                 ? `onclick="app.sjSelectWorker('${worker.peer_id}')"`
                 : '';
-            const specs = [gpuModel, gpuMem, cuda, sleapNnVersion].filter(Boolean).join(' · ');
-
-            const activeJob = !isAvailable
-                ? Array.from(this.activeJobs.values()).find(
-                    j => j.workerId === worker.peer_id && j.roomId === this._sjRoomId &&
-                         j.status !== 'complete' && j.status !== 'failed'
-                  )
-                : null;
             const busyLabel = activeJob
                 ? `<span class="sj-busy-label">Training ${activeJob.modelType}${activeJob.lastEpoch > 0 ? ' (Epoch ' + activeJob.lastEpoch + ')' : ''}</span>`
                 : '';
 
-            return `<div class="sj-worker-row${disabledClass}" data-peer-id="${worker.peer_id}" ${clickHandler}>
+            const selectedClass = worker.peer_id === this._sjWorkerId ? ' selected' : '';
+            return `<div class="sj-worker-row${disabledClass}${selectedClass}" data-peer-id="${worker.peer_id}" ${clickHandler}>
                 <div class="sj-worker-info">
                     <span class="sj-worker-name">${worker.worker_name ?? worker.peer_id}</span>
                     <span class="sj-worker-specs">${specs}</span>
@@ -2479,6 +2498,11 @@ class SleapRTCDashboard {
 
         // Reconnect SSE for live updates
         if (job.status !== 'complete' && job.status !== 'failed' && job.status !== 'cancelled') {
+            // Close background SSE first to prevent duplicate event handlers
+            if (job.sseConnection) {
+                job.sseConnection.close();
+                job.sseConnection = null;
+            }
             this._sjJobSSE = this.sseConnect(jobId);
             this._sjJobSSE
                 .on('status', (data) => this._sjHandleJobStatus(data))
@@ -2631,7 +2655,9 @@ class SleapRTCDashboard {
             }
         }).join('');
 
-        if (typeof lucide !== 'undefined') lucide.createIcons();
+        if (typeof lucide !== 'undefined') {
+            lucide.createIcons({ nodes: Array.from(badgeContainer.querySelectorAll('[data-lucide]')) });
+        }
     }
 
     dismissJobBadge(jobId) {
@@ -2684,7 +2710,9 @@ class SleapRTCDashboard {
         const text = count === 0 ? '0 connected' : `${count} connected`;
         badge.innerHTML = `<i data-lucide="${count === 0 ? 'zap-off' : 'zap'}"></i> ${text}`;
         badge.className = `worker-count-badge ${count === 0 ? 'offline' : ''}`;
-        if (typeof lucide !== 'undefined') lucide.createIcons();
+        if (typeof lucide !== 'undefined') {
+            lucide.createIcons({ nodes: Array.from(badge.querySelectorAll('[data-lucide]')) });
+        }
     }
 
     _checkStaleJobs(roomId) {
@@ -2692,6 +2720,8 @@ class SleapRTCDashboard {
         for (const [jobId, job] of this.activeJobs) {
             if (job.roomId !== roomId) continue;
             if (job.status === 'complete' || job.status === 'failed' || job.status === 'cancelled') continue;
+            // If SSE is active, trust it to report completion — don't override with stale heuristic
+            if (job.sseConnection) continue;
 
             const worker = workers.find(w => w.peer_id === job.workerId);
             const workerStatus = worker?.properties?.status || 'unknown';

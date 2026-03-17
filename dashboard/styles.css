@@ -2439,6 +2439,7 @@ body::before {
     color: var(--text-secondary);
     text-align: left;
     min-height: 0;
+    max-height: 360px;
 }
 
 .sj-training-log .log-line {
