@@ -745,6 +745,8 @@ class SleapRTCDashboard {
             this.rooms = data.rooms || [];
             this.renderRooms();
             this.startWorkerPolling();
+            // Reconnect SSE for any active jobs restored from sessionStorage
+            this._reconnectActiveJobs();
             this.updateCounts();
             // Load live workers for all rooms (non-blocking, same pattern as token workers)
             this.loadAllRoomWorkers().then(() => {
@@ -2656,6 +2658,51 @@ class SleapRTCDashboard {
                 this._updateRoomBadges(roomId);
             }
         }
+    }
+
+    _reconnectActiveJobs() {
+        for (const [jobId, job] of this.activeJobs) {
+            if (job.status === 'complete' || job.status === 'failed' || job.status === 'cancelled') continue;
+
+            // Connect SSE in background (no modal open)
+            const sse = this.sseConnect(jobId);
+            sse.on('status', (data) => this._backgroundJobStatus(jobId, data))
+               .on('job_status', (data) => this._backgroundJobStatus(jobId, data))
+               .on('job_progress', (data) => this._backgroundJobProgress(jobId, data))
+               .on('epoch', (data) => this._backgroundJobEpoch(jobId, data));
+            job.sseConnection = sse;
+        }
+    }
+
+    _backgroundJobStatus(jobId, data) {
+        const job = this.activeJobs.get(jobId);
+        if (!job) return;
+        job.status = data.status;
+        this._persistActiveJobs();
+        this._updateRoomBadges(job.roomId);
+    }
+
+    _backgroundJobEpoch(jobId, data) {
+        const job = this.activeJobs.get(jobId);
+        if (!job) return;
+        if (data.epoch != null) job.lastEpoch = data.epoch;
+        if (data.loss != null) job.lastLoss = Number(data.loss);
+        if (data.wandb_url) job.wandbUrl = data.wandb_url;
+        this._persistActiveJobs();
+        this._updateRoomBadges(job.roomId);
+    }
+
+    _backgroundJobProgress(jobId, data) {
+        const job = this.activeJobs.get(jobId);
+        if (!job) return;
+        if (data.event === 'epoch_end' && data.epoch != null) {
+            job.lastEpoch = data.epoch;
+            const logs = data.logs || {};
+            if (logs['train/loss'] != null) job.lastLoss = Number(logs['train/loss']);
+        }
+        if (data.wandb_url && !job.wandbUrl) job.wandbUrl = data.wandb_url;
+        this._persistActiveJobs();
+        this._updateRoomBadges(job.roomId);
     }
 
     // ── Task 5: YAML config upload ────────────────────────────────────────────
