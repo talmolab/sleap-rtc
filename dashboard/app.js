@@ -2636,32 +2636,22 @@ class SleapRTCDashboard {
             return;
         }
 
-        badgeContainer.innerHTML = jobs.map(job => {
+        // Only show badges for terminal jobs (complete/failed)
+        const terminalJobs = jobs.filter(j => j.status === 'complete' || j.status === 'failed' || j.status === 'cancelled');
+        if (terminalJobs.length === 0) {
+            badgeContainer.innerHTML = '';
+            return;
+        }
+
+        badgeContainer.innerHTML = terminalJobs.map(job => {
+            const name = job.workerName || job.workerId;
             if (job.status === 'complete') {
-                return `<span style="display:flex;align-items:center;gap:2px;">
-                    <button class="btn btn-training-complete btn-sm" onclick="app.reopenJobModal('${job.jobId}')">
-                        <i data-lucide="check-circle"></i> Job Complete
-                    </button>
-                    <button class="btn-badge-dismiss" title="Dismiss" onclick="event.stopPropagation();app.dismissJobBadge('${job.jobId}')">
-                        <i data-lucide="x"></i>
-                    </button>
-                </span>`;
-            } else if (job.status === 'failed' || job.status === 'cancelled') {
-                return `<span style="display:flex;align-items:center;gap:2px;">
-                    <button class="btn btn-training-failed btn-sm" onclick="app.reopenJobModal('${job.jobId}')">
-                        <i data-lucide="x-circle"></i> Training Failed
-                    </button>
-                    <button class="btn-badge-dismiss" title="Dismiss" onclick="event.stopPropagation();app.dismissJobBadge('${job.jobId}')">
-                        <i data-lucide="x"></i>
-                    </button>
-                </span>`;
+                return `<button class="btn btn-training-complete btn-sm" onclick="event.stopPropagation();app.dismissJobBadge('${job.jobId}')">
+                    Worker ${name} job finished! <i data-lucide="x" style="width:14px;height:14px;margin-left:4px"></i>
+                </button>`;
             } else {
-                const epochText = job.lastEpoch > 0
-                    ? ` — Epoch ${job.lastEpoch}${job.maxEpochs ? ' / ' + job.maxEpochs : ''}`
-                    : '';
-                return `<button class="btn btn-training-badge btn-sm" onclick="app.reopenJobModal('${job.jobId}')">
-                    <i data-lucide="loader-2" style="animation:spin 1.5s linear infinite"></i>
-                    Training ${job.modelType}${epochText}
+                return `<button class="btn btn-training-failed btn-sm" onclick="event.stopPropagation();app.dismissJobBadge('${job.jobId}')">
+                    Worker ${name} job failed <i data-lucide="x" style="width:14px;height:14px;margin-left:4px"></i>
                 </button>`;
             }
         }).join('');
