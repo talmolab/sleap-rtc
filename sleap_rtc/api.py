@@ -13,8 +13,13 @@ Example usage:
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
+
+import requests
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from typing import Callable
@@ -364,6 +369,75 @@ def get_logged_in_user() -> User | None:
     )
 
 
+def _ensure_keypair_registered(
+    auth_token: str,
+    device_name: str = "gui",
+) -> None:
+    """Ensure an Ed25519 keypair exists locally and is registered with the server.
+
+    This is idempotent and safe to call on every login. It will:
+    1. Generate a new Ed25519 keypair if none exists locally.
+    2. Register the public key with the signaling server if not yet registered.
+
+    Does not raise on failure — registration is retried on the next login.
+
+    Args:
+        auth_token: Bearer token (JWT or account key) for the server request.
+        device_name: Label for this key on the server (e.g., "gui", "cli").
+    """
+    from sleap_rtc.auth.credentials import (
+        get_private_key_b64,
+        get_public_key_registered,
+        save_private_key_b64,
+        set_public_key_registered,
+    )
+    from sleap_rtc.auth.keypair import (
+        generate_keypair,
+        private_key_from_b64,
+        private_key_to_b64,
+        public_key_to_b64,
+    )
+    from sleap_rtc.config import get_config
+
+    # Step 1: Ensure local keypair exists
+    pub_b64: str | None = None
+    priv_b64 = get_private_key_b64()
+    if priv_b64 is None:
+        private_key, public_key = generate_keypair()
+        priv_b64 = private_key_to_b64(private_key)
+        pub_b64 = public_key_to_b64(public_key)
+        save_private_key_b64(priv_b64)
+        logger.info("Generated new Ed25519 keypair for P2P authentication")
+
+    # Step 2: Register public key with server (if not already done)
+    if get_public_key_registered():
+        return
+
+    # Derive public key from existing private key if we didn't just generate it
+    if pub_b64 is None:
+        private_key = private_key_from_b64(priv_b64)
+        pub_b64 = public_key_to_b64(private_key.public_key())
+
+    try:
+        config = get_config()
+        resp = requests.post(
+            f"{config.get_http_url()}/api/auth/public-keys",
+            headers={"Authorization": f"Bearer {auth_token}"},
+            json={"public_key": pub_b64, "device_name": device_name},
+            timeout=10,
+        )
+        if resp.ok:
+            set_public_key_registered(True)
+            logger.info("Public key registered with server")
+        else:
+            logger.warning(
+                f"Public key registration failed ({resp.status_code}), "
+                "will retry on next login"
+            )
+    except Exception as e:
+        logger.warning(f"Public key registration failed: {e}, will retry on next login")
+
+
 def login(
     timeout: int = 120,
     on_url_ready: Callable[[str], None] | None = None,
@@ -371,7 +445,8 @@ def login(
     """Initiate the login flow via browser-based OAuth.
 
     Opens the default browser to the authentication page and waits for
-    the user to complete authentication.
+    the user to complete authentication. After saving the JWT, ensures
+    an Ed25519 keypair exists and is registered for P2P authentication.
 
     Args:
         timeout: Maximum time to wait for authentication in seconds.
@@ -390,11 +465,21 @@ def login(
     try:
         result = github_login(timeout=timeout, on_url_ready=on_url_ready, silent=True)
         save_jwt(result["jwt"], result["user"])
+
+        # Ensure Ed25519 keypair exists and is registered for P2P auth.
+        # Non-fatal: if registration fails, it will retry on next login.
+        try:
+            _ensure_keypair_registered(auth_token=result["jwt"])
+        except Exception:
+            logger.warning("Keypair registration failed, will retry on next login")
+
         return User(
             id=result["user"].get("id", ""),
             username=result["user"].get("username", ""),
             avatar_url=result["user"].get("avatar_url"),
         )
+    except AuthenticationError:
+        raise
     except Exception as e:
         raise AuthenticationError(f"Login failed: {e}") from e
 

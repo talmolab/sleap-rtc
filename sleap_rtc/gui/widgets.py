@@ -309,66 +309,73 @@ class WorkerSetupDialog(QDialog):
         step1_layout.addWidget(install_cmd)
         layout.addLayout(step1_layout)
 
-        # Step 2: Login and register mount path
+        # Step 2: Set up an account key
         step2_layout = QVBoxLayout()
-        step2_label = QLabel("2. Login and register your data mount path:")
+        step2_label = QLabel(
+            "2. Set up an account key (create in the Dashboard "
+            "<b>Account Keys</b> tab, or via CLI):"
+        )
+        step2_label.setWordWrap(True)
         step2_layout.addWidget(step2_label)
 
-        login_cmd = QLabel("   <code>sleap-rtc login</code>")
-        login_cmd.setTextFormat(Qt.RichText)
-        login_cmd.setStyleSheet("background-color: #f0f0f0; padding: 4px;")
-        login_cmd.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        step2_layout.addWidget(login_cmd)
+        key_new_cmd = QLabel(
+            "   <code>sleap-rtc login</code> then "
+            "<code>sleap-rtc key create --save</code>"
+            "&nbsp;&nbsp;<span style='color:#666;'>(new users)</span>"
+        )
+        key_new_cmd.setTextFormat(Qt.RichText)
+        key_new_cmd.setStyleSheet("background-color: #f0f0f0; padding: 4px;")
+        key_new_cmd.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        key_new_cmd.setWordWrap(True)
+        step2_layout.addWidget(key_new_cmd)
+
+        key_existing_cmd = QLabel(
+            "   <code>sleap-rtc key use slp_acct_xxx...</code>"
+            "&nbsp;&nbsp;<span style='color:#666;'>"
+            "(if you already have a key)</span>"
+        )
+        key_existing_cmd.setTextFormat(Qt.RichText)
+        key_existing_cmd.setStyleSheet("background-color: #f0f0f0; padding: 4px;")
+        key_existing_cmd.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        key_existing_cmd.setWordWrap(True)
+        step2_layout.addWidget(key_existing_cmd)
 
         mount_desc = QLabel(
-            "   Then register the path where your training data is mounted:"
+            "   Register the directories where your training data is stored:"
         )
         mount_desc.setWordWrap(True)
         step2_layout.addWidget(mount_desc)
 
         mount_cmd = QLabel(
-            "   <code>sleap-rtc config add-mount /path/to/your/data/ &quot;Your Mount Name&quot;</code>"
+            "   <code>sleap-rtc config add-mount /path/to/your/data/"
+            " &quot;Your Mount Name&quot; --global</code>"
         )
         mount_cmd.setTextFormat(Qt.RichText)
         mount_cmd.setStyleSheet("background-color: #f0f0f0; padding: 4px;")
         mount_cmd.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        mount_cmd.setWordWrap(True)
         step2_layout.addWidget(mount_cmd)
         layout.addLayout(step2_layout)
 
-        # Step 3: Create or save an account key
+        # Step 3: Start the worker
         step3_layout = QVBoxLayout()
-        step3_label = QLabel("3. Create and save an account key:")
+        step3_label = QLabel("3. Start the worker:")
         step3_layout.addWidget(step3_label)
 
-        key_cmd = QLabel(
-            "   <code>sleap-rtc key create --save</code>"
-            "&nbsp;&nbsp;<span style='color:#666;'>"
-            "(or: <code>sleap-rtc key use slp_acct_xxx...</code> if you have one)</span>"
-        )
-        key_cmd.setTextFormat(Qt.RichText)
-        key_cmd.setStyleSheet("background-color: #f0f0f0; padding: 4px;")
-        key_cmd.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        key_cmd.setWordWrap(True)
-        step3_layout.addWidget(key_cmd)
-        layout.addLayout(step3_layout)
-
-        # Step 4: Start the worker
-        step4_layout = QVBoxLayout()
-        step4_label = QLabel("4. Start the worker:")
-        step4_layout.addWidget(step4_label)
-
-        # Build worker command using account key pattern
+        # Build worker command, substituting room_id if available
+        room_arg = self._room_id if self._room_id else "ROOM_ID"
         worker_cmd_str = (
-            'sleap-rtc worker --account-key YOUR_ACCOUNT_KEY --name "My GPU Server"'
+            f"sleap-rtc worker --account-key slp_acct_xxx..."
+            f' --room {room_arg} --name "My GPU Server"'
         )
         self._worker_cmd = QLabel(f"   <code>{worker_cmd_str}</code>")
         self._worker_cmd.setTextFormat(Qt.RichText)
         self._worker_cmd.setStyleSheet("background-color: #f0f0f0; padding: 4px;")
         self._worker_cmd.setWordWrap(True)
         self._worker_cmd.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        step4_layout.addWidget(self._worker_cmd)
+        step3_layout.addWidget(self._worker_cmd)
 
-        layout.addLayout(step4_layout)
+        layout.addLayout(step3_layout)
 
         layout.addStretch()
 
@@ -399,23 +406,26 @@ class WorkerSetupDialog(QDialog):
 
     def _on_copy_commands(self):
         """Copy setup commands to clipboard."""
+        room_arg = self._room_id if self._room_id else "ROOM_ID"
         worker_cmd = (
-            'sleap-rtc worker --account-key YOUR_ACCOUNT_KEY --name "My GPU Server"'
+            f"sleap-rtc worker --account-key slp_acct_xxx..."
+            f' --room {room_arg} --name "My GPU Server"'
         )
 
-        commands = f"""# Install sleap-rtc (one time)
+        commands = f"""# Step 1: Install sleap-rtc (one time)
 uv tool install --python 3.11 sleap-rtc --with "sleap-nn[torch]" --with-executables-from sleap-nn --torch-backend auto
 
-# Login to sleap-rtc (generates keypair automatically)
+# Step 2: Set up an account key
+# Option A — new users:
 sleap-rtc login
-
-# Register the path where your training data is mounted
-sleap-rtc config add-mount /path/to/your/data/ "Your Mount Name"
-
-# Create and save an account key (or: sleap-rtc key use slp_acct_xxx...)
 sleap-rtc key create --save
+# Option B — if you already have a key:
+# sleap-rtc key use slp_acct_xxx...
 
-# Start the worker
+# Register directories where your training data is stored
+sleap-rtc config add-mount /path/to/your/data/ "Your Mount Name" --global
+
+# Step 3: Start the worker
 {worker_cmd}
 """
         clipboard = QApplication.clipboard()

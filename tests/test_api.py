@@ -17,6 +17,7 @@ from sleap_rtc.api import (
     logout,
     list_rooms,
     list_workers,
+    _ensure_keypair_registered,
 )
 
 
@@ -150,9 +151,10 @@ class TestLogin:
         mock_result = {"jwt": "test-jwt", "user": mock_user_data}
         with patch("sleap_rtc.auth.github.github_login", return_value=mock_result):
             with patch("sleap_rtc.auth.credentials.save_jwt") as mock_save:
-                user = login()
-                assert user.username == "testuser"
-                mock_save.assert_called_once_with("test-jwt", mock_user_data)
+                with patch("sleap_rtc.api._ensure_keypair_registered"):
+                    user = login()
+                    assert user.username == "testuser"
+                    mock_save.assert_called_once_with("test-jwt", mock_user_data)
 
     def test_login_with_callback(self, mock_user_data):
         """Should pass callback to github_login."""
@@ -161,10 +163,11 @@ class TestLogin:
 
         with patch("sleap_rtc.auth.github.github_login", return_value=mock_result) as mock_login:
             with patch("sleap_rtc.auth.credentials.save_jwt"):
-                login(on_url_ready=callback)
-                mock_login.assert_called_once()
-                call_kwargs = mock_login.call_args[1]
-                assert call_kwargs["on_url_ready"] == callback
+                with patch("sleap_rtc.api._ensure_keypair_registered"):
+                    login(on_url_ready=callback)
+                    mock_login.assert_called_once()
+                    call_kwargs = mock_login.call_args[1]
+                    assert call_kwargs["on_url_ready"] == callback
 
     def test_login_failure_raises_auth_error(self):
         """Should raise AuthenticationError on failure."""
@@ -177,9 +180,133 @@ class TestLogin:
         mock_result = {"jwt": "test-jwt", "user": mock_user_data}
         with patch("sleap_rtc.auth.github.github_login", return_value=mock_result) as mock_login:
             with patch("sleap_rtc.auth.credentials.save_jwt"):
-                login(timeout=60)
-                call_kwargs = mock_login.call_args[1]
-                assert call_kwargs["timeout"] == 60
+                with patch("sleap_rtc.api._ensure_keypair_registered"):
+                    login(timeout=60)
+                    call_kwargs = mock_login.call_args[1]
+                    assert call_kwargs["timeout"] == 60
+
+    def test_login_calls_ensure_keypair(self, mock_user_data):
+        """Should call _ensure_keypair_registered after saving JWT."""
+        mock_result = {"jwt": "test-jwt", "user": mock_user_data}
+        with patch("sleap_rtc.auth.github.github_login", return_value=mock_result):
+            with patch("sleap_rtc.auth.credentials.save_jwt"):
+                with patch("sleap_rtc.api._ensure_keypair_registered") as mock_ensure:
+                    login()
+                    mock_ensure.assert_called_once_with(auth_token="test-jwt")
+
+    def test_login_succeeds_even_if_keypair_registration_fails(self, mock_user_data):
+        """Login should succeed even if keypair registration raises."""
+        mock_result = {"jwt": "test-jwt", "user": mock_user_data}
+        with patch("sleap_rtc.auth.github.github_login", return_value=mock_result):
+            with patch("sleap_rtc.auth.credentials.save_jwt"):
+                with patch("sleap_rtc.api._ensure_keypair_registered", side_effect=Exception("boom")):
+                    user = login()
+                    assert user.username == "testuser"
+
+
+# =============================================================================
+# _ensure_keypair_registered() Tests
+# =============================================================================
+
+
+class TestEnsureKeypairRegistered:
+    """Tests for _ensure_keypair_registered() helper."""
+
+    def test_generates_keypair_when_none_exists(self):
+        """Should generate and save a new keypair if private key is missing."""
+        with patch("sleap_rtc.auth.credentials.get_private_key_b64", return_value=None):
+            with patch("sleap_rtc.auth.credentials.save_private_key_b64") as mock_save:
+                with patch("sleap_rtc.auth.credentials.get_public_key_registered", return_value=False):
+                    with patch("sleap_rtc.auth.credentials.set_public_key_registered"):
+                        with patch("sleap_rtc.api.requests") as mock_requests:
+                            mock_requests.post.return_value = MagicMock(ok=True)
+                            _ensure_keypair_registered(auth_token="test-jwt")
+                            mock_save.assert_called_once()
+                            saved_b64 = mock_save.call_args[0][0]
+                            assert isinstance(saved_b64, str)
+                            assert len(saved_b64) > 0
+
+    def test_skips_generation_when_keypair_exists(self):
+        """Should not generate a new keypair if private key already exists."""
+        with patch("sleap_rtc.auth.credentials.get_private_key_b64", return_value="existing_key_b64"):
+            with patch("sleap_rtc.auth.credentials.save_private_key_b64") as mock_save:
+                with patch("sleap_rtc.auth.credentials.get_public_key_registered", return_value=True):
+                    _ensure_keypair_registered(auth_token="test-jwt")
+                    mock_save.assert_not_called()
+
+    def test_skips_registration_when_already_registered(self):
+        """Should not POST to server if public key is already registered."""
+        with patch("sleap_rtc.auth.credentials.get_private_key_b64", return_value="existing_key_b64"):
+            with patch("sleap_rtc.auth.credentials.get_public_key_registered", return_value=True):
+                with patch("sleap_rtc.api.requests") as mock_requests:
+                    _ensure_keypair_registered(auth_token="test-jwt")
+                    mock_requests.post.assert_not_called()
+
+    def test_registers_public_key_when_not_registered(self, mock_config):
+        """Should POST public key to server when not yet registered."""
+        from sleap_rtc.auth.keypair import generate_keypair, private_key_to_b64
+        priv, pub = generate_keypair()
+        priv_b64 = private_key_to_b64(priv)
+
+        with patch("sleap_rtc.auth.credentials.get_private_key_b64", return_value=priv_b64):
+            with patch("sleap_rtc.auth.credentials.get_public_key_registered", return_value=False):
+                with patch("sleap_rtc.auth.credentials.set_public_key_registered") as mock_set:
+                    with patch("sleap_rtc.config.get_config", return_value=mock_config):
+                        with patch("sleap_rtc.api.requests") as mock_requests:
+                            mock_requests.post.return_value = MagicMock(ok=True)
+                            _ensure_keypair_registered(auth_token="test-jwt")
+                            mock_requests.post.assert_called_once()
+                            call_kwargs = mock_requests.post.call_args
+                            assert "/api/auth/public-keys" in call_kwargs[0][0]
+                            assert call_kwargs[1]["json"]["device_name"] == "gui"
+                            assert "public_key" in call_kwargs[1]["json"]
+                            mock_set.assert_called_once_with(True)
+
+    def test_does_not_raise_on_registration_failure(self, mock_config):
+        """Should log warning but not raise if server registration fails."""
+        from sleap_rtc.auth.keypair import generate_keypair, private_key_to_b64
+        priv, pub = generate_keypair()
+        priv_b64 = private_key_to_b64(priv)
+
+        with patch("sleap_rtc.auth.credentials.get_private_key_b64", return_value=priv_b64):
+            with patch("sleap_rtc.auth.credentials.get_public_key_registered", return_value=False):
+                with patch("sleap_rtc.auth.credentials.set_public_key_registered") as mock_set:
+                    with patch("sleap_rtc.config.get_config", return_value=mock_config):
+                        with patch("sleap_rtc.api.requests") as mock_requests:
+                            mock_requests.post.side_effect = ConnectionError("Server down")
+                            _ensure_keypair_registered(auth_token="test-jwt")
+                            mock_set.assert_not_called()
+
+    def test_does_not_mark_registered_on_http_error(self, mock_config):
+        """Should not set flag if server returns non-OK status."""
+        from sleap_rtc.auth.keypair import generate_keypair, private_key_to_b64
+        priv, pub = generate_keypair()
+        priv_b64 = private_key_to_b64(priv)
+
+        with patch("sleap_rtc.auth.credentials.get_private_key_b64", return_value=priv_b64):
+            with patch("sleap_rtc.auth.credentials.get_public_key_registered", return_value=False):
+                with patch("sleap_rtc.auth.credentials.set_public_key_registered") as mock_set:
+                    with patch("sleap_rtc.config.get_config", return_value=mock_config):
+                        with patch("sleap_rtc.api.requests") as mock_requests:
+                            mock_requests.post.return_value = MagicMock(ok=False, status_code=500)
+                            _ensure_keypair_registered(auth_token="test-jwt")
+                            mock_set.assert_not_called()
+
+    def test_uses_custom_device_name(self, mock_config):
+        """Should pass device_name to server request."""
+        from sleap_rtc.auth.keypair import generate_keypair, private_key_to_b64
+        priv, pub = generate_keypair()
+        priv_b64 = private_key_to_b64(priv)
+
+        with patch("sleap_rtc.auth.credentials.get_private_key_b64", return_value=priv_b64):
+            with patch("sleap_rtc.auth.credentials.get_public_key_registered", return_value=False):
+                with patch("sleap_rtc.auth.credentials.set_public_key_registered"):
+                    with patch("sleap_rtc.config.get_config", return_value=mock_config):
+                        with patch("sleap_rtc.api.requests") as mock_requests:
+                            mock_requests.post.return_value = MagicMock(ok=True)
+                            _ensure_keypair_registered(auth_token="test-jwt", device_name="cli")
+                            call_kwargs = mock_requests.post.call_args
+                            assert call_kwargs[1]["json"]["device_name"] == "cli"
 
 
 # =============================================================================

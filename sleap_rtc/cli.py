@@ -162,19 +162,13 @@ def login(timeout):
     from sleap_rtc.auth.credentials import (
         get_account_key,
         get_private_key_b64,
+        get_public_key_registered,
         get_user,
         is_logged_in,
         save_account_key,
         save_jwt,
-        save_private_key_b64,
     )
     from sleap_rtc.auth.github import github_login
-    from sleap_rtc.auth.keypair import (
-        generate_keypair,
-        private_key_to_b64,
-        public_key_to_b64,
-    )
-    from sleap_rtc.config import get_config
 
     if is_logged_in():
         user = get_user()
@@ -196,30 +190,17 @@ def login(timeout):
                 f"\nStore it as: export SLEAP_RTC_ACCOUNT_KEY={result['account_key']}"
             )
 
-        # Generate Ed25519 keypair if we don't have one yet
-        if not get_private_key_b64():
-            click.echo("\nGenerating Ed25519 keypair for P2P authentication...")
-            private_key, public_key = generate_keypair()
-            priv_b64 = private_key_to_b64(private_key)
-            pub_b64 = public_key_to_b64(public_key)
-            save_private_key_b64(priv_b64)
+        # Ensure Ed25519 keypair exists and is registered for P2P auth
+        from sleap_rtc.api import _ensure_keypair_registered
 
-            # Register public key with server
-            config = get_config()
-            auth = get_account_key() or result.get("jwt")
-            try:
-                resp = requests.post(
-                    f"{config.get_http_url()}/api/auth/public-keys",
-                    headers={"Authorization": f"Bearer {auth}"},
-                    json={"public_key": pub_b64, "device_name": "cli"},
-                    timeout=10,
-                )
-                if resp.status_code == 200:
-                    click.echo("Public key registered with server.")
-                else:
-                    click.echo(f"Warning: could not register public key: {resp.text}")
-            except Exception as e:
-                click.echo(f"Warning: could not register public key: {e}")
+        had_keypair = bool(get_private_key_b64())
+        had_registered = get_public_key_registered()
+        auth = get_account_key() or result.get("jwt")
+        _ensure_keypair_registered(auth_token=auth, device_name="cli")
+        if not had_keypair:
+            click.echo("Generated Ed25519 keypair for P2P authentication.")
+        if not had_registered and get_public_key_registered():
+            click.echo("Public key registered with server.")
 
         user = result["user"]
         click.echo(f"\nLogged in as {user.get('username', 'unknown')}")
@@ -726,13 +707,7 @@ def room_list(role_filter, sort, reverse, search):
         sleap-rtc room list --sort name
         sleap-rtc room list --search "lab"
     """
-    from sleap_rtc.auth.credentials import get_jwt
     from sleap_rtc.config import get_config
-
-    jwt_token = get_jwt()
-    if not jwt_token:
-        logger.error("Not logged in. Run: sleap-rtc login")
-        sys.exit(1)
 
     config = get_config()
     endpoint = f"{config.get_http_url()}/api/auth/rooms"
@@ -752,58 +727,48 @@ def room_list(role_filter, sort, reverse, search):
     if search:
         params["search"] = search
 
-    try:
-        response = requests.get(
-            endpoint,
-            headers={"Authorization": f"Bearer {jwt_token}"},
-            params=params,
-            timeout=30,
-        )
+    response = _key_request("GET", endpoint, params=params, timeout=30)
 
-        if response.status_code != 200:
-            error = response.json().get("error", response.text)
-            logger.error(f"Failed to list rooms: {error}")
-            sys.exit(1)
-
-        data = response.json()
-        rooms = data.get("rooms", [])
-
-        if not rooms:
-            click.echo("No rooms found")
-            click.echo("Create one with: sleap-rtc room create")
-            return
-
-        click.echo("")
-        click.echo(f"{'ROOM ID':<12} {'NAME':<16} {'ROLE':<8} {'EXPIRES':<20}")
-        click.echo("-" * 60)
-
-        for r in rooms:
-            room_id = r.get("room_id", "?")[:12]
-            name = (r.get("name") or room_id)[:16]
-            role = r.get("role", "?")[:8]
-
-            # Format expiration
-            expires_at = r.get("expires_at")
-            if expires_at:
-                expires_dt = datetime.fromtimestamp(expires_at)
-                now = datetime.now()
-                if expires_dt < now:
-                    expires_str = "EXPIRED"
-                elif (expires_dt - now).days > 0:
-                    expires_str = f"{(expires_dt - now).days}d left"
-                else:
-                    hours = (expires_dt - now).seconds // 3600
-                    expires_str = f"{hours}h left"
-            else:
-                expires_str = "Never"
-
-            click.echo(f"{room_id:<12} {name:<16} {role:<8} {expires_str:<20}")
-
-        click.echo("")
-
-    except requests.RequestException as e:
-        logger.error(f"Request failed: {e}")
+    if response.status_code != 200:
+        error = response.json().get("error", response.text)
+        logger.error(f"Failed to list rooms: {error}")
         sys.exit(1)
+
+    data = response.json()
+    rooms = data.get("rooms", [])
+
+    if not rooms:
+        click.echo("No rooms found")
+        click.echo("Create one with: sleap-rtc room create")
+        return
+
+    click.echo("")
+    click.echo(f"{'ROOM ID':<12} {'NAME':<16} {'ROLE':<8} {'EXPIRES':<20}")
+    click.echo("-" * 60)
+
+    for r in rooms:
+        room_id = r.get("room_id", "?")[:12]
+        name = (r.get("name") or room_id)[:16]
+        role = r.get("role", "?")[:8]
+
+        # Format expiration
+        expires_at = r.get("expires_at")
+        if expires_at:
+            expires_dt = datetime.fromtimestamp(expires_at)
+            now = datetime.now()
+            if expires_dt < now:
+                expires_str = "EXPIRED"
+            elif (expires_dt - now).days > 0:
+                expires_str = f"{(expires_dt - now).days}d left"
+            else:
+                hours = (expires_dt - now).seconds // 3600
+                expires_str = f"{hours}h left"
+        else:
+            expires_str = "Never"
+
+        click.echo(f"{room_id:<12} {name:<16} {role:<8} {expires_str:<20}")
+
+    click.echo("")
 
 
 @room.command(name="create")
@@ -830,13 +795,7 @@ def room_create(name, expires):
         sleap-rtc room create --name "my-training-room"
         sleap-rtc room create --name "persistent-room" --expires never
     """
-    from sleap_rtc.auth.credentials import get_jwt
     from sleap_rtc.config import get_config
-
-    jwt_token = get_jwt()
-    if not jwt_token:
-        logger.error("Not logged in. Run: sleap-rtc login")
-        sys.exit(1)
 
     config = get_config()
     endpoint = f"{config.get_http_url()}/api/auth/rooms"
@@ -849,44 +808,54 @@ def room_create(name, expires):
     if name:
         payload["name"] = name
 
-    try:
-        response = requests.post(
-            endpoint,
-            json=payload,
-            headers={"Authorization": f"Bearer {jwt_token}"},
-            timeout=30,
-        )
+    response = _key_request("POST", endpoint, json=payload, timeout=30)
 
-        if response.status_code != 200:
-            error = response.json().get("error", response.text)
-            logger.error(f"Failed to create room: {error}")
-            sys.exit(1)
-
-        data = response.json()
-
-        # Format expiration display
-        if data.get("expires_at"):
-            expires_dt = datetime.fromtimestamp(data["expires_at"])
-            expires_str = expires_dt.strftime("%Y-%m-%d %H:%M")
-        else:
-            expires_str = "Never"
-
-        click.echo("")
-        click.echo("Room created successfully!")
-        click.echo("")
-        click.echo(f"  Room ID:  {data['room_id']}")
-        click.echo(f"  Expires:  {expires_str}")
-        click.echo("")
-        click.echo("Next steps:")
-        click.echo(
-            f"  1. Create a worker token: sleap-rtc token create --room {data['room_id']} --name my-worker"
-        )
-        click.echo(f"  2. Start a worker with the token")
-        click.echo("")
-
-    except requests.RequestException as e:
-        logger.error(f"Request failed: {e}")
+    if response.status_code != 200:
+        error = response.json().get("error", response.text)
+        logger.error(f"Failed to create room: {error}")
         sys.exit(1)
+
+    data = response.json()
+
+    # Format expiration display
+    if data.get("expires_at"):
+        expires_dt = datetime.fromtimestamp(data["expires_at"])
+        expires_str = expires_dt.strftime("%Y-%m-%d %H:%M")
+    else:
+        expires_str = "Never"
+
+    click.echo("")
+    click.echo("Room created successfully!")
+    click.echo("")
+    click.echo(f"  Room ID:  {data['room_id']}")
+    click.echo(f"  Expires:  {expires_str}")
+
+    # Offer to set as default room
+    from sleap_rtc.auth.credentials import get_default_room, save_default_room
+
+    current_default = get_default_room()
+    if current_default is None:
+        # No default set — offer to make this the default
+        if click.confirm(
+            "\nSet this as your default room? "
+            "(workers will use it when --room is not specified)",
+            default=True,
+        ):
+            save_default_room(data["room_id"])
+            click.echo(f"Default room set to: {data['room_id']}")
+    elif current_default != data["room_id"]:
+        # Different default exists — offer to replace
+        if click.confirm(
+            f"\nReplace your current default room ({current_default}) with this one?"
+        ):
+            save_default_room(data["room_id"])
+            click.echo(f"Default room updated to: {data['room_id']}")
+
+    click.echo("")
+    click.echo("Next steps:")
+    click.echo(f"  1. Set up an account key: sleap-rtc key create --save")
+    click.echo(f'  2. Start a worker: sleap-rtc worker --name "My GPU Server"')
+    click.echo("")
 
 
 @room.command(name="info")
@@ -899,78 +868,67 @@ def room_info(room_id):
     Example:
         sleap-rtc room info abc123
     """
-    from sleap_rtc.auth.credentials import get_jwt
     from sleap_rtc.config import get_config
-
-    jwt_token = get_jwt()
-    if not jwt_token:
-        logger.error("Not logged in. Run: sleap-rtc login")
-        sys.exit(1)
 
     config = get_config()
     endpoint = f"{config.get_http_url()}/api/auth/rooms/{room_id}"
 
-    try:
-        response = requests.get(
-            endpoint,
-            headers={"Authorization": f"Bearer {jwt_token}"},
-            timeout=30,
+    response = _key_request("GET", endpoint, timeout=30)
+
+    if response.status_code != 200:
+        error = response.json().get(
+            "detail", response.json().get("error", response.text)
         )
-
-        if response.status_code != 200:
-            error = response.json().get(
-                "detail", response.json().get("error", response.text)
-            )
-            logger.error(f"Failed to get room info: {error}")
-            sys.exit(1)
-
-        data = response.json()
-
-        # Format expiration
-        expires_at = data.get("expires_at")
-        if expires_at:
-            expires_dt = datetime.fromtimestamp(expires_at)
-            now = datetime.now()
-            time_left = expires_dt - now
-
-            if time_left.total_seconds() < 0:
-                expires_str = f"{expires_dt.strftime('%Y-%m-%d %H:%M')} (EXPIRED)"
-            elif time_left.days > 0:
-                expires_str = f"{expires_dt.strftime('%Y-%m-%d %H:%M')} ({time_left.days} days left)"
-            elif time_left.seconds > 3600:
-                hours_left = time_left.seconds // 3600
-                expires_str = (
-                    f"{expires_dt.strftime('%Y-%m-%d %H:%M')} ({hours_left} hours left)"
-                )
-            else:
-                minutes_left = time_left.seconds // 60
-                expires_str = f"{expires_dt.strftime('%Y-%m-%d %H:%M')} ({minutes_left} minutes left)"
-        else:
-            expires_str = "Never"
-
-        click.echo("")
-        click.echo(f"Room: {data.get('name', room_id)}")
-        click.echo("")
-        click.echo(f"  Room ID:    {room_id}")
-        click.echo(f"  Your Role:  {data.get('role', 'unknown')}")
-        click.echo(f"  Expires:    {expires_str}")
-
-        # Show members if available
-        members = data.get("members", [])
-        if members:
-            click.echo("")
-            click.echo("  Members:")
-            for member in members:
-                role_icon = "👑" if member.get("role") == "owner" else "👤"
-                click.echo(
-                    f"    {role_icon} {member.get('username', member.get('user_id', 'unknown'))} ({member.get('role', 'member')})"
-                )
-
-        click.echo("")
-
-    except requests.RequestException as e:
-        logger.error(f"Request failed: {e}")
+        logger.error(f"Failed to get room info: {error}")
         sys.exit(1)
+
+    data = response.json()
+
+    # Format expiration
+    expires_at = data.get("expires_at")
+    if expires_at:
+        expires_dt = datetime.fromtimestamp(expires_at)
+        now = datetime.now()
+        time_left = expires_dt - now
+
+        if time_left.total_seconds() < 0:
+            expires_str = f"{expires_dt.strftime('%Y-%m-%d %H:%M')} (EXPIRED)"
+        elif time_left.days > 0:
+            expires_str = (
+                f"{expires_dt.strftime('%Y-%m-%d %H:%M')} ({time_left.days} days left)"
+            )
+        elif time_left.seconds > 3600:
+            hours_left = time_left.seconds // 3600
+            expires_str = (
+                f"{expires_dt.strftime('%Y-%m-%d %H:%M')} ({hours_left} hours left)"
+            )
+        else:
+            minutes_left = time_left.seconds // 60
+            expires_str = (
+                f"{expires_dt.strftime('%Y-%m-%d %H:%M')} ({minutes_left} minutes left)"
+            )
+    else:
+        expires_str = "Never"
+
+    click.echo("")
+    click.echo(f"Room: {data.get('name', room_id)}")
+    click.echo("")
+    click.echo(f"  Room ID:    {room_id}")
+    click.echo(f"  Your Role:  {data.get('role', 'unknown')}")
+    click.echo(f"  Expires:    {expires_str}")
+
+    # Show members if available
+    members = data.get("members", [])
+    if members:
+        click.echo("")
+        click.echo("  Members:")
+        for member in members:
+            role_icon = "👑" if member.get("role") == "owner" else "👤"
+            click.echo(
+                f"    {role_icon} {member.get('username', member.get('user_id', 'unknown'))} ({member.get('role', 'member')})"
+            )
+
+    click.echo("")
 
 
 @room.command(name="delete")
@@ -991,13 +949,7 @@ def room_delete(room_id, force):
         sleap-rtc room delete abc123
         sleap-rtc room delete abc123 --force
     """
-    from sleap_rtc.auth.credentials import get_jwt
     from sleap_rtc.config import get_config
-
-    jwt_token = get_jwt()
-    if not jwt_token:
-        logger.error("Not logged in. Run: sleap-rtc login")
-        sys.exit(1)
 
     if not force:
         if not click.confirm(
@@ -1009,25 +961,16 @@ def room_delete(room_id, force):
     config = get_config()
     endpoint = f"{config.get_http_url()}/api/auth/rooms/{room_id}"
 
-    try:
-        response = requests.delete(
-            endpoint,
-            headers={"Authorization": f"Bearer {jwt_token}"},
-            timeout=30,
+    response = _key_request("DELETE", endpoint, timeout=30)
+
+    if response.status_code != 200:
+        error = response.json().get(
+            "detail", response.json().get("error", response.text)
         )
-
-        if response.status_code != 200:
-            error = response.json().get(
-                "detail", response.json().get("error", response.text)
-            )
-            logger.error(f"Failed to delete room: {error}")
-            sys.exit(1)
-
-        click.echo(f"Room '{room_id}' deleted successfully")
-
-    except requests.RequestException as e:
-        logger.error(f"Request failed: {e}")
+        logger.error(f"Failed to delete room: {error}")
         sys.exit(1)
+
+    click.echo(f"Room '{room_id}' deleted successfully")
 
 
 @room.command(name="invite")
@@ -1041,44 +984,29 @@ def room_invite(room_id):
     Example:
         sleap-rtc room invite abc123
     """
-    from sleap_rtc.auth.credentials import get_jwt
     from sleap_rtc.config import get_config
-
-    jwt_token = get_jwt()
-    if not jwt_token:
-        logger.error("Not logged in. Run: sleap-rtc login")
-        sys.exit(1)
 
     config = get_config()
     endpoint = f"{config.get_http_url()}/api/auth/rooms/{room_id}/invite"
 
-    try:
-        response = requests.post(
-            endpoint,
-            headers={"Authorization": f"Bearer {jwt_token}"},
-            timeout=30,
-        )
+    response = _key_request("POST", endpoint, timeout=30)
 
-        if response.status_code != 200:
-            error = response.json().get("error", response.text)
-            logger.error(f"Failed to create invite: {error}")
-            sys.exit(1)
-
-        data = response.json()
-
-        click.echo("")
-        click.echo("Invite code created!")
-        click.echo("")
-        click.echo(f"  Code:    {data['invite_code']}")
-        click.echo(f"  Expires: {data.get('expires_at', 'in 24 hours')}")
-        click.echo("")
-        click.echo("Share this command with your collaborator:")
-        click.echo(f"  sleap-rtc room join --code {data['invite_code']}")
-        click.echo("")
-
-    except requests.RequestException as e:
-        logger.error(f"Request failed: {e}")
+    if response.status_code != 200:
+        error = response.json().get("error", response.text)
+        logger.error(f"Failed to create invite: {error}")
         sys.exit(1)
+
+    data = response.json()
+
+    click.echo("")
+    click.echo("Invite code created!")
+    click.echo("")
+    click.echo(f"  Code:    {data['invite_code']}")
+    click.echo(f"  Expires: {data.get('expires_at', 'in 24 hours')}")
+    click.echo("")
+    click.echo("Share this command with your collaborator:")
+    click.echo(f"  sleap-rtc room join --code {data['invite_code']}")
+    click.echo("")
 
 
 @room.command(name="create-secret")
@@ -1184,42 +1112,46 @@ def room_join(code):
     Example:
         sleap-rtc room join --code ABCD1234
     """
-    from sleap_rtc.auth.credentials import get_jwt
     from sleap_rtc.config import get_config
-
-    jwt_token = get_jwt()
-    if not jwt_token:
-        logger.error("Not logged in. Run: sleap-rtc login")
-        sys.exit(1)
 
     config = get_config()
     endpoint = f"{config.get_http_url()}/api/auth/rooms/join"
 
-    try:
-        response = requests.post(
-            endpoint,
-            json={"invite_code": code},
-            headers={"Authorization": f"Bearer {jwt_token}"},
-            timeout=30,
-        )
+    response = _key_request("POST", endpoint, json={"invite_code": code}, timeout=30)
 
-        if response.status_code != 200:
-            error = response.json().get("error", response.text)
-            logger.error(f"Failed to join room: {error}")
-            sys.exit(1)
-
-        data = response.json()
-
-        click.echo("")
-        click.echo("Successfully joined room!")
-        click.echo("")
-        click.echo(f"  Room ID: {data['room_id']}")
-        click.echo(f"  Role:    {data.get('role', 'member')}")
-        click.echo("")
-
-    except requests.RequestException as e:
-        logger.error(f"Request failed: {e}")
+    if response.status_code != 200:
+        error = response.json().get("error", response.text)
+        logger.error(f"Failed to join room: {error}")
         sys.exit(1)
+
+    data = response.json()
+
+    click.echo("")
+    click.echo("Successfully joined room!")
+    click.echo("")
+    click.echo(f"  Room ID: {data['room_id']}")
+    click.echo(f"  Role:    {data.get('role', 'member')}")
+
+    # Offer to set as default room
+    from sleap_rtc.auth.credentials import get_default_room, save_default_room
+
+    current_default = get_default_room()
+    if current_default is None:
+        if click.confirm(
+            "\nSet this as your default room? "
+            "(workers will use it when --room is not specified)",
+            default=True,
+        ):
+            save_default_room(data["room_id"])
+            click.echo(f"Default room set to: {data['room_id']}")
+    elif current_default != data["room_id"]:
+        if click.confirm(
+            f"\nReplace your current default room ({current_default}) with this one?"
+        ):
+            save_default_room(data["room_id"])
+            click.echo(f"Default room updated to: {data['room_id']}")
+
+    click.echo("")
 
 
 @room.command(name="set-default")
