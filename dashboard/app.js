@@ -461,10 +461,11 @@ class SleapRTCDashboard {
             document.getElementById('settings-user-id').textContent = this.user.id || '-';
         }
 
-        document.getElementById(modalId)?.classList.remove('hidden');
-        // Refresh Lucide icons in modal
-        if (typeof lucide !== 'undefined') {
-            lucide.createIcons();
+        const modalEl = document.getElementById(modalId);
+        modalEl?.classList.remove('hidden');
+        // Refresh Lucide icons scoped to this modal only
+        if (typeof lucide !== 'undefined' && modalEl) {
+            lucide.createIcons({ nodes: Array.from(modalEl.querySelectorAll('[data-lucide]')) });
         }
     }
 
@@ -1789,8 +1790,8 @@ class SleapRTCDashboard {
             }).join('');
         }
 
-        if (typeof lucide !== 'undefined') {
-            lucide.createIcons();
+        if (typeof lucide !== 'undefined' && container) {
+            lucide.createIcons({ nodes: Array.from(container.querySelectorAll('[data-lucide]')) });
         }
     }
 
@@ -2382,7 +2383,6 @@ class SleapRTCDashboard {
         this._sjInitDropzone();
         this.sjGoToStep(1);
         this.showModal('submit-job-modal');
-        if (typeof lucide !== 'undefined') lucide.createIcons();
     }
 
     _sjRenderWorkerList() {
@@ -2459,10 +2459,15 @@ class SleapRTCDashboard {
         const job = jobId ? this.activeJobs.get(jobId) : null;
 
         if (job && job.status !== 'complete' && job.status !== 'failed' && job.status !== 'cancelled') {
-            // Disconnect SSE (will reconnect on reopen)
+            // Close modal SSE, re-open as background SSE so stale check stays guarded
             this._sjJobSSE?.close();
             this._sjJobSSE = null;
-            if (job.sseConnection) job.sseConnection = null;
+            const bgSse = this.sseConnect(jobId);
+            bgSse.on('status', (data) => this._backgroundJobStatus(jobId, data))
+                 .on('job_status', (data) => this._backgroundJobStatus(jobId, data))
+                 .on('job_progress', (data) => this._backgroundJobProgress(jobId, data))
+                 .on('epoch', (data) => this._backgroundJobEpoch(jobId, data));
+            job.sseConnection = bgSse;
             // Update badge on room card
             this._updateRoomBadges(job.roomId);
         } else {
@@ -2516,7 +2521,6 @@ class SleapRTCDashboard {
         }
 
         this.showModal('submit-job-modal');
-        if (typeof lucide !== 'undefined') lucide.createIcons();
     }
 
     _restoreJobState(job) {
@@ -3015,7 +3019,7 @@ class SleapRTCDashboard {
                 statusEl.innerHTML = `<i data-lucide="check-circle"></i> All ${total} videos found`;
                 statusEl.className = 'sj-validation-status success';
                 statusEl.classList.remove('hidden');
-                if (typeof lucide !== 'undefined') lucide.createIcons();
+                if (typeof lucide !== 'undefined') lucide.createIcons({ nodes: Array.from(statusEl.querySelectorAll('[data-lucide]')) });
             }
             document.getElementById('sj-submit-btn').disabled = false;
         } else {
@@ -3025,7 +3029,7 @@ class SleapRTCDashboard {
                 statusEl.innerHTML = `<i data-lucide="alert-triangle"></i> ${missing.length} of ${total} videos not found`;
                 statusEl.className = 'sj-validation-status warning';
                 statusEl.classList.remove('hidden');
-                if (typeof lucide !== 'undefined') lucide.createIcons();
+                if (typeof lucide !== 'undefined') lucide.createIcons({ nodes: Array.from(statusEl.querySelectorAll('[data-lucide]')) });
             }
             this._sjRenderMissingVideos();
         }
@@ -3039,7 +3043,7 @@ class SleapRTCDashboard {
             statusEl.innerHTML = '<i data-lucide="loader-2" class="spin"></i> Validating path…';
             statusEl.className = 'sj-validation-status validating';
             statusEl.classList.remove('hidden');
-            if (typeof lucide !== 'undefined') lucide.createIcons();
+            if (typeof lucide !== 'undefined') lucide.createIcons({ nodes: Array.from(statusEl.querySelectorAll('[data-lucide]')) });
         }
         document.getElementById('sj-submit-btn').disabled = true;
 
@@ -3053,7 +3057,7 @@ class SleapRTCDashboard {
                 statusEl.innerHTML = `<i data-lucide="x-circle"></i> ${this._escapeHtml(err.message)}`;
                 statusEl.className = 'sj-validation-status error';
                 statusEl.classList.remove('hidden');
-                if (typeof lucide !== 'undefined') lucide.createIcons();
+                if (typeof lucide !== 'undefined') lucide.createIcons({ nodes: Array.from(statusEl.querySelectorAll('[data-lucide]')) });
             }
         }
     }
@@ -3094,7 +3098,9 @@ class SleapRTCDashboard {
 
         container.innerHTML = html;
         container.classList.remove('hidden');
-        if (typeof lucide !== 'undefined') lucide.createIcons();
+        if (typeof lucide !== 'undefined') {
+            lucide.createIcons({ nodes: Array.from(container.querySelectorAll('[data-lucide]')) });
+        }
 
         // Enable submit if all resolved
         if (resolved === total) {
@@ -3477,8 +3483,11 @@ class SleapRTCDashboard {
         // Clear log
         const log = document.getElementById('sj-training-log');
         if (log) log.innerHTML = '';
-        // Re-init lucide icons
-        if (window.lucide) lucide.createIcons();
+        // Re-init lucide icons scoped to status view
+        const statusView = document.getElementById('sj-status');
+        if (window.lucide && statusView) {
+            lucide.createIcons({ nodes: Array.from(statusView.querySelectorAll('[data-lucide]')) });
+        }
     }
 
     _sjUpdateStatusIcon(state) {
