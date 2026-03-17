@@ -566,6 +566,7 @@ class SleapRTCDashboard {
 
     handleLogout() {
         this.clearCredentials();
+        this.stopWorkerPolling();
         document.getElementById('user-menu')?.classList.remove('open');
         this.updateUI();
         this.showToast('Signed out successfully');
@@ -743,6 +744,7 @@ class SleapRTCDashboard {
             const data = await this.apiRequest(url);
             this.rooms = data.rooms || [];
             this.renderRooms();
+            this.startWorkerPolling();
             this.updateCounts();
             // Load live workers for all rooms (non-blocking, same pattern as token workers)
             this.loadAllRoomWorkers().then(() => {
@@ -2590,6 +2592,70 @@ class SleapRTCDashboard {
         const roomId = job?.roomId;
         this._removeActiveJob(jobId);
         if (roomId) this._updateRoomBadges(roomId);
+    }
+
+    // ── Worker status polling ────────────────────────────────────────────────
+
+    startWorkerPolling() {
+        this.stopWorkerPolling();
+        if (this.rooms.length === 0) return;
+
+        this._workerPollInterval = setInterval(() => {
+            for (const room of this.rooms) {
+                this.loadRoomWorkers(room.room_id).then(() => {
+                    this._updateWorkerBadge(room.room_id);
+                    // If Workers modal is open for this room, re-render
+                    if (this.currentWorkersRoomId === room.room_id &&
+                        !document.getElementById('workers-modal')?.classList.contains('hidden')) {
+                        this.renderWorkersModalList();
+                    }
+                    // If Submit Job modal is open for this room, re-render worker list
+                    if (this._sjRoomId === room.room_id &&
+                        !document.getElementById('submit-job-modal')?.classList.contains('hidden')) {
+                        this._sjRenderWorkerList();
+                    }
+                    // Detect stale jobs: worker went available but job still "running"
+                    this._checkStaleJobs(room.room_id);
+                }).catch(() => {}); // Silently ignore poll failures
+            }
+        }, 15000);
+    }
+
+    stopWorkerPolling() {
+        if (this._workerPollInterval) {
+            clearInterval(this._workerPollInterval);
+            this._workerPollInterval = null;
+        }
+    }
+
+    _updateWorkerBadge(roomId) {
+        const data = this.roomWorkers[roomId];
+        if (!data) return;
+        const badge = document.getElementById(`room-worker-badge-${roomId}`);
+        if (!badge) return;
+        const count = data.workers?.length ?? 0;
+        const text = count === 0 ? '0 connected' : `${count} connected`;
+        badge.innerHTML = `<i data-lucide="${count === 0 ? 'zap-off' : 'zap'}"></i> ${text}`;
+        badge.className = `worker-count-badge ${count === 0 ? 'offline' : ''}`;
+        if (typeof lucide !== 'undefined') lucide.createIcons();
+    }
+
+    _checkStaleJobs(roomId) {
+        const workers = this.roomWorkers[roomId]?.workers ?? [];
+        for (const [jobId, job] of this.activeJobs) {
+            if (job.roomId !== roomId) continue;
+            if (job.status === 'complete' || job.status === 'failed' || job.status === 'cancelled') continue;
+
+            const worker = workers.find(w => w.peer_id === job.workerId);
+            const workerStatus = worker?.properties?.status || 'unknown';
+
+            // If worker is available but job is still running, the job likely ended while disconnected
+            if (workerStatus === 'available' && job.lastEpoch > 0) {
+                job.status = 'complete';
+                this._persistActiveJobs();
+                this._updateRoomBadges(roomId);
+            }
+        }
     }
 
     // ── Task 5: YAML config upload ────────────────────────────────────────────
