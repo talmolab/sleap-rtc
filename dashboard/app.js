@@ -2566,6 +2566,13 @@ class SleapRTCDashboard {
             queue.textContent = 'Job 1 / 1';
             queue.classList.remove('hidden');
         }
+
+        // Replay stored log lines
+        if (job.logs && job.logs.length > 0) {
+            for (const entry of job.logs) {
+                this._sjAppendLog(entry.text, entry.cls || '');
+            }
+        }
     }
 
     /**
@@ -2586,6 +2593,7 @@ class SleapRTCDashboard {
             workerName: j.workerName, status: j.status, modelType: j.modelType,
             lastEpoch: j.lastEpoch, maxEpochs: j.maxEpochs, startedAt: j.startedAt,
             lastLoss: j.lastLoss, wandbUrl: j.wandbUrl, failMessage: j.failMessage,
+            logs: (j.logs || []).slice(-500),
         }));
         sessionStorage.setItem('sleap-rtc-active-jobs', JSON.stringify(jobs));
     }
@@ -2596,8 +2604,7 @@ class SleapRTCDashboard {
             if (!raw) return;
             const jobs = JSON.parse(raw);
             for (const j of jobs) {
-                if (j.status === 'complete' || j.status === 'failed' || j.status === 'cancelled') continue;
-                this.activeJobs.set(j.jobId, { ...j, logs: [], sseConnection: null });
+                this.activeJobs.set(j.jobId, { ...j, logs: j.logs || [], sseConnection: null });
             }
             const now = Date.now();
             for (const [jobId, job] of this.activeJobs) {
@@ -2633,7 +2640,7 @@ class SleapRTCDashboard {
             if (job.status === 'complete') {
                 return `<span style="display:flex;align-items:center;gap:2px;">
                     <button class="btn btn-training-complete btn-sm" onclick="app.reopenJobModal('${job.jobId}')">
-                        <i data-lucide="check-circle"></i> Training Complete
+                        <i data-lucide="check-circle"></i> Job Complete
                     </button>
                     <button class="btn-badge-dismiss" title="Dismiss" onclick="event.stopPropagation();app.dismissJobBadge('${job.jobId}')">
                         <i data-lucide="x"></i>
@@ -3342,9 +3349,7 @@ class SleapRTCDashboard {
                 job.failMessage = data.message || data.error || 'Job failed';
             }
             this._persistActiveJobs();
-            if (status === 'complete' || status === 'failed' || status === 'cancelled') {
-                this._updateRoomBadges(job.roomId);
-            }
+            this._updateRoomBadges(job.roomId);
         }
 
         if (status === 'running' || status === 'submitted') {
@@ -3445,7 +3450,15 @@ class SleapRTCDashboard {
                 if (trainLoss != null) job.lastLoss = trainLoss;
             }
             if (data.wandb_url && !job.wandbUrl) job.wandbUrl = data.wandb_url;
+            // Store log line for replay on reopen
+            if (event === 'train_begin') job.logs.push({ text: `${what}Training started` });
+            else if (event === 'epoch_end') {
+                const logs = data.logs || {};
+                const parts = Object.entries(logs).map(([k, v]) => `${k}: ${Number(v).toFixed(4)}`).join('  ');
+                job.logs.push({ text: `${what}Epoch ${data.epoch}  ${parts}` });
+            } else if (event === 'train_end') job.logs.push({ text: `${what}Training complete`, cls: 'log-info' });
             this._persistActiveJobs();
+            this._updateRoomBadges(job.roomId);
         }
     }
 
@@ -3558,8 +3571,16 @@ class SleapRTCDashboard {
         const viewId = step === 'status' ? 'sj-status' : `sj-step${step}`;
         document.getElementById(viewId)?.classList.remove('hidden');
 
-        // Update step indicator dots (steps 1-3 only)
-        if (typeof step === 'number') {
+        // Hide stepper and update title for status view; show for wizard steps
+        const stepper = document.querySelector('.sj-step-indicator');
+        const title = document.getElementById('sj-title');
+        if (step === 'status') {
+            if (stepper) stepper.classList.add('hidden');
+            if (title) title.textContent = 'Training Job';
+        } else {
+            if (stepper) stepper.classList.remove('hidden');
+            if (title) title.textContent = 'Submit Training Job';
+            // Update step indicator dots (steps 1-3 only)
             for (let i = 1; i <= 3; i++) {
                 const dot = document.getElementById(`sj-step-dot-${i}`);
                 if (!dot) continue;
