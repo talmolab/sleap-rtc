@@ -1718,6 +1718,27 @@ class SleapRTCDashboard {
                 const statusClass = status === 'busy' ? 'busy' : 'available';
                 const statusText = status === 'busy' ? 'Busy' : 'Idle';
 
+                const isBusy = status === 'busy' || status === 'reserved';
+                const activeJob = isBusy
+                    ? Array.from(this.activeJobs.values()).find(
+                        j => j.workerId === worker.peer_id && j.roomId === roomId &&
+                             j.status !== 'complete' && j.status !== 'failed'
+                      )
+                    : null;
+                const busyClickable = activeJob ? 'busy-clickable' : '';
+                const clickHandler = activeJob
+                    ? `onclick="app.hideModal('workers-modal');app.reopenJobModal('${activeJob.jobId}')"`
+                    : '';
+
+                const jobInfoHtml = activeJob
+                    ? `<div class="wm-job-info">
+                        <span class="wm-job-detail">
+                            Training ${activeJob.modelType}${activeJob.lastEpoch > 0 ? ` — Epoch ${activeJob.lastEpoch}${activeJob.maxEpochs ? ' / ' + activeJob.maxEpochs : ''}` : ''}${activeJob.lastLoss != null ? ', loss ' + activeJob.lastLoss.toFixed(4) : ''}
+                        </span>
+                        <span class="wm-view-job-link">View Job <i data-lucide="arrow-right"></i></span>
+                    </div>`
+                    : '';
+
                 const keyItem = worker.account_key_id
                     ? `<span class="worker-meta-item">
                             <i data-lucide="key"></i>
@@ -1726,8 +1747,19 @@ class SleapRTCDashboard {
                         </span>`
                     : `<span class="worker-meta-item"><span class="auth-badge token">TOKEN</span></span>`;
 
+                const metaOrJobInfo = activeJob
+                    ? jobInfoHtml
+                    : `<div class="wm-worker-meta">
+                        <span class="wm-meta-item">
+                            <i data-lucide="hash"></i>
+                            ${worker.peer_id}
+                            <span class="auth-badge peer-id">PEER ID</span>
+                        </span>
+                        ${keyItem}
+                    </div>`;
+
                 return `
-                <div class="wm-worker-card">
+                <div class="wm-worker-card ${busyClickable}" ${clickHandler}>
                     <div class="wm-worker-row">
                         <div class="wm-worker-icon"><i data-lucide="cpu"></i></div>
                         <div class="wm-worker-info">
@@ -1740,14 +1772,7 @@ class SleapRTCDashboard {
                             ${worker.connected_at ? `<span class="wm-connected-time" title="${formatExactDate(worker.connected_at)}">Connected ${formatRelativeTime(worker.connected_at)}</span>` : ''}
                         </div>
                     </div>
-                    <div class="wm-worker-meta">
-                        <span class="wm-meta-item">
-                            <i data-lucide="hash"></i>
-                            ${worker.peer_id}
-                            <span class="auth-badge peer-id">PEER ID</span>
-                        </span>
-                        ${keyItem}
-                    </div>
+                    ${metaOrJobInfo}
                 </div>`;
             }).join('');
         }
