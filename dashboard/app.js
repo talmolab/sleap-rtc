@@ -143,6 +143,10 @@ class SleapRTCDashboard {
         this.tokensSearch = '';
         this.searchDebounceTimer = null;
 
+        // Active job tracking
+        this.activeJobs = new Map(); // jobId → job state
+        this._workerPollInterval = null;
+
         this.init();
     }
 
@@ -153,6 +157,9 @@ class SleapRTCDashboard {
     init() {
         // Load stored credentials
         this.loadStoredCredentials();
+
+        // Restore active jobs from sessionStorage
+        this._loadActiveJobs();
 
         // Load theme preference
         this.loadTheme();
@@ -2390,6 +2397,39 @@ class SleapRTCDashboard {
         this._sjJobSSE?.close();
         this._sjWorkerSSE = null;
         this._sjJobSSE = null;
+    }
+
+    // ── Active job tracking ──────────────────────────────────────────────────
+
+    _persistActiveJobs() {
+        const jobs = Array.from(this.activeJobs.values()).map(j => ({
+            jobId: j.jobId, roomId: j.roomId, workerId: j.workerId,
+            workerName: j.workerName, status: j.status, modelType: j.modelType,
+            lastEpoch: j.lastEpoch, maxEpochs: j.maxEpochs, startedAt: j.startedAt,
+            lastLoss: j.lastLoss, wandbUrl: j.wandbUrl,
+        }));
+        sessionStorage.setItem('sleap-rtc-active-jobs', JSON.stringify(jobs));
+    }
+
+    _loadActiveJobs() {
+        try {
+            const raw = sessionStorage.getItem('sleap-rtc-active-jobs');
+            if (!raw) return;
+            const jobs = JSON.parse(raw);
+            for (const j of jobs) {
+                if (j.status === 'complete' || j.status === 'failed' || j.status === 'cancelled') continue;
+                this.activeJobs.set(j.jobId, { ...j, logs: [], sseConnection: null });
+            }
+        } catch (e) {
+            console.warn('[ActiveJobs] Failed to load from sessionStorage:', e);
+        }
+    }
+
+    _removeActiveJob(jobId) {
+        const job = this.activeJobs.get(jobId);
+        if (job?.sseConnection) job.sseConnection.close();
+        this.activeJobs.delete(jobId);
+        this._persistActiveJobs();
     }
 
     // ── Task 5: YAML config upload ────────────────────────────────────────────
