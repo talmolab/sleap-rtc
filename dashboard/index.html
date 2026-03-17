@@ -1353,6 +1353,27 @@ auto_select = true</code></pre>
         </div>
     </div>
 
+    <!-- Job Summary Modal -->
+    <div id="job-summary-modal" class="modal hidden">
+        <div class="modal-content modal-job-summary">
+            <div class="sj-header">
+                <div>
+                    <h3>Training Job Summary</h3>
+                    <p id="jsum-subtitle" class="sj-subtitle"></p>
+                </div>
+                <button class="btn-icon" onclick="app.hideModal('job-summary-modal')">
+                    <i data-lucide="x"></i>
+                </button>
+            </div>
+            <div id="jsum-summary" class="jsum-summary"></div>
+            <div class="jsum-log-label">Training Logs</div>
+            <div id="jsum-logs" class="sj-training-log"></div>
+            <div class="form-actions" style="margin-top:12px">
+                <button class="btn btn-secondary" onclick="app.hideModal('job-summary-modal')">Close</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Confirmation Modal -->
     <div id="confirm-modal" class="modal hidden">
         <div class="modal-content modal-confirm">

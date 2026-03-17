@@ -2645,15 +2645,14 @@ class SleapRTCDashboard {
 
         badgeContainer.innerHTML = terminalJobs.map(job => {
             const name = job.workerName || job.workerId;
-            if (job.status === 'complete') {
-                return `<button class="btn btn-training-complete btn-sm" onclick="event.stopPropagation();app.dismissJobBadge('${job.jobId}')">
-                    Worker ${name} job finished! <i data-lucide="x" style="width:14px;height:14px;margin-left:4px"></i>
-                </button>`;
-            } else {
-                return `<button class="btn btn-training-failed btn-sm" onclick="event.stopPropagation();app.dismissJobBadge('${job.jobId}')">
-                    Worker ${name} job failed <i data-lucide="x" style="width:14px;height:14px;margin-left:4px"></i>
-                </button>`;
-            }
+            const cls = job.status === 'complete' ? 'btn-training-complete' : 'btn-training-failed';
+            const label = job.status === 'complete'
+                ? `<strong>${name}</strong> Job Completed!`
+                : `<strong>${name}</strong> Job Failed`;
+            return `<button class="btn ${cls} btn-sm" onclick="event.stopPropagation();app.openJobSummary('${job.jobId}')">
+                ${label}
+                <span class="btn-badge-dismiss-inline" title="Dismiss" onclick="event.stopPropagation();app.dismissJobBadge('${job.jobId}')">&times;</span>
+            </button>`;
         }).join('');
 
         if (typeof lucide !== 'undefined') {
@@ -2666,6 +2665,44 @@ class SleapRTCDashboard {
         const roomId = job?.roomId;
         this._removeActiveJob(jobId);
         if (roomId) this._updateRoomBadges(roomId);
+    }
+
+    openJobSummary(jobId) {
+        const job = this.activeJobs.get(jobId);
+        if (!job) return;
+
+        const room = this.rooms?.find(r => r.room_id === job.roomId);
+        document.getElementById('jsum-subtitle').textContent = room?.name || job.roomId;
+
+        // Summary line
+        const isComplete = job.status === 'complete';
+        const statusLabel = isComplete ? 'Complete' : (job.failMessage || 'Failed');
+        const statusCls = isComplete ? 'complete' : 'failed';
+        const parts = [
+            `<span class="jsum-item jsum-status ${statusCls}">${isComplete ? '&#10003;' : '&#10007;'} ${statusLabel}</span>`,
+            `<span class="jsum-item">Worker: <strong>${job.workerName || job.workerId}</strong></span>`,
+            `<span class="jsum-item">Model: ${job.modelType}</span>`,
+            `<span class="jsum-item">Epochs: ${job.lastEpoch}${job.maxEpochs ? ' / ' + job.maxEpochs : ''}</span>`,
+        ];
+        if (job.lastLoss != null) parts.push(`<span class="jsum-item">Final Loss: ${job.lastLoss.toFixed(4)}</span>`);
+        if (job.wandbUrl) parts.push(`<span class="jsum-item"><a href="${job.wandbUrl}" target="_blank" rel="noopener">Track in WandB &rarr;</a></span>`);
+        document.getElementById('jsum-summary').innerHTML = parts.join('');
+
+        // Logs
+        const logContainer = document.getElementById('jsum-logs');
+        logContainer.innerHTML = '';
+        if (job.logs && job.logs.length > 0) {
+            for (const entry of job.logs) {
+                const line = document.createElement('div');
+                line.className = `log-line${entry.cls ? ' ' + entry.cls : ''}`;
+                line.textContent = entry.text;
+                logContainer.appendChild(line);
+            }
+        } else {
+            logContainer.innerHTML = '<div class="log-line" style="color:var(--text-muted)">No logs available.</div>';
+        }
+
+        this.showModal('job-summary-modal');
     }
 
     // ── Worker status polling ────────────────────────────────────────────────

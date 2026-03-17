@@ -2442,6 +2442,43 @@ body::before {
     max-height: 360px;
 }
 
+/* Job Summary Modal */
+.modal-content.modal-job-summary {
+    max-width: 550px;
+    width: 550px;
+}
+
+.jsum-summary {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 16px;
+    font-size: 13px;
+    color: var(--text-secondary);
+    padding: 8px 0 12px;
+    border-bottom: 1px solid var(--border-subtle);
+    margin-bottom: 12px;
+}
+
+.jsum-summary .jsum-item {
+    white-space: nowrap;
+}
+
+.jsum-summary .jsum-status {
+    font-weight: 600;
+}
+
+.jsum-summary .jsum-status.complete { color: var(--status-success); }
+.jsum-summary .jsum-status.failed { color: var(--status-error); }
+
+.jsum-log-label {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 6px;
+}
+
 .sj-training-log .log-line {
     white-space: pre-wrap;
     word-break: break-word;
@@ -3899,6 +3936,19 @@ kbd {
 .btn-badge-dismiss svg {
     width: 14px;
     height: 14px;
+}
+
+.btn-badge-dismiss-inline {
+    margin-left: 6px;
+    opacity: 0.5;
+    font-size: 16px;
+    line-height: 1;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.btn-badge-dismiss-inline:hover {
+    opacity: 1;
 }
 
 .room-job-badges {
