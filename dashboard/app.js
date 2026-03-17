@@ -2432,6 +2432,10 @@ class SleapRTCDashboard {
         this._persistActiveJobs();
     }
 
+    _updateRoomBadges(roomId) {
+        // Will be implemented in Task 5
+    }
+
     // ── Task 5: YAML config upload ────────────────────────────────────────────
 
     parseTrainingConfig(yamlText) {
@@ -2980,6 +2984,16 @@ class SleapRTCDashboard {
         const stage = data.stage;
         const modelLabel = this._sjModelType || 'model';
 
+        // Update activeJobs entry
+        const job = this._currentJobId ? this.activeJobs.get(this._currentJobId) : null;
+        if (job) {
+            job.status = status;
+            this._persistActiveJobs();
+            if (status === 'complete' || status === 'failed' || status === 'cancelled') {
+                this._updateRoomBadges(job.roomId);
+            }
+        }
+
         if (status === 'running' || status === 'submitted') {
             if (label) {
                 if (stage === 'inference') label.textContent = 'Running inference…';
@@ -3022,6 +3036,16 @@ class SleapRTCDashboard {
                 link.classList.remove('hidden');
             }
         }
+
+        // Update activeJobs entry
+        const job = this._currentJobId ? this.activeJobs.get(this._currentJobId) : null;
+        if (job) {
+            if (epoch != null) job.lastEpoch = epoch;
+            if (loss != null) job.lastLoss = Number(loss);
+            if (data.wandb_url) job.wandbUrl = data.wandb_url;
+            this._persistActiveJobs();
+            this._updateRoomBadges(job.roomId);
+        }
     }
 
     _sjHandleJobProgress(data) {
@@ -3056,6 +3080,19 @@ class SleapRTCDashboard {
             this._sjUpdateMetrics(logs);
         } else if (event === 'train_end') {
             this._sjAppendLog(`${what}Training complete`, 'log-info');
+        }
+
+        // Update activeJobs entry with log line
+        const job = this._currentJobId ? this.activeJobs.get(this._currentJobId) : null;
+        if (job) {
+            if (event === 'epoch_end' && data.epoch != null) {
+                const logs = data.logs || {};
+                const trainLoss = logs['train/loss'] != null ? Number(logs['train/loss']) : null;
+                job.lastEpoch = data.epoch;
+                if (trainLoss != null) job.lastLoss = trainLoss;
+            }
+            if (data.wandb_url && !job.wandbUrl) job.wandbUrl = data.wandb_url;
+            this._persistActiveJobs();
         }
     }
 
