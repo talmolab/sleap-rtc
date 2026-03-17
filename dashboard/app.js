@@ -2398,12 +2398,25 @@ class SleapRTCDashboard {
                 : '';
             const specs = [gpuModel, gpuMem, cuda, sleapNnVersion].filter(Boolean).join(' · ');
 
+            const activeJob = !isAvailable
+                ? Array.from(this.activeJobs.values()).find(
+                    j => j.workerId === worker.peer_id && j.roomId === this._sjRoomId &&
+                         j.status !== 'complete' && j.status !== 'failed'
+                  )
+                : null;
+            const busyLabel = activeJob
+                ? `<span class="sj-busy-label">Training ${activeJob.modelType}${activeJob.lastEpoch > 0 ? ' (Epoch ' + activeJob.lastEpoch + ')' : ''}</span>`
+                : '';
+
             return `<div class="sj-worker-row${disabledClass}" data-peer-id="${worker.peer_id}" ${clickHandler}>
                 <div class="sj-worker-info">
                     <span class="sj-worker-name">${worker.worker_name ?? worker.peer_id}</span>
                     <span class="sj-worker-specs">${specs}</span>
                 </div>
-                <span class="sj-status-dot ${status}" title="${status}"></span>
+                <div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px;">
+                    <span class="sj-status-dot ${status}" title="${status}"></span>
+                    ${busyLabel}
+                </div>
             </div>`;
         }).join('');
     }

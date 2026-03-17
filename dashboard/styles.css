@@ -1975,6 +1975,12 @@ body::before {
 .sj-status-dot.reserved { background: var(--status-warning); }
 .sj-status-dot.maintenance { background: var(--status-error); }
 
+.sj-busy-label {
+    font-size: 11px;
+    color: var(--status-warning);
+    font-weight: 500;
+}
+
 .sj-radio {
     width: 18px;
     height: 18px;
