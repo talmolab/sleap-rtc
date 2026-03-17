@@ -199,7 +199,7 @@
                         <div class="security-warning-text">
                             Account keys are long-lived credentials for authenticating workers and CLI tools.
                             <strong>Each key grants full access to your account.</strong>
-                            Direct connections between clients and workers are additionally secured with Ed25519 public-key encryption.
+                            All connections are encrypted end-to-end.
                             You can create multiple keys and revoke them individually.
                         </div>
                     </div>
@@ -719,14 +719,14 @@ auto_select = true</code></pre>
                                 </ul>
                                 <div class="about-code">
                                     <div class="code-header">
-                                        <span>Starting a worker with a token</span>
+                                        <span>Starting a worker with an account key</span>
                                     </div>
-                                    <code>sleap-rtc worker --api-key YOUR_TOKEN_HERE</code>
+                                    <code>sleap-rtc worker --account-key slp_acct_xxxx... --room ROOM_ID</code>
                                 </div>
                                 <div class="about-callout warning">
                                     <i data-lucide="alert-triangle"></i>
                                     <div>
-                                        <strong>Security:</strong> Tokens are shown only once when created. Store them securely!
+                                        <strong>Security:</strong> Account keys are shown only once when created. Store them securely!
                                     </div>
                                 </div>
                             </div>
@@ -838,11 +838,11 @@ auto_select = true</code></pre>
                                         <span>Join a room with invite code</span>
                                     </div>
                                     <div class="cli-item">
-                                        <code>sleap-rtc token create --room ROOM_ID --name "gpu-1"</code>
-                                        <span>Create a worker token</span>
+                                        <code>sleap-rtc key create --save</code>
+                                        <span>Create and save an account key</span>
                                     </div>
                                     <div class="cli-item">
-                                        <code>sleap-rtc worker --api-key TOKEN</code>
+                                        <code>sleap-rtc worker --room ROOM_ID</code>
                                         <span>Start a worker</span>
                                     </div>
                                     <div class="cli-item">
@@ -1055,7 +1055,7 @@ auto_select = true</code></pre>
                 <div id="wm-empty-state" class="wm-empty-state hidden">
                     <i data-lucide="cloud-off"></i>
                     <p>No workers connected to this room.</p>
-                    <span>Start a worker with <code>sleap-rtc worker --api-key TOKEN</code></span>
+                    <span>Start a worker with <code id="wm-empty-cmd">sleap-rtc worker --account-key slp_acct_xxxx...</code></span>
                 </div>
             </div>
             <div class="form-actions">

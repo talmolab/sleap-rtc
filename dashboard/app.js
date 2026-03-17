@@ -1619,6 +1619,10 @@ class SleapRTCDashboard {
         const allChip = document.querySelector('#workers-modal .wm-filter-chip[data-filter="all"]');
         if (allChip) allChip.classList.add('active');
 
+        // Update empty-state command with room ID
+        const cmdEl = document.getElementById('wm-empty-cmd');
+        if (cmdEl) cmdEl.textContent = `sleap-rtc worker --account-key slp_acct_xxxx... --room ${roomId}`;
+
         this.renderWorkersModalList();
         this.showModal('workers-modal');
     }

@@ -853,12 +853,8 @@ def room_create(name, expires):
 
     click.echo("")
     click.echo("Next steps:")
-    click.echo(
-        f"  1. Set up an account key: sleap-rtc key create --save"
-    )
-    click.echo(
-        f"  2. Start a worker: sleap-rtc worker --name \"My GPU Server\""
-    )
+    click.echo(f"  1. Set up an account key: sleap-rtc key create --save")
+    click.echo(f'  2. Start a worker: sleap-rtc worker --name "My GPU Server"')
     click.echo("")
 
 
@@ -898,7 +894,9 @@ def room_info(room_id):
         if time_left.total_seconds() < 0:
             expires_str = f"{expires_dt.strftime('%Y-%m-%d %H:%M')} (EXPIRED)"
         elif time_left.days > 0:
-            expires_str = f"{expires_dt.strftime('%Y-%m-%d %H:%M')} ({time_left.days} days left)"
+            expires_str = (
+                f"{expires_dt.strftime('%Y-%m-%d %H:%M')} ({time_left.days} days left)"
+            )
         elif time_left.seconds > 3600:
             hours_left = time_left.seconds // 3600
             expires_str = (
@@ -906,7 +904,9 @@ def room_info(room_id):
             )
         else:
             minutes_left = time_left.seconds // 60
-            expires_str = f"{expires_dt.strftime('%Y-%m-%d %H:%M')} ({minutes_left} minutes left)"
+            expires_str = (
+                f"{expires_dt.strftime('%Y-%m-%d %H:%M')} ({minutes_left} minutes left)"
+            )
     else:
         expires_str = "Never"
 
