@@ -2918,17 +2918,45 @@ class SleapRTCDashboard {
             );
             const jobId = result.job_id;
 
+            // Track this job in activeJobs
+            const workerData = this.roomWorkers[this._sjRoomId]?.workers ?? [];
+            const worker = workerData.find(w => w.peer_id === this._sjWorkerId);
+            const jobEntry = {
+                jobId,
+                roomId: this._sjRoomId,
+                workerId: this._sjWorkerId,
+                workerName: worker?.worker_name || this._sjWorkerId,
+                status: 'submitted',
+                modelType: this._sjModelType || 'model',
+                lastEpoch: 0,
+                maxEpochs: this._sjMaxEpochs || null,
+                lastLoss: null,
+                logs: [],
+                wandbUrl: null,
+                startedAt: Date.now(),
+                sseConnection: null,
+            };
+            this.activeJobs.set(jobId, jobEntry);
+            this._currentJobId = jobId;
+            this._persistActiveJobs();
+
             // Close worker SSE (no longer needed)
             this._sjWorkerSSE?.close();
             this._sjWorkerSSE = null;
 
             // Open job SSE for status updates
             this._sjJobSSE = this.sseConnect(jobId);
+            jobEntry.sseConnection = this._sjJobSSE;
             this._sjJobSSE
                 .on('status', (data) => this._sjHandleJobStatus(data))
                 .on('job_status', (data) => this._sjHandleJobStatus(data))
                 .on('job_progress', (data) => this._sjHandleJobProgress(data))
                 .on('epoch', (data) => this._sjHandleJobEpoch(data));
+
+            // Optimistically mark worker as busy in local cache
+            if (worker?.properties) {
+                worker.properties.status = 'busy';
+            }
 
             // Switch to status view and reset progress panel
             this.sjGoToStep('status');
