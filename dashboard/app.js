@@ -865,6 +865,11 @@ class SleapRTCDashboard {
         if (typeof lucide !== 'undefined') {
             lucide.createIcons();
         }
+
+        // Render active job badges on room cards
+        for (const [, job] of this.activeJobs) {
+            this._updateRoomBadges(job.roomId);
+        }
     }
 
     renderRoomCard(room, isExpired = false) {
@@ -946,6 +951,7 @@ class SleapRTCDashboard {
                         Invite
                     </button>
                 ` : ''}
+                <div class="room-job-badges" id="room-job-badges-${room.room_id}"></div>
             </div>
         </div>
         `;
@@ -2536,7 +2542,54 @@ class SleapRTCDashboard {
     }
 
     _updateRoomBadges(roomId) {
-        // Will be implemented in Task 5
+        const badgeContainer = document.getElementById(`room-job-badges-${roomId}`);
+        if (!badgeContainer) return;
+
+        const jobs = Array.from(this.activeJobs.values()).filter(j => j.roomId === roomId);
+
+        if (jobs.length === 0) {
+            badgeContainer.innerHTML = '';
+            return;
+        }
+
+        badgeContainer.innerHTML = jobs.map(job => {
+            if (job.status === 'complete') {
+                return `<span style="display:flex;align-items:center;gap:2px;">
+                    <button class="btn btn-training-complete btn-sm" onclick="app.reopenJobModal('${job.jobId}')">
+                        <i data-lucide="check-circle"></i> Training Complete
+                    </button>
+                    <button class="btn-badge-dismiss" title="Dismiss" onclick="event.stopPropagation();app.dismissJobBadge('${job.jobId}')">
+                        <i data-lucide="x"></i>
+                    </button>
+                </span>`;
+            } else if (job.status === 'failed' || job.status === 'cancelled') {
+                return `<span style="display:flex;align-items:center;gap:2px;">
+                    <button class="btn btn-training-failed btn-sm" onclick="app.reopenJobModal('${job.jobId}')">
+                        <i data-lucide="x-circle"></i> Training Failed
+                    </button>
+                    <button class="btn-badge-dismiss" title="Dismiss" onclick="event.stopPropagation();app.dismissJobBadge('${job.jobId}')">
+                        <i data-lucide="x"></i>
+                    </button>
+                </span>`;
+            } else {
+                const epochText = job.lastEpoch > 0
+                    ? ` — Epoch ${job.lastEpoch}${job.maxEpochs ? ' / ' + job.maxEpochs : ''}`
+                    : '';
+                return `<button class="btn btn-training-badge btn-sm" onclick="app.reopenJobModal('${job.jobId}')">
+                    <i data-lucide="loader-2" style="animation:spin 1.5s linear infinite"></i>
+                    Training ${job.modelType}${epochText}
+                </button>`;
+            }
+        }).join('');
+
+        if (typeof lucide !== 'undefined') lucide.createIcons();
+    }
+
+    dismissJobBadge(jobId) {
+        const job = this.activeJobs.get(jobId);
+        const roomId = job?.roomId;
+        this._removeActiveJob(jobId);
+        if (roomId) this._updateRoomBadges(roomId);
     }
 
     // ── Task 5: YAML config upload ────────────────────────────────────────────
