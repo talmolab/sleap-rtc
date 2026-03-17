@@ -2571,6 +2571,13 @@ class SleapRTCDashboard {
                 if (j.status === 'complete' || j.status === 'failed' || j.status === 'cancelled') continue;
                 this.activeJobs.set(j.jobId, { ...j, logs: [], sseConnection: null });
             }
+            const now = Date.now();
+            for (const [jobId, job] of this.activeJobs) {
+                // Remove jobs older than 24 hours
+                if (job.startedAt && now - job.startedAt > 24 * 60 * 60 * 1000) {
+                    this.activeJobs.delete(jobId);
+                }
+            }
         } catch (e) {
             console.warn('[ActiveJobs] Failed to load from sessionStorage:', e);
         }
