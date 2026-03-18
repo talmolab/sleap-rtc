@@ -3342,7 +3342,7 @@ class RTCWorkerClient:
                 logging.info("P2P PSK authentication enabled (room secret configured)")
 
             # Generate a worker peer ID based on API key prefix
-            peer_id = f"worker-{api_key[4:12]}-{socket.gethostname()[:8]}"
+            peer_id = f"worker-{api_key[4:12]}-{socket.gethostname()[:8]}-{uuid.uuid4().hex[:6]}"
             self.peer_id_for_cleanup = peer_id
             # Room ID and token will be returned by server after API key validation
             room_json = {
