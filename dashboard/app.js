@@ -143,6 +143,10 @@ class SleapRTCDashboard {
         this.tokensSearch = '';
         this.searchDebounceTimer = null;
 
+        // Active job tracking
+        this.activeJobs = new Map(); // jobId → job state
+        this._workerPollInterval = null;
+
         this.init();
     }
 
@@ -151,8 +155,22 @@ class SleapRTCDashboard {
     // =========================================================================
 
     init() {
+        // DEBUG: intercept lucide.createIcons to trace unscoped calls that reset ALL icon SVGs
+        if (typeof lucide !== 'undefined') {
+            const _origCreateIcons = lucide.createIcons.bind(lucide);
+            lucide.createIcons = function(opts) {
+                if (!opts?.nodes) {
+                    console.warn('[DEBUG-lucide] Unscoped createIcons() — resets all SVGs including modal spinner\n', new Error().stack);
+                }
+                return _origCreateIcons(opts);
+            };
+        }
+
         // Load stored credentials
         this.loadStoredCredentials();
+
+        // Restore active jobs from sessionStorage
+        this._loadActiveJobs();
 
         // Load theme preference
         this.loadTheme();
@@ -443,10 +461,11 @@ class SleapRTCDashboard {
             document.getElementById('settings-user-id').textContent = this.user.id || '-';
         }
 
-        document.getElementById(modalId)?.classList.remove('hidden');
-        // Refresh Lucide icons in modal
-        if (typeof lucide !== 'undefined') {
-            lucide.createIcons();
+        const modalEl = document.getElementById(modalId);
+        modalEl?.classList.remove('hidden');
+        // Refresh Lucide icons scoped to this modal only
+        if (typeof lucide !== 'undefined' && modalEl) {
+            lucide.createIcons({ nodes: Array.from(modalEl.querySelectorAll('[data-lucide]')) });
         }
     }
 
@@ -559,6 +578,7 @@ class SleapRTCDashboard {
 
     handleLogout() {
         this.clearCredentials();
+        this.stopWorkerPolling();
         document.getElementById('user-menu')?.classList.remove('open');
         this.updateUI();
         this.showToast('Signed out successfully');
@@ -736,6 +756,9 @@ class SleapRTCDashboard {
             const data = await this.apiRequest(url);
             this.rooms = data.rooms || [];
             this.renderRooms();
+            this.startWorkerPolling();
+            // Reconnect SSE for any active jobs restored from sessionStorage
+            this._reconnectActiveJobs();
             this.updateCounts();
             // Load live workers for all rooms (non-blocking, same pattern as token workers)
             this.loadAllRoomWorkers().then(() => {
@@ -858,6 +881,11 @@ class SleapRTCDashboard {
         if (typeof lucide !== 'undefined') {
             lucide.createIcons();
         }
+
+        // Render active job badges on room cards
+        for (const [, job] of this.activeJobs) {
+            this._updateRoomBadges(job.roomId);
+        }
     }
 
     renderRoomCard(room, isExpired = false) {
@@ -939,6 +967,7 @@ class SleapRTCDashboard {
                         Invite
                     </button>
                 ` : ''}
+                <div class="room-job-badges" id="room-job-badges-${room.room_id}"></div>
             </div>
         </div>
         `;
@@ -1697,9 +1726,31 @@ class SleapRTCDashboard {
                 const sleapNn = props.sleap_nn_version ? `sleap-nn ${props.sleap_nn_version}` : '';
                 const specs = [gpuModel, gpuMem, cuda, sleapNn].filter(Boolean).join(' \u00B7 ');
 
-                const status = props.status || 'available';
+                const serverStatus = props.status || 'available';
+                // Check local activeJobs first — server may report available even while training
+                const activeJob = Array.from(this.activeJobs.values()).find(
+                    j => j.workerId === worker.peer_id && j.roomId === roomId &&
+                         j.status !== 'complete' && j.status !== 'failed' && j.status !== 'cancelled'
+                );
+                const status = activeJob ? 'busy' : serverStatus;
+                console.log(`[DEBUG-workerStatus] WM worker=${worker.peer_id} server=${serverStatus} activeJob=${activeJob?.jobId?.slice(0,8) ?? 'none'} → effective=${status}`);
                 const statusClass = status === 'busy' ? 'busy' : 'available';
                 const statusText = status === 'busy' ? 'Busy' : 'Idle';
+
+                const isBusy = status === 'busy' || status === 'reserved';
+                const busyClickable = activeJob ? 'busy-clickable' : '';
+                const clickHandler = activeJob
+                    ? `onclick="app.hideModal('workers-modal');app.reopenJobModal('${activeJob.jobId}')"`
+                    : '';
+
+                const jobInfoHtml = activeJob
+                    ? `<div class="wm-job-info">
+                        <span class="wm-job-detail">
+                            Training ${activeJob.modelType}${activeJob.lastEpoch > 0 ? ` — Epoch ${activeJob.lastEpoch}${activeJob.maxEpochs ? ' / ' + activeJob.maxEpochs : ''}` : ''}${activeJob.lastLoss != null ? ', loss ' + activeJob.lastLoss.toFixed(4) : ''}
+                        </span>
+                        <span class="wm-view-job-link">View Job <i data-lucide="arrow-right"></i></span>
+                    </div>`
+                    : '';
 
                 const keyItem = worker.account_key_id
                     ? `<span class="worker-meta-item">
@@ -1709,8 +1760,19 @@ class SleapRTCDashboard {
                         </span>`
                     : `<span class="worker-meta-item"><span class="auth-badge token">TOKEN</span></span>`;
 
+                const metaOrJobInfo = activeJob
+                    ? jobInfoHtml
+                    : `<div class="wm-worker-meta">
+                        <span class="wm-meta-item">
+                            <i data-lucide="hash"></i>
+                            ${worker.peer_id}
+                            <span class="auth-badge peer-id">PEER ID</span>
+                        </span>
+                        ${keyItem}
+                    </div>`;
+
                 return `
-                <div class="wm-worker-card">
+                <div class="wm-worker-card ${busyClickable}" ${clickHandler}>
                     <div class="wm-worker-row">
                         <div class="wm-worker-icon"><i data-lucide="cpu"></i></div>
                         <div class="wm-worker-info">
@@ -1723,20 +1785,13 @@ class SleapRTCDashboard {
                             ${worker.connected_at ? `<span class="wm-connected-time" title="${formatExactDate(worker.connected_at)}">Connected ${formatRelativeTime(worker.connected_at)}</span>` : ''}
                         </div>
                     </div>
-                    <div class="wm-worker-meta">
-                        <span class="wm-meta-item">
-                            <i data-lucide="hash"></i>
-                            ${worker.peer_id}
-                            <span class="auth-badge peer-id">PEER ID</span>
-                        </span>
-                        ${keyItem}
-                    </div>
+                    ${metaOrJobInfo}
                 </div>`;
             }).join('');
         }
 
-        if (typeof lucide !== 'undefined') {
-            lucide.createIcons();
+        if (typeof lucide !== 'undefined' && container) {
+            lucide.createIcons({ nodes: Array.from(container.querySelectorAll('[data-lucide]')) });
         }
     }
 
@@ -2328,12 +2383,16 @@ class SleapRTCDashboard {
         this._sjInitDropzone();
         this.sjGoToStep(1);
         this.showModal('submit-job-modal');
-        if (typeof lucide !== 'undefined') lucide.createIcons();
     }
 
     _sjRenderWorkerList() {
         const container = document.getElementById('sj-worker-list');
         if (!container) return;
+
+        // DEBUG: log activeJobs state so we can verify worker status derivation
+        console.log('[DEBUG-workerStatus] _sjRenderWorkerList roomId=%s activeJobs:', this._sjRoomId,
+            Array.from(this.activeJobs.entries()).map(([id, j]) =>
+                `${id.slice(0,8)} worker=${j.workerId} room=${j.roomId} status=${j.status}`));
 
         const workers = this.roomWorkers[this._sjRoomId]?.workers ?? [];
         if (workers.length === 0) {
@@ -2343,25 +2402,40 @@ class SleapRTCDashboard {
 
         container.innerHTML = workers.map(worker => {
             const props = worker.properties ?? {};
-            const status = props.status ?? 'available';
+            const serverStatus = props.status ?? 'available';
             const gpuModel = props.gpu_model || 'Unknown GPU';
             const gpuMem = props.gpu_memory_mb ? `${Math.round(props.gpu_memory_mb / 1024)} GB` : '';
             const cuda = props.cuda_version ? `CUDA ${props.cuda_version}` : '';
             const sleapNnVersion = props.sleap_nn_version ? `sleap-nn ${props.sleap_nn_version}` : '';
+            const specs = [gpuModel, gpuMem, cuda, sleapNnVersion].filter(Boolean).join(' · ');
+
+            // Check local activeJobs first — server may report available even while training
+            const activeJob = Array.from(this.activeJobs.values()).find(
+                j => j.workerId === worker.peer_id && j.roomId === this._sjRoomId &&
+                     j.status !== 'complete' && j.status !== 'failed' && j.status !== 'cancelled'
+            );
             // status is one of: available, busy, reserved, maintenance
+            const status = activeJob ? 'busy' : serverStatus;
+            console.log(`[DEBUG-workerStatus] SJ worker=${worker.peer_id} server=${serverStatus} activeJob=${activeJob?.jobId?.slice(0,8) ?? 'none'} → effective=${status}`);
             const isAvailable = status === 'available';
             const disabledClass = isAvailable ? '' : ' disabled';
             const clickHandler = isAvailable
                 ? `onclick="app.sjSelectWorker('${worker.peer_id}')"`
                 : '';
-            const specs = [gpuModel, gpuMem, cuda, sleapNnVersion].filter(Boolean).join(' · ');
+            const busyLabel = activeJob
+                ? `<span class="sj-busy-label">Training ${activeJob.modelType}${activeJob.lastEpoch > 0 ? ' (Epoch ' + activeJob.lastEpoch + ')' : ''}</span>`
+                : '';
 
-            return `<div class="sj-worker-row${disabledClass}" data-peer-id="${worker.peer_id}" ${clickHandler}>
+            const selectedClass = worker.peer_id === this._sjWorkerId ? ' selected' : '';
+            return `<div class="sj-worker-row${disabledClass}${selectedClass}" data-peer-id="${worker.peer_id}" ${clickHandler}>
                 <div class="sj-worker-info">
                     <span class="sj-worker-name">${worker.worker_name ?? worker.peer_id}</span>
                     <span class="sj-worker-specs">${specs}</span>
                 </div>
-                <span class="sj-status-dot ${status}" title="${status}"></span>
+                <div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px;">
+                    <span class="sj-status-dot ${status}" title="${status}"></span>
+                    ${busyLabel}
+                </div>
             </div>`;
         }).join('');
     }
@@ -2379,7 +2453,126 @@ class SleapRTCDashboard {
 
     closeSubmitJobModal() {
         this.hideModal('submit-job-modal');
-        this._sjCleanupSSE();
+
+        // If a job is actively running, disconnect SSE but keep tracking
+        const jobId = this._currentJobId;
+        const job = jobId ? this.activeJobs.get(jobId) : null;
+
+        if (job && job.status !== 'complete' && job.status !== 'failed' && job.status !== 'cancelled') {
+            // Close modal SSE, re-open as background SSE so stale check stays guarded
+            this._sjJobSSE?.close();
+            this._sjJobSSE = null;
+            const bgSse = this.sseConnect(jobId);
+            bgSse.on('status', (data) => this._backgroundJobStatus(jobId, data))
+                 .on('job_status', (data) => this._backgroundJobStatus(jobId, data))
+                 .on('job_progress', (data) => this._backgroundJobProgress(jobId, data))
+                 .on('epoch', (data) => this._backgroundJobEpoch(jobId, data));
+            job.sseConnection = bgSse;
+            // Update badge on room card
+            this._updateRoomBadges(job.roomId);
+        } else {
+            this._sjCleanupSSE();
+            // If terminal, keep badge briefly for user to review
+            if (job) this._updateRoomBadges(job.roomId);
+        }
+
+        this._sjWorkerSSE?.close();
+        this._sjWorkerSSE = null;
+    }
+
+    reopenJobModal(jobId) {
+        const job = this.activeJobs.get(jobId);
+        if (!job) return;
+
+        this._sjRoomId = job.roomId;
+        this._sjWorkerId = job.workerId;
+        this._sjModelType = job.modelType;
+        this._sjMaxEpochs = job.maxEpochs;
+        this._currentJobId = jobId;
+
+        // Set subtitle
+        const room = this.rooms?.find(r => r.room_id === job.roomId);
+        document.getElementById('sj-subtitle').textContent = room?.name || job.roomId;
+
+        // Go to status view
+        this.sjGoToStep('status');
+        this._sjResetProgressPanel();
+
+        // Restore last-known state from activeJobs
+        this._restoreJobState(job);
+
+        // Reconnect SSE for live updates
+        if (job.status !== 'complete' && job.status !== 'failed' && job.status !== 'cancelled') {
+            // Close background SSE first to prevent duplicate event handlers
+            if (job.sseConnection) {
+                job.sseConnection.close();
+                job.sseConnection = null;
+            }
+            this._sjJobSSE = this.sseConnect(jobId);
+            this._sjJobSSE
+                .on('status', (data) => this._sjHandleJobStatus(data))
+                .on('job_status', (data) => this._sjHandleJobStatus(data))
+                .on('job_progress', (data) => this._sjHandleJobProgress(data))
+                .on('epoch', (data) => this._sjHandleJobEpoch(data));
+            job.sseConnection = this._sjJobSSE;
+
+            // Append reconnect marker to log
+            this._sjAppendLog('— Reconnected —', 'log-reconnect');
+        }
+
+        this.showModal('submit-job-modal');
+    }
+
+    _restoreJobState(job) {
+        // Status label
+        const label = document.getElementById('sj-status-label');
+        if (label) {
+            if (job.status === 'complete') {
+                label.textContent = 'Complete';
+                this._sjUpdateStatusIcon('complete');
+                this._sjShowCloseButton();
+            } else if (job.status === 'failed') {
+                label.textContent = `Failed: ${job.failMessage || 'Job failed'}`;
+                this._sjUpdateStatusIcon('failed');
+                this._sjShowCloseButton();
+            } else if (job.lastEpoch > 0) {
+                label.textContent = `Training ${job.modelType} — Epoch ${job.lastEpoch}${job.lastLoss != null ? `, loss ${job.lastLoss.toFixed(4)}` : ''}`;
+            } else {
+                label.textContent = 'Running…';
+            }
+        }
+
+        // Epoch counter
+        if (job.lastEpoch > 0) {
+            const cur = document.getElementById('sj-epoch-current');
+            if (cur) cur.textContent = job.lastEpoch;
+            const total = document.getElementById('sj-epoch-total');
+            if (total) total.textContent = job.maxEpochs ? ` / ${job.maxEpochs}` : '';
+            document.getElementById('sj-epoch-section')?.classList.remove('hidden');
+        }
+
+        // WandB link
+        if (job.wandbUrl) {
+            const link = document.getElementById('sj-wandb-link');
+            if (link) {
+                link.href = job.wandbUrl;
+                link.classList.remove('hidden');
+            }
+        }
+
+        // Job queue
+        const queue = document.getElementById('sj-job-queue');
+        if (queue) {
+            queue.textContent = 'Job 1 / 1';
+            queue.classList.remove('hidden');
+        }
+
+        // Replay stored log lines
+        if (job.logs && job.logs.length > 0) {
+            for (const entry of job.logs) {
+                this._sjAppendLog(entry.text, entry.cls || '');
+            }
+        }
     }
 
     /**
@@ -2390,6 +2583,239 @@ class SleapRTCDashboard {
         this._sjJobSSE?.close();
         this._sjWorkerSSE = null;
         this._sjJobSSE = null;
+    }
+
+    // ── Active job tracking ──────────────────────────────────────────────────
+
+    _persistActiveJobs() {
+        const jobs = Array.from(this.activeJobs.values()).map(j => ({
+            jobId: j.jobId, roomId: j.roomId, workerId: j.workerId,
+            workerName: j.workerName, status: j.status, modelType: j.modelType,
+            lastEpoch: j.lastEpoch, maxEpochs: j.maxEpochs, startedAt: j.startedAt,
+            lastLoss: j.lastLoss, wandbUrl: j.wandbUrl, failMessage: j.failMessage,
+            logs: (j.logs || []).slice(-500),
+        }));
+        sessionStorage.setItem('sleap-rtc-active-jobs', JSON.stringify(jobs));
+    }
+
+    _loadActiveJobs() {
+        try {
+            const raw = sessionStorage.getItem('sleap-rtc-active-jobs');
+            if (!raw) return;
+            const jobs = JSON.parse(raw);
+            for (const j of jobs) {
+                this.activeJobs.set(j.jobId, { ...j, logs: j.logs || [], sseConnection: null });
+            }
+            const now = Date.now();
+            for (const [jobId, job] of this.activeJobs) {
+                // Remove jobs older than 24 hours
+                if (job.startedAt && now - job.startedAt > 24 * 60 * 60 * 1000) {
+                    this.activeJobs.delete(jobId);
+                }
+            }
+        } catch (e) {
+            console.warn('[ActiveJobs] Failed to load from sessionStorage:', e);
+        }
+    }
+
+    _removeActiveJob(jobId) {
+        const job = this.activeJobs.get(jobId);
+        if (job?.sseConnection) job.sseConnection.close();
+        this.activeJobs.delete(jobId);
+        this._persistActiveJobs();
+    }
+
+    _updateRoomBadges(roomId) {
+        const badgeContainer = document.getElementById(`room-job-badges-${roomId}`);
+        if (!badgeContainer) return;
+
+        const jobs = Array.from(this.activeJobs.values()).filter(j => j.roomId === roomId);
+
+        if (jobs.length === 0) {
+            badgeContainer.innerHTML = '';
+            return;
+        }
+
+        // Only show badges for terminal jobs (complete/failed)
+        const terminalJobs = jobs.filter(j => j.status === 'complete' || j.status === 'failed' || j.status === 'cancelled');
+        if (terminalJobs.length === 0) {
+            badgeContainer.innerHTML = '';
+            return;
+        }
+
+        badgeContainer.innerHTML = terminalJobs.map(job => {
+            const name = job.workerName || job.workerId;
+            const cls = job.status === 'complete' ? 'btn-training-complete' : 'btn-training-failed';
+            const label = job.status === 'complete'
+                ? `<strong>${name}</strong> Job Completed!`
+                : `<strong>${name}</strong> Job Failed`;
+            return `<button class="btn ${cls} btn-sm" onclick="event.stopPropagation();app.openJobSummary('${job.jobId}')">
+                ${label}
+                <span class="btn-badge-dismiss-inline" title="Dismiss" onclick="event.stopPropagation();app.dismissJobBadge('${job.jobId}')">&times;</span>
+            </button>`;
+        }).join('');
+
+        if (typeof lucide !== 'undefined') {
+            lucide.createIcons({ nodes: Array.from(badgeContainer.querySelectorAll('[data-lucide]')) });
+        }
+    }
+
+    dismissJobBadge(jobId) {
+        const job = this.activeJobs.get(jobId);
+        const roomId = job?.roomId;
+        this._removeActiveJob(jobId);
+        if (roomId) this._updateRoomBadges(roomId);
+    }
+
+    openJobSummary(jobId) {
+        const job = this.activeJobs.get(jobId);
+        if (!job) return;
+
+        const room = this.rooms?.find(r => r.room_id === job.roomId);
+        document.getElementById('jsum-subtitle').textContent = room?.name || job.roomId;
+
+        // Summary line
+        const isComplete = job.status === 'complete';
+        const statusLabel = isComplete ? 'Complete' : (job.failMessage || 'Failed');
+        const statusCls = isComplete ? 'complete' : 'failed';
+        const parts = [
+            `<span class="jsum-item jsum-status ${statusCls}">${isComplete ? '&#10003;' : '&#10007;'} ${statusLabel}</span>`,
+            `<span class="jsum-item">Worker: <strong>${job.workerName || job.workerId}</strong></span>`,
+            `<span class="jsum-item">Model: ${job.modelType}</span>`,
+            `<span class="jsum-item">Epochs: ${job.lastEpoch}${job.maxEpochs ? ' / ' + job.maxEpochs : ''}</span>`,
+        ];
+        if (job.lastLoss != null) parts.push(`<span class="jsum-item">Final Loss: ${job.lastLoss.toFixed(4)}</span>`);
+        if (job.wandbUrl) parts.push(`<span class="jsum-item"><a href="${job.wandbUrl}" target="_blank" rel="noopener">Track in WandB &rarr;</a></span>`);
+        document.getElementById('jsum-summary').innerHTML = parts.join('');
+
+        // Logs
+        const logContainer = document.getElementById('jsum-logs');
+        logContainer.innerHTML = '';
+        if (job.logs && job.logs.length > 0) {
+            for (const entry of job.logs) {
+                const line = document.createElement('div');
+                line.className = `log-line${entry.cls ? ' ' + entry.cls : ''}`;
+                line.textContent = entry.text;
+                logContainer.appendChild(line);
+            }
+        } else {
+            logContainer.innerHTML = '<div class="log-line" style="color:var(--text-muted)">No logs available.</div>';
+        }
+
+        this.showModal('job-summary-modal');
+    }
+
+    // ── Worker status polling ────────────────────────────────────────────────
+
+    startWorkerPolling() {
+        this.stopWorkerPolling();
+        if (this.rooms.length === 0) return;
+
+        this._workerPollInterval = setInterval(() => {
+            for (const room of this.rooms) {
+                this.loadRoomWorkers(room.room_id).then(() => {
+                    this._updateWorkerBadge(room.room_id);
+                    // If Workers modal is open for this room, re-render
+                    if (this.currentWorkersRoomId === room.room_id &&
+                        !document.getElementById('workers-modal')?.classList.contains('hidden')) {
+                        this.renderWorkersModalList();
+                    }
+                    // If Submit Job modal is open for this room, re-render worker list
+                    if (this._sjRoomId === room.room_id &&
+                        !document.getElementById('submit-job-modal')?.classList.contains('hidden')) {
+                        this._sjRenderWorkerList();
+                    }
+                    // Detect stale jobs: worker went available but job still "running"
+                    this._checkStaleJobs(room.room_id);
+                }).catch(() => {}); // Silently ignore poll failures
+            }
+        }, 15000);
+    }
+
+    stopWorkerPolling() {
+        if (this._workerPollInterval) {
+            clearInterval(this._workerPollInterval);
+            this._workerPollInterval = null;
+        }
+    }
+
+    _updateWorkerBadge(roomId) {
+        const data = this.roomWorkers[roomId];
+        if (!data) return;
+        const badge = document.getElementById(`room-worker-badge-${roomId}`);
+        if (!badge) return;
+        const count = data.workers?.length ?? 0;
+        const text = count === 0 ? '0 connected' : `${count} connected`;
+        badge.innerHTML = `<i data-lucide="${count === 0 ? 'zap-off' : 'zap'}"></i> ${text}`;
+        badge.className = `worker-count-badge ${count === 0 ? 'offline' : ''}`;
+        if (typeof lucide !== 'undefined') {
+            lucide.createIcons({ nodes: Array.from(badge.querySelectorAll('[data-lucide]')) });
+        }
+    }
+
+    _checkStaleJobs(roomId) {
+        const workers = this.roomWorkers[roomId]?.workers ?? [];
+        for (const [jobId, job] of this.activeJobs) {
+            if (job.roomId !== roomId) continue;
+            if (job.status === 'complete' || job.status === 'failed' || job.status === 'cancelled') continue;
+            // If SSE is active, trust it to report completion — don't override with stale heuristic
+            if (job.sseConnection) continue;
+
+            const worker = workers.find(w => w.peer_id === job.workerId);
+            const workerStatus = worker?.properties?.status || 'unknown';
+
+            // If worker is available but job is still running, the job likely ended while disconnected
+            if (workerStatus === 'available' && job.lastEpoch > 0) {
+                job.status = 'complete';
+                this._persistActiveJobs();
+                this._updateRoomBadges(roomId);
+            }
+        }
+    }
+
+    _reconnectActiveJobs() {
+        for (const [jobId, job] of this.activeJobs) {
+            if (job.status === 'complete' || job.status === 'failed' || job.status === 'cancelled') continue;
+
+            // Connect SSE in background (no modal open)
+            const sse = this.sseConnect(jobId);
+            sse.on('status', (data) => this._backgroundJobStatus(jobId, data))
+               .on('job_status', (data) => this._backgroundJobStatus(jobId, data))
+               .on('job_progress', (data) => this._backgroundJobProgress(jobId, data))
+               .on('epoch', (data) => this._backgroundJobEpoch(jobId, data));
+            job.sseConnection = sse;
+        }
+    }
+
+    _backgroundJobStatus(jobId, data) {
+        const job = this.activeJobs.get(jobId);
+        if (!job) return;
+        job.status = data.status;
+        this._persistActiveJobs();
+        this._updateRoomBadges(job.roomId);
+    }
+
+    _backgroundJobEpoch(jobId, data) {
+        const job = this.activeJobs.get(jobId);
+        if (!job) return;
+        if (data.epoch != null) job.lastEpoch = data.epoch;
+        if (data.loss != null) job.lastLoss = Number(data.loss);
+        if (data.wandb_url) job.wandbUrl = data.wandb_url;
+        this._persistActiveJobs();
+        this._updateRoomBadges(job.roomId);
+    }
+
+    _backgroundJobProgress(jobId, data) {
+        const job = this.activeJobs.get(jobId);
+        if (!job) return;
+        if (data.event === 'epoch_end' && data.epoch != null) {
+            job.lastEpoch = data.epoch;
+            const logs = data.logs || {};
+            if (logs['train/loss'] != null) job.lastLoss = Number(logs['train/loss']);
+        }
+        if (data.wandb_url && !job.wandbUrl) job.wandbUrl = data.wandb_url;
+        this._persistActiveJobs();
+        this._updateRoomBadges(job.roomId);
     }
 
     // ── Task 5: YAML config upload ────────────────────────────────────────────
@@ -2627,7 +3053,7 @@ class SleapRTCDashboard {
                 statusEl.innerHTML = `<i data-lucide="check-circle"></i> All ${total} videos found`;
                 statusEl.className = 'sj-validation-status success';
                 statusEl.classList.remove('hidden');
-                if (typeof lucide !== 'undefined') lucide.createIcons();
+                if (typeof lucide !== 'undefined') lucide.createIcons({ nodes: Array.from(statusEl.querySelectorAll('[data-lucide]')) });
             }
             document.getElementById('sj-submit-btn').disabled = false;
         } else {
@@ -2637,7 +3063,7 @@ class SleapRTCDashboard {
                 statusEl.innerHTML = `<i data-lucide="alert-triangle"></i> ${missing.length} of ${total} videos not found`;
                 statusEl.className = 'sj-validation-status warning';
                 statusEl.classList.remove('hidden');
-                if (typeof lucide !== 'undefined') lucide.createIcons();
+                if (typeof lucide !== 'undefined') lucide.createIcons({ nodes: Array.from(statusEl.querySelectorAll('[data-lucide]')) });
             }
             this._sjRenderMissingVideos();
         }
@@ -2651,7 +3077,7 @@ class SleapRTCDashboard {
             statusEl.innerHTML = '<i data-lucide="loader-2" class="spin"></i> Validating path…';
             statusEl.className = 'sj-validation-status validating';
             statusEl.classList.remove('hidden');
-            if (typeof lucide !== 'undefined') lucide.createIcons();
+            if (typeof lucide !== 'undefined') lucide.createIcons({ nodes: Array.from(statusEl.querySelectorAll('[data-lucide]')) });
         }
         document.getElementById('sj-submit-btn').disabled = true;
 
@@ -2665,7 +3091,7 @@ class SleapRTCDashboard {
                 statusEl.innerHTML = `<i data-lucide="x-circle"></i> ${this._escapeHtml(err.message)}`;
                 statusEl.className = 'sj-validation-status error';
                 statusEl.classList.remove('hidden');
-                if (typeof lucide !== 'undefined') lucide.createIcons();
+                if (typeof lucide !== 'undefined') lucide.createIcons({ nodes: Array.from(statusEl.querySelectorAll('[data-lucide]')) });
             }
         }
     }
@@ -2706,7 +3132,9 @@ class SleapRTCDashboard {
 
         container.innerHTML = html;
         container.classList.remove('hidden');
-        if (typeof lucide !== 'undefined') lucide.createIcons();
+        if (typeof lucide !== 'undefined') {
+            lucide.createIcons({ nodes: Array.from(container.querySelectorAll('[data-lucide]')) });
+        }
 
         // Enable submit if all resolved
         if (resolved === total) {
@@ -2878,17 +3306,45 @@ class SleapRTCDashboard {
             );
             const jobId = result.job_id;
 
+            // Track this job in activeJobs
+            const workerData = this.roomWorkers[this._sjRoomId]?.workers ?? [];
+            const worker = workerData.find(w => w.peer_id === this._sjWorkerId);
+            const jobEntry = {
+                jobId,
+                roomId: this._sjRoomId,
+                workerId: this._sjWorkerId,
+                workerName: worker?.worker_name || this._sjWorkerId,
+                status: 'submitted',
+                modelType: this._sjModelType || 'model',
+                lastEpoch: 0,
+                maxEpochs: this._sjMaxEpochs || null,
+                lastLoss: null,
+                logs: [],
+                wandbUrl: null,
+                startedAt: Date.now(),
+                sseConnection: null,
+            };
+            this.activeJobs.set(jobId, jobEntry);
+            this._currentJobId = jobId;
+            this._persistActiveJobs();
+
             // Close worker SSE (no longer needed)
             this._sjWorkerSSE?.close();
             this._sjWorkerSSE = null;
 
             // Open job SSE for status updates
             this._sjJobSSE = this.sseConnect(jobId);
+            jobEntry.sseConnection = this._sjJobSSE;
             this._sjJobSSE
                 .on('status', (data) => this._sjHandleJobStatus(data))
                 .on('job_status', (data) => this._sjHandleJobStatus(data))
                 .on('job_progress', (data) => this._sjHandleJobProgress(data))
                 .on('epoch', (data) => this._sjHandleJobEpoch(data));
+
+            // Optimistically mark worker as busy in local cache
+            if (worker?.properties) {
+                worker.properties.status = 'busy';
+            }
 
             // Switch to status view and reset progress panel
             this.sjGoToStep('status');
@@ -2911,6 +3367,17 @@ class SleapRTCDashboard {
         const status = data.status;
         const stage = data.stage;
         const modelLabel = this._sjModelType || 'model';
+
+        // Update activeJobs entry
+        const job = this._currentJobId ? this.activeJobs.get(this._currentJobId) : null;
+        if (job) {
+            job.status = status;
+            if (status === 'failed') {
+                job.failMessage = data.message || data.error || 'Job failed';
+            }
+            this._persistActiveJobs();
+            this._updateRoomBadges(job.roomId);
+        }
 
         if (status === 'running' || status === 'submitted') {
             if (label) {
@@ -2954,6 +3421,16 @@ class SleapRTCDashboard {
                 link.classList.remove('hidden');
             }
         }
+
+        // Update activeJobs entry
+        const job = this._currentJobId ? this.activeJobs.get(this._currentJobId) : null;
+        if (job) {
+            if (epoch != null) job.lastEpoch = epoch;
+            if (loss != null) job.lastLoss = Number(loss);
+            if (data.wandb_url) job.wandbUrl = data.wandb_url;
+            this._persistActiveJobs();
+            this._updateRoomBadges(job.roomId);
+        }
     }
 
     _sjHandleJobProgress(data) {
@@ -2988,6 +3465,27 @@ class SleapRTCDashboard {
             this._sjUpdateMetrics(logs);
         } else if (event === 'train_end') {
             this._sjAppendLog(`${what}Training complete`, 'log-info');
+        }
+
+        // Update activeJobs entry with log line
+        const job = this._currentJobId ? this.activeJobs.get(this._currentJobId) : null;
+        if (job) {
+            if (event === 'epoch_end' && data.epoch != null) {
+                const logs = data.logs || {};
+                const trainLoss = logs['train/loss'] != null ? Number(logs['train/loss']) : null;
+                job.lastEpoch = data.epoch;
+                if (trainLoss != null) job.lastLoss = trainLoss;
+            }
+            if (data.wandb_url && !job.wandbUrl) job.wandbUrl = data.wandb_url;
+            // Store log line for replay on reopen
+            if (event === 'train_begin') job.logs.push({ text: `${what}Training started` });
+            else if (event === 'epoch_end') {
+                const logs = data.logs || {};
+                const parts = Object.entries(logs).map(([k, v]) => `${k}: ${Number(v).toFixed(4)}`).join('  ');
+                job.logs.push({ text: `${what}Epoch ${data.epoch}  ${parts}` });
+            } else if (event === 'train_end') job.logs.push({ text: `${what}Training complete`, cls: 'log-info' });
+            this._persistActiveJobs();
+            this._updateRoomBadges(job.roomId);
         }
     }
 
@@ -3025,8 +3523,11 @@ class SleapRTCDashboard {
         // Clear log
         const log = document.getElementById('sj-training-log');
         if (log) log.innerHTML = '';
-        // Re-init lucide icons
-        if (window.lucide) lucide.createIcons();
+        // Re-init lucide icons scoped to status view
+        const statusView = document.getElementById('sj-status');
+        if (window.lucide && statusView) {
+            lucide.createIcons({ nodes: Array.from(statusView.querySelectorAll('[data-lucide]')) });
+        }
     }
 
     _sjUpdateStatusIcon(state) {
@@ -3097,8 +3598,16 @@ class SleapRTCDashboard {
         const viewId = step === 'status' ? 'sj-status' : `sj-step${step}`;
         document.getElementById(viewId)?.classList.remove('hidden');
 
-        // Update step indicator dots (steps 1-3 only)
-        if (typeof step === 'number') {
+        // Hide stepper and update title for status view; show for wizard steps
+        const stepper = document.querySelector('.sj-step-indicator');
+        const title = document.getElementById('sj-title');
+        if (step === 'status') {
+            if (stepper) stepper.classList.add('hidden');
+            if (title) title.textContent = 'Training Job';
+        } else {
+            if (stepper) stepper.classList.remove('hidden');
+            if (title) title.textContent = 'Submit Training Job';
+            // Update step indicator dots (steps 1-3 only)
             for (let i = 1; i <= 3; i++) {
                 const dot = document.getElementById(`sj-step-dot-${i}`);
                 if (!dot) continue;
