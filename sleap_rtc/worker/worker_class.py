@@ -1847,19 +1847,28 @@ class RTCWorkerClient:
                             f"{thin_line}{r}"
                         )
 
-                        # If admin, wait for admin WebSocket handler instead of continuing this loop
-                        # This prevents two coroutines from reading the same WebSocket
-                        if self.admin_controller and self.admin_controller.is_admin:
-                            logging.info(
-                                "Admin worker: waiting for admin WebSocket handler"
-                            )
-                            # Wait for the admin handler task to complete (keeps worker alive)
-                            if (
-                                self.mesh_coordinator
-                                and self.mesh_coordinator._admin_handler_task
-                            ):
-                                await self.mesh_coordinator._admin_handler_task
-                            return  # Exit after admin handler completes
+                        # Restart admin WebSocket handler with fresh websocket
+                        if (
+                            self.mesh_coordinator
+                            and self.admin_controller
+                            and self.admin_controller.is_admin
+                        ):
+                            self.mesh_coordinator.websocket = self.websocket
+                            self.mesh_coordinator._start_admin_websocket_handler()
+
+                    # If admin, wait for admin WebSocket handler instead of continuing this loop
+                    # This prevents two coroutines from reading the same WebSocket
+                    if self.admin_controller and self.admin_controller.is_admin:
+                        logging.info(
+                            "Admin worker: waiting for admin WebSocket handler"
+                        )
+                        # Wait for the admin handler task to complete (keeps worker alive)
+                        if (
+                            self.mesh_coordinator
+                            and self.mesh_coordinator._admin_handler_task
+                        ):
+                            await self.mesh_coordinator._admin_handler_task
+                        return  # Exit after admin handler completes
 
                 # Phase 6: Handle mesh connection messages from signaling server
                 elif msg_type == "mesh_offer":
