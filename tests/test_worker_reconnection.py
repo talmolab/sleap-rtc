@@ -44,6 +44,9 @@ def _make_worker():
     worker.worker_connections = {}
     worker.data_channels = {}
     worker.mesh_coordinator = None
+    # Signaling heartbeat watchdog attributes
+    worker._last_signaling_ping = 0.0
+    worker._heartbeat_watchdog_task = None
     return worker
 
 
@@ -777,3 +780,74 @@ class TestParseDuration:
         from sleap_rtc.cli import _parse_duration
         with pytest.raises(click.BadParameter):
             _parse_duration("0m")
+
+
+# ---------------------------------------------------------------------------
+# Tests for signaling heartbeat watchdog
+# ---------------------------------------------------------------------------
+class TestSignalingHeartbeatWatchdog:
+    async def test_watchdog_closes_websocket_after_timeout(self):
+        """Watchdog closes websocket when no pings arrive within 90s."""
+        worker = _make_worker()
+        worker.websocket = AsyncMock()
+        worker._last_signaling_ping = time.monotonic() - 100  # 100s ago
+
+        sleep_called = False
+        original_sleep = asyncio.sleep
+
+        async def _mock_sleep(duration):
+            nonlocal sleep_called
+            sleep_called = True
+            # Don't actually wait
+
+        with patch("asyncio.sleep", _mock_sleep):
+            await worker._signaling_heartbeat_watchdog()
+
+        assert sleep_called
+        worker.websocket.close.assert_awaited_once()
+
+    async def test_watchdog_does_not_close_when_pings_arrive(self):
+        """Watchdog stays quiet when pings are recent."""
+        worker = _make_worker()
+        worker.websocket = AsyncMock()
+        worker._last_signaling_ping = time.monotonic()
+
+        call_count = 0
+
+        async def _mock_sleep(duration):
+            nonlocal call_count
+            call_count += 1
+            # After 3 checks, simulate shutdown to exit the loop
+            if call_count >= 3:
+                worker.shutting_down = True
+            # Keep ping timestamp fresh each time
+            worker._last_signaling_ping = time.monotonic()
+
+        with patch("asyncio.sleep", _mock_sleep):
+            await worker._signaling_heartbeat_watchdog()
+
+        # Websocket should NOT have been closed
+        worker.websocket.close.assert_not_awaited()
+        assert call_count >= 3
+
+    async def test_watchdog_started_in_reconnection_loop(self, monkeypatch):
+        """Verify watchdog task is created when websocket connects."""
+        worker = _make_worker()
+        _apply_common_patches(monkeypatch)
+
+        mock_ws = _make_mock_ws()
+        mock_connect = _make_mock_connect(mock_ws)
+        monkeypatch.setattr(f"{MODULE}.websockets.connect", mock_connect)
+
+        async def _handle_stop(*args, **kwargs):
+            # Verify watchdog was started
+            assert worker._heartbeat_watchdog_task is not None
+            assert not worker._heartbeat_watchdog_task.done()
+            worker.shutting_down = True
+
+        worker.handle_connection = AsyncMock(side_effect=_handle_stop)
+
+        pc = MagicMock()
+        await worker.run_worker(pc, "ws://test:8080", 8080, api_key="slp_testkey1234")
+
+        assert worker._heartbeat_watchdog_task is not None

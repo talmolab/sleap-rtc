@@ -28,6 +28,7 @@ Admin role:
 import asyncio
 import logging
 import json
+import time
 from typing import Dict, Optional, Any, List, TYPE_CHECKING
 from aiortc import RTCPeerConnection, RTCSessionDescription, RTCIceCandidate
 
@@ -276,6 +277,9 @@ class MeshCoordinator:
 
                     elif msg_type == "job_assigned":
                         await self._handle_job_assigned(data)
+
+                    elif msg_type == "ping":
+                        self.worker._last_signaling_ping = time.monotonic()
 
                     else:
                         logger.debug(f"Admin ignoring message type: {msg_type}")

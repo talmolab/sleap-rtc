@@ -255,6 +255,10 @@ class RTCWorkerClient:
         self.client_connections = {}  # peer_id -> RTCPeerConnection for clients
         self.data_channels = {}  # peer_id -> RTCDataChannel for mesh messaging
 
+        # Signaling heartbeat watchdog
+        self._last_signaling_ping = 0.0  # Last time server sent us a ping
+        self._heartbeat_watchdog_task = None  # Watchdog for signaling heartbeat
+
         # Heartbeat attributes (Phase 4)
         self.heartbeat_sequence = 0  # Sequence number for heartbeat messages
         self.heartbeat_task = None  # Background task for sending heartbeats
@@ -1022,6 +1026,30 @@ class RTCWorkerClient:
         logging.info(f"Sent status update to admin: {status}")
 
     # ===== End Mesh Message Handling =====
+
+    # ===== Signaling Heartbeat Watchdog =====
+
+    async def _signaling_heartbeat_watchdog(self):
+        """Close websocket if signaling server pings stop arriving.
+
+        The signaling server sends {"type": "ping"} every 30s. If no ping
+        arrives within 90s, the connection is presumed stale (e.g. Cloudflare
+        is keeping the WebSocket alive after a server restart) and we close
+        it to trigger reconnection.
+        """
+        try:
+            while not self.shutting_down:
+                await asyncio.sleep(30)
+                elapsed = time.monotonic() - self._last_signaling_ping
+                if elapsed > 90:
+                    logging.warning(
+                        f"No signaling server ping for {int(elapsed)}s — "
+                        f"connection presumed stale. Reconnecting..."
+                    )
+                    await self.websocket.close()
+                    return
+        except asyncio.CancelledError:
+            pass
 
     # ===== Heartbeat Mechanism (Phase 4) =====
 
@@ -1935,6 +1963,9 @@ class RTCWorkerClient:
                     logging.info(
                         f"Status updated to: {data.get('metadata').get('properties').get('status')}"
                     )
+
+                elif msg_type == "ping":
+                    self._last_signaling_ping = time.monotonic()
 
                 # Error handling
                 else:
@@ -3415,6 +3446,14 @@ class RTCWorkerClient:
                         # Reset backoff state
                         attempt = 0
                         reconnect_start = None
+
+                        # Start signaling heartbeat watchdog
+                        if self._heartbeat_watchdog_task and not self._heartbeat_watchdog_task.done():
+                            self._heartbeat_watchdog_task.cancel()
+                        self._last_signaling_ping = time.monotonic()
+                        self._heartbeat_watchdog_task = asyncio.create_task(
+                            self._signaling_heartbeat_watchdog()
+                        )
 
                         # Initialize state manager now that we have websocket and worker_id
                         self.state_manager = StateManager(
