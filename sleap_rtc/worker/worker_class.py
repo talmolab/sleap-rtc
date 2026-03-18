@@ -244,6 +244,8 @@ class RTCWorkerClient:
         self.peer_id_for_cleanup = None  # Set during run_worker
         self.peer_id = None  # Our peer_id, set from signaling server
         self.mesh_initialized = False
+        self._reconnect_attempt = 0  # Attempts before last successful connect
+        self._reconnect_downtime = 0  # Seconds spent disconnected
         self.signaling_dns = None  # Signaling server DNS for mesh connections
         self.admin_peer_id = None  # Current admin's peer_id
         self.mesh_coordinator = None  # MeshCoordinator instance
@@ -1796,24 +1798,6 @@ class RTCWorkerClient:
                             f"Discovered {len(discovered_peers)} peers from signaling server: {discovered_peers}"
                         )
 
-                    # Print session string for direct worker connection (backward compatibility)
-                    logging.info("=" * 80)
-                    logging.info("Worker authenticated with server")
-                    logging.info("=" * 80)
-                    logging.info("")
-                    logging.info("Session string for DIRECT connection to this worker:")
-                    session_string = self.state_manager.generate_session_string(
-                        room_id, token, peer_id
-                    )
-                    logging.info(f"  {session_string}")
-                    logging.info("")
-                    logging.info("Room ID for clients to connect:")
-                    logging.info(f"  {room_id}")
-                    logging.info("")
-                    logging.info("Worker Peer ID:")
-                    logging.info(f"  {peer_id}")
-                    logging.info("=" * 80)
-
                     # Initialize mesh networking (Phase 3)
                     if not self.mesh_initialized and self.signaling_dns:
                         await self.initialize_mesh(
@@ -1824,7 +1808,7 @@ class RTCWorkerClient:
                         )
                         self.mesh_initialized = True
 
-                        # Print ready banner
+                        # Print ready banner (first connection)
                         sleap_nn_ver = _get_sleap_nn_version()
                         gpu_info = f"{self.gpu_model} ({self.gpu_memory_mb} MB) · CUDA {self.cuda_version}"
                         thin_line = "─" * 80
@@ -1834,6 +1818,27 @@ class RTCWorkerClient:
                         logger.success(
                             f"\n{g}{thin_line}\n\n"
                             f"  ✓ Worker {bw}{self.name}{r}{g} ready! Waiting for client requests...\n\n"
+                            f"  Room:      {self.room_id}\n"
+                            f"  Worker:    {self.name}\n"
+                            f"  Peer ID:   {self.peer_id}\n"
+                            f"  GPU:       {gpu_info}\n"
+                            f"  sleap-nn:  {sleap_nn_ver}\n\n"
+                            f"{thin_line}{r}"
+                        )
+                    else:
+                        # Print reconnected banner
+                        reconnect_attempt = getattr(self, "_reconnect_attempt", 0)
+                        downtime = getattr(self, "_reconnect_downtime", 0)
+                        sleap_nn_ver = _get_sleap_nn_version()
+                        gpu_info = f"{self.gpu_model} ({self.gpu_memory_mb} MB) · CUDA {self.cuda_version}"
+                        thin_line = "─" * 80
+                        bw = "\033[1;37m"  # bold white
+                        g = "\033[32m"  # green (match loguru SUCCESS)
+                        r = "\033[0m"  # reset
+                        detail = f"attempt {reconnect_attempt + 1}, was disconnected for {int(downtime)}s"
+                        logger.success(
+                            f"\n{g}{thin_line}\n\n"
+                            f"  ✓ Worker {bw}{self.name}{r}{g} reconnected! ({detail})\n\n"
                             f"  Room:      {self.room_id}\n"
                             f"  Worker:    {self.name}\n"
                             f"  Peer ID:   {self.peer_id}\n"
@@ -3390,7 +3395,15 @@ class RTCWorkerClient:
                         # Set the WebSocket connection for the worker.
                         self.websocket = websocket
 
-                        # Connection succeeded — reset backoff state
+                        # Connection succeeded — store reconnection context for banner
+                        self._reconnect_attempt = attempt
+                        self._reconnect_downtime = (
+                            time.monotonic() - reconnect_start
+                            if reconnect_start is not None
+                            else 0
+                        )
+
+                        # Reset backoff state
                         attempt = 0
                         reconnect_start = None
 
