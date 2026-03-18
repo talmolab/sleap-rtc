@@ -16,6 +16,7 @@ def run_RTCworker(
     working_dir=None,
     name=None,
     room_secret=None,
+    max_reconnect_time=None,
 ):
     """Create RTCWorkerClient and start it.
 
@@ -26,6 +27,8 @@ def run_RTCworker(
         working_dir: Optional working directory. CLI option overrides config file.
         name: Optional human-readable name for this worker.
         room_secret: Optional room secret for P2P authentication (CLI override).
+        max_reconnect_time: Maximum time in seconds to keep retrying signaling server
+            reconnection before exiting. None means retry forever.
     """
     # Get configuration
     config = get_config()
@@ -67,6 +70,7 @@ def run_RTCworker(
                 room_id=room_id,
                 token=token,
                 room_secret=room_secret,
+                max_reconnect_time=max_reconnect_time,
             )
         )
     except KeyboardInterrupt:

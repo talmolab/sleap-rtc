@@ -137,6 +137,41 @@ def require_login() -> str:
     return jwt_token
 
 
+def _parse_duration(s: str) -> int:
+    """Parse a duration string like '30m', '2h', '1h30m', '90s' into seconds.
+
+    Also accepts plain integer strings as seconds (e.g. '3600').
+
+    Args:
+        s: Duration string.
+
+    Returns:
+        Duration in seconds (must be positive).
+
+    Raises:
+        click.BadParameter: If the string cannot be parsed or is zero/negative.
+    """
+    import re
+
+    if s.isdigit():
+        value = int(s)
+        if value <= 0:
+            raise click.BadParameter(
+                "Duration must be positive. Use e.g. '30m', '2h', '3600'."
+            )
+        return value
+    total = 0
+    for match in re.finditer(r"(\d+)\s*([hms])", s.lower()):
+        value, unit = int(match.group(1)), match.group(2)
+        multiplier = {"h": 3600, "m": 60, "s": 1}[unit]
+        total += value * multiplier
+    if total <= 0:
+        raise click.BadParameter(
+            f"Cannot parse duration: {s!r}. Use e.g. '30m', '2h', '1h30m', '90s'."
+        )
+    return total
+
+
 @click.group()
 def cli():
     pass
@@ -1483,7 +1518,14 @@ def show_worker_help():
     required=False,
     help="Room secret for P2P authentication. Can also use SLEAP_ROOM_SECRET env var.",
 )
-def worker(api_key, account_key, room, working_dir, name, verbose, room_secret):
+@click.option(
+    "--max-reconnect-time",
+    type=str,
+    required=False,
+    default=None,
+    help="Max time to keep retrying signaling server before exiting. Examples: '30m', '2h'. Default: no limit (retry forever).",
+)
+def worker(api_key, account_key, room, working_dir, name, verbose, room_secret, max_reconnect_time):
     """Start the sleap-RTC worker node.
 
     Authentication (recommended setup):
@@ -1561,6 +1603,11 @@ def worker(api_key, account_key, room, working_dir, name, verbose, room_secret):
             sys.exit(1)
         logger.info(f"Using working directory: {working_dir}")
 
+    # Parse max reconnect time if provided
+    max_reconnect_seconds = None
+    if max_reconnect_time:
+        max_reconnect_seconds = _parse_duration(max_reconnect_time)
+
     run_RTCworker(
         api_key=account_key or api_key,
         room_id=room,
@@ -1568,6 +1615,7 @@ def worker(api_key, account_key, room, working_dir, name, verbose, room_secret):
         working_dir=working_dir,
         name=name,
         room_secret=room_secret,
+        max_reconnect_time=max_reconnect_seconds,
     )
 
 

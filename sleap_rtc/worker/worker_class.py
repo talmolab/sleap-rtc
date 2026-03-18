@@ -3288,6 +3288,7 @@ class RTCWorkerClient:
         room_id=None,
         token=None,
         room_secret=None,
+        max_reconnect_time=None,
     ):
         """Main function to run the worker. Contains several event handlers for the WebRTC connection and data channel.
 
@@ -3300,11 +3301,15 @@ class RTCWorkerClient:
             token: Optional room token for authentication. Required if room_id is provided.
             room_secret: Optional room secret for P2P PSK authentication. If not provided,
                 will try to resolve from SLEAP_ROOM_SECRET env var, filesystem, or config.
+            max_reconnect_time: Maximum time in seconds to keep retrying signaling server
+                reconnection before exiting. None means retry forever.
 
         Returns:
             None
         """
         try:
+            # === One-time setup (outside reconnection loop) ===
+
             # Set the RTCPeerConnection object for the worker.
             logging.info(f"Setting RTCPeerConnection...")
             self.pc = pc
@@ -3341,7 +3346,7 @@ class RTCWorkerClient:
             if self._room_secret:
                 logging.info("P2P PSK authentication enabled (room secret configured)")
 
-            # Generate a worker peer ID based on API key prefix
+            # Generate a worker peer ID based on API key prefix (reused across reconnections)
             peer_id = f"worker-{api_key[4:12]}-{socket.gethostname()[:8]}-{uuid.uuid4().hex[:6]}"
             self.peer_id_for_cleanup = peer_id
             # Room ID and token will be returned by server after API key validation
@@ -3354,107 +3359,162 @@ class RTCWorkerClient:
             self.room_id = room_json.get("room_id")
             self.room_token = room_json.get("token")
 
-            # Establish a WebSocket connection to the signaling server.
-            logging.info(f"Connecting to signaling server at {DNS}...")
-            async with websockets.connect(DNS) as websocket:
+            # === Reconnection loop ===
+            reconnect_start = None
+            attempt = 0
 
-                # Set the WebSocket connection for the worker.
-                self.websocket = websocket
-
-                # Initialize state manager now that we have websocket and worker_id
-                self.state_manager = StateManager(
-                    worker_id=peer_id,
-                    websocket=self.websocket,
-                    capabilities=self.capabilities,
-                    max_concurrent_jobs=self.max_concurrent_jobs,
-                )
-                # Set human-readable name label for dashboard display
-                self.state_manager.worker_name = self.name
-                # Set room credentials in state manager
-                self.state_manager.set_room_credentials(
-                    room_id=self.room_id,
-                    token=self.room_token,
-                    api_key=api_key,
-                )
-                logging.info("StateManager initialized")
-
-                # Initialize job coordinator now that we have websocket and worker_id
-                self.job_coordinator = JobCoordinator(
-                    worker_id=peer_id,
-                    websocket=self.websocket,
-                    capabilities=self.capabilities,
-                    update_status_callback=self.state_manager.update_status,
-                    get_status_callback=self.state_manager.get_status,
-                )
-                logging.info("JobCoordinator initialized")
-
-                # Register the worker with the server (with v2.0 metadata).
-                logging.info(f"Registering {peer_id} with signaling server...")
-
-                # Try to get SLEAP version
+            while not self.shutting_down:
                 try:
-                    import sleap
+                    if attempt > 0:
+                        # Check timeout BEFORE sleeping
+                        if (
+                            max_reconnect_time
+                            and reconnect_start
+                            and (time.monotonic() - reconnect_start) > max_reconnect_time
+                        ):
+                            logging.error(
+                                f"Gave up reconnecting after {max_reconnect_time}s"
+                            )
+                            break
 
-                    sleap_version = sleap.__version__
-                except (ImportError, AttributeError):
-                    sleap_version = "unknown"
+                        backoff = min(2 ** (attempt - 1), 300)  # 1s, 2s, 4s, ... cap 5 min
+                        logging.warning(
+                            f"Reconnection attempt {attempt} — waiting {backoff}s before retry..."
+                        )
+                        await asyncio.sleep(backoff)
 
-                # Build registration message based on auth method
-                registration_msg = {
-                    "type": "register",
-                    "peer_id": peer_id,
-                    "role": "worker",
-                    "is_admin": True,  # Optimistically claim admin (server will resolve conflicts)
-                    "metadata": {
-                        "tags": [
-                            "sleap-rtc",
-                            "training-worker",
-                            "inference-worker",
-                        ],
-                        "properties": {
-                            "gpu_memory_mb": self.gpu_memory_mb,
-                            "gpu_model": self.gpu_model,
-                            "sleap_version": sleap_version,
-                            "sleap_nn_version": _get_sleap_nn_version(),
-                            "cuda_version": self.cuda_version,
-                            "hostname": socket.gethostname(),
-                            "worker_name": self.name,
-                            "status": self.status,
-                            "max_concurrent_jobs": self.max_concurrent_jobs,
-                            "supported_models": self.supported_models,
-                            "supported_job_types": self.supported_job_types,
-                            "mounts": self.file_manager.get_mounts(),
-                        },
-                    },
-                }
+                    # Establish a WebSocket connection to the signaling server.
+                    logging.info(f"Connecting to signaling server at {DNS}...")
+                    async with websockets.connect(DNS, open_timeout=20) as websocket:
 
-                # API key authentication
-                registration_msg["api_key"] = api_key
-                if room_id:
-                    registration_msg["room_id"] = room_id
-                logging.info("Registering with API key authentication")
+                        # Set the WebSocket connection for the worker.
+                        self.websocket = websocket
 
-                await self.websocket.send(json.dumps(registration_msg))
-                logging.info(
-                    f"{peer_id} sent to signaling server for registration with metadata!"
-                )
-                logging.info(
-                    f"Worker capabilities: GPU={self.gpu_model}, Memory={self.gpu_memory_mb}MB, CUDA={self.cuda_version}"
-                )
+                        # Connection succeeded — reset backoff state
+                        attempt = 0
+                        reconnect_start = None
 
-                # Handle incoming messages from server (e.g. answers).
-                try:
-                    await self.handle_connection(self.pc, self.websocket, peer_id)
-                    logging.info(f"{peer_id} connected with client!")
+                        # Initialize state manager now that we have websocket and worker_id
+                        self.state_manager = StateManager(
+                            worker_id=peer_id,
+                            websocket=self.websocket,
+                            capabilities=self.capabilities,
+                            max_concurrent_jobs=self.max_concurrent_jobs,
+                        )
+                        # Set human-readable name label for dashboard display
+                        self.state_manager.worker_name = self.name
+                        # Set room credentials in state manager
+                        self.state_manager.set_room_credentials(
+                            room_id=self.room_id,
+                            token=self.room_token,
+                            api_key=api_key,
+                        )
+                        logging.info("StateManager initialized")
+
+                        # Initialize job coordinator now that we have websocket and worker_id
+                        self.job_coordinator = JobCoordinator(
+                            worker_id=peer_id,
+                            websocket=self.websocket,
+                            capabilities=self.capabilities,
+                            update_status_callback=self.state_manager.update_status,
+                            get_status_callback=self.state_manager.get_status,
+                        )
+                        logging.info("JobCoordinator initialized")
+
+                        # Register the worker with the server (with v2.0 metadata).
+                        logging.info(f"Registering {peer_id} with signaling server...")
+
+                        # Try to get SLEAP version
+                        try:
+                            import sleap
+
+                            sleap_version = sleap.__version__
+                        except (ImportError, AttributeError):
+                            sleap_version = "unknown"
+
+                        # Build registration message based on auth method
+                        registration_msg = {
+                            "type": "register",
+                            "peer_id": peer_id,
+                            "role": "worker",
+                            "is_admin": True,  # Optimistically claim admin (server will resolve conflicts)
+                            "metadata": {
+                                "tags": [
+                                    "sleap-rtc",
+                                    "training-worker",
+                                    "inference-worker",
+                                ],
+                                "properties": {
+                                    "gpu_memory_mb": self.gpu_memory_mb,
+                                    "gpu_model": self.gpu_model,
+                                    "sleap_version": sleap_version,
+                                    "sleap_nn_version": _get_sleap_nn_version(),
+                                    "cuda_version": self.cuda_version,
+                                    "hostname": socket.gethostname(),
+                                    "worker_name": self.name,
+                                    "status": self.status,
+                                    "max_concurrent_jobs": self.max_concurrent_jobs,
+                                    "supported_models": self.supported_models,
+                                    "supported_job_types": self.supported_job_types,
+                                    "mounts": self.file_manager.get_mounts(),
+                                },
+                            },
+                        }
+
+                        # API key authentication
+                        registration_msg["api_key"] = api_key
+                        if room_id:
+                            registration_msg["room_id"] = room_id
+                        logging.info("Registering with API key authentication")
+
+                        await self.websocket.send(json.dumps(registration_msg))
+                        logging.info(
+                            f"{peer_id} sent to signaling server for registration with metadata!"
+                        )
+                        logging.info(
+                            f"Worker capabilities: GPU={self.gpu_model}, Memory={self.gpu_memory_mb}MB, CUDA={self.cuda_version}"
+                        )
+
+                        # Handle incoming messages from server (blocks until disconnect).
+                        await self.handle_connection(self.pc, self.websocket, peer_id)
+                        logging.info("Signaling connection ended. Reconnecting...")
+
+                except websockets.exceptions.ConnectionClosed as e:
+                    if reconnect_start is None:
+                        reconnect_start = time.monotonic()
+                    attempt += 1
+                    logging.warning(
+                        f"WebSocket connection closed: {e}. Will attempt to reconnect..."
+                    )
+                    continue
+
+                except (ConnectionRefusedError, OSError) as e:
+                    if reconnect_start is None:
+                        reconnect_start = time.monotonic()
+                    attempt += 1
+                    logging.warning(
+                        f"Cannot reach signaling server: {e}. Will attempt to reconnect..."
+                    )
+                    continue
+
                 except KeyboardInterrupt:
-                    logging.info("Worker shut down by user, shutting down...")
-                    await self.clean_exit()
+                    logging.info("Worker shut down by user")
+                    break
+
+                except Exception as e:
+                    # Unexpected errors: still retry but log as error
+                    if reconnect_start is None:
+                        reconnect_start = time.monotonic()
+                    attempt += 1
+                    logging.error(
+                        f"Unexpected error in worker connection: {e}. Will attempt to reconnect..."
+                    )
+                    continue
 
         except KeyboardInterrupt:
             logging.info("Worker interrupted by user during setup")
-            await self.clean_exit()
         except Exception as e:
-            logging.error(f"Error in run_worker: {e}")
+            logging.error(f"Error in run_worker setup: {e}")
         finally:
             await self.clean_exit()
 
