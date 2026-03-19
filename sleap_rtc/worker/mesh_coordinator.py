@@ -280,7 +280,9 @@ class MeshCoordinator:
 
                     elif msg_type == "ping":
                         self.worker._last_signaling_ping = time.monotonic()
-                        logging.warning("\033[33m[HEARTBEAT] Received signaling server ping\033[0m")
+                        logging.warning(
+                            "\033[33m[HEARTBEAT] Received signaling server ping\033[0m"
+                        )
 
                     else:
                         logger.debug(f"Admin ignoring message type: {msg_type}")

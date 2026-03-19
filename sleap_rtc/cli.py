@@ -1525,7 +1525,16 @@ def show_worker_help():
     default=None,
     help="Max time to keep retrying signaling server before exiting. Examples: '30m', '2h'. Default: no limit (retry forever).",
 )
-def worker(api_key, account_key, room, working_dir, name, verbose, room_secret, max_reconnect_time):
+def worker(
+    api_key,
+    account_key,
+    room,
+    working_dir,
+    name,
+    verbose,
+    room_secret,
+    max_reconnect_time,
+):
     """Start the sleap-RTC worker node.
 
     Authentication (recommended setup):

@@ -1980,7 +1980,9 @@ class RTCWorkerClient:
 
                 elif msg_type == "ping":
                     self._last_signaling_ping = time.monotonic()
-                    logging.warning("\033[33m[HEARTBEAT] Received signaling server ping (handle_connection)\033[0m")
+                    logging.warning(
+                        "\033[33m[HEARTBEAT] Received signaling server ping (handle_connection)\033[0m"
+                    )
 
                 # Error handling
                 else:
@@ -3380,7 +3382,7 @@ class RTCWorkerClient:
                 # Cancel admin handler task to unblock handle_connection
                 if (
                     self.mesh_coordinator
-                    and hasattr(self.mesh_coordinator, '_admin_handler_task')
+                    and hasattr(self.mesh_coordinator, "_admin_handler_task")
                     and self.mesh_coordinator._admin_handler_task
                     and not self.mesh_coordinator._admin_handler_task.done()
                 ):
@@ -3457,14 +3459,17 @@ class RTCWorkerClient:
                         if (
                             max_reconnect_time
                             and reconnect_start
-                            and (time.monotonic() - reconnect_start) > max_reconnect_time
+                            and (time.monotonic() - reconnect_start)
+                            > max_reconnect_time
                         ):
                             logging.error(
                                 f"Gave up reconnecting after {max_reconnect_time}s"
                             )
                             break
 
-                        backoff = min(2 ** (attempt - 1), 300)  # 1s, 2s, 4s, ... cap 5 min
+                        backoff = min(
+                            2 ** (attempt - 1), 300
+                        )  # 1s, 2s, 4s, ... cap 5 min
                         logging.warning(
                             f"Reconnection attempt {attempt} — waiting {backoff}s before retry..."
                         )
@@ -3490,7 +3495,10 @@ class RTCWorkerClient:
                         reconnect_start = None
 
                         # Start signaling heartbeat watchdog
-                        if self._heartbeat_watchdog_task and not self._heartbeat_watchdog_task.done():
+                        if (
+                            self._heartbeat_watchdog_task
+                            and not self._heartbeat_watchdog_task.done()
+                        ):
                             self._heartbeat_watchdog_task.cancel()
                         self._last_signaling_ping = time.monotonic()
                         self._heartbeat_watchdog_task = asyncio.create_task(
