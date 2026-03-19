@@ -1700,7 +1700,7 @@ class MeshCoordinator:
                         "peer_id": self.worker.peer_id,
                         "room_id": self.worker.room_id,
                         "token": self.worker.room_token,
-                        "id_token": self.worker.id_token,
+                        "api_key": self.worker.api_key,
                         "role": "worker",
                         "is_admin": True,  # Signal admin status
                         "metadata": {
@@ -1783,7 +1783,7 @@ class MeshCoordinator:
                         "peer_id": self.worker.peer_id,
                         "room_id": self.worker.room_id,
                         "token": self.worker.room_token,
-                        "id_token": self.worker.id_token,
+                        "api_key": self.worker.api_key,
                         "role": "worker",
                         "is_admin": False,  # Not admin anymore
                         "metadata": {
