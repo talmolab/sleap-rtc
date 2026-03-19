@@ -453,14 +453,14 @@ class MeshCoordinator:
         # Create a shim channel that sends responses via WebSocket→relay.
         # channel.send() is synchronous in the RTC API, so we schedule async
         # WebSocket sends on the event loop.
-        ws = self.websocket
+        coordinator = self  # Reference to mesh coordinator for dynamic websocket access
         loop = asyncio.get_event_loop()
 
         class RelayChannel:
             """Shim that mimics RTCDataChannel.send() but routes through WebSocket."""
 
-            def __init__(self, ws_ref, job_id_ref):
-                self._ws = ws_ref
+            def __init__(self, coordinator_ref, job_id_ref):
+                self._coordinator = coordinator_ref
                 self._job_id = job_id_ref
                 self.readyState = "open"
 
@@ -570,14 +570,14 @@ class MeshCoordinator:
 
                 if relay_msg:
                     asyncio.run_coroutine_threadsafe(
-                        self._ws.send(_j.dumps(relay_msg)), loop
+                        self._coordinator.websocket.send(_j.dumps(relay_msg)), loop
                     )
 
             @property
             def label(self):
                 return f"relay-job-{self._job_id}"
 
-        relay_channel = RelayChannel(ws, job_id)
+        relay_channel = RelayChannel(coordinator, job_id)
 
         # Build the protocol message: JOB_SUBMIT::{job_id}::{json_spec}
         import json as _json
