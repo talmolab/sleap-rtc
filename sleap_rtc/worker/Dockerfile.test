@@ -3,7 +3,7 @@ FROM ghcr.io/talmolab/sleap-nn-cuda:latest
 WORKDIR /app
 ENV DEBIAN_FRONTEND=noninteractive
 
-COPY pyproject.toml /app/
+COPY pyproject.toml README.md /app/
 COPY sleap_rtc/ /app/sleap_rtc/
 RUN uv pip install .
 
