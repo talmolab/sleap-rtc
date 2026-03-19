@@ -1046,7 +1046,21 @@ class RTCWorkerClient:
                         f"No signaling server ping for {int(elapsed)}s — "
                         f"connection presumed stale. Reconnecting..."
                     )
-                    await self.websocket.close()
+                    # Cancel the admin handler task to unblock handle_connection
+                    if (
+                        self.mesh_coordinator
+                        and self.mesh_coordinator._admin_handler_task
+                        and not self.mesh_coordinator._admin_handler_task.done()
+                    ):
+                        self.mesh_coordinator._admin_handler_task.cancel()
+                    # Force-close the websocket transport to break any pending reads
+                    try:
+                        self.websocket.transport.close()
+                    except Exception:
+                        try:
+                            await self.websocket.close()
+                        except Exception:
+                            pass
                     return
         except asyncio.CancelledError:
             pass
@@ -3363,12 +3377,23 @@ class RTCWorkerClient:
             def _handle_sigint(signum, frame):
                 logging.info("Worker shut down by user (SIGINT)")
                 self.shutting_down = True
-                # Close websocket to unblock any pending reads
+                # Cancel admin handler task to unblock handle_connection
+                if (
+                    self.mesh_coordinator
+                    and hasattr(self.mesh_coordinator, '_admin_handler_task')
+                    and self.mesh_coordinator._admin_handler_task
+                    and not self.mesh_coordinator._admin_handler_task.done()
+                ):
+                    self.mesh_coordinator._admin_handler_task.cancel()
+                # Force-close websocket transport to break any pending reads
                 if self.websocket:
                     try:
-                        asyncio.get_event_loop().create_task(self.websocket.close())
+                        self.websocket.transport.close()
                     except Exception:
-                        pass
+                        try:
+                            asyncio.get_event_loop().create_task(self.websocket.close())
+                        except Exception:
+                            pass
 
             signal.signal(signal.SIGINT, _handle_sigint)
 

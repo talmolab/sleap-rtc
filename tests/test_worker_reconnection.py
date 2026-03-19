@@ -787,13 +787,14 @@ class TestParseDuration:
 # ---------------------------------------------------------------------------
 class TestSignalingHeartbeatWatchdog:
     async def test_watchdog_closes_websocket_after_timeout(self):
-        """Watchdog closes websocket when no pings arrive within 90s."""
+        """Watchdog force-closes websocket when no pings arrive within 90s."""
         worker = _make_worker()
+        mock_transport = MagicMock()
         worker.websocket = AsyncMock()
+        worker.websocket.transport = mock_transport
         worker._last_signaling_ping = time.monotonic() - 100  # 100s ago
 
         sleep_called = False
-        original_sleep = asyncio.sleep
 
         async def _mock_sleep(duration):
             nonlocal sleep_called
@@ -804,7 +805,7 @@ class TestSignalingHeartbeatWatchdog:
             await worker._signaling_heartbeat_watchdog()
 
         assert sleep_called
-        worker.websocket.close.assert_awaited_once()
+        mock_transport.close.assert_called_once()
 
     async def test_watchdog_does_not_close_when_pings_arrive(self):
         """Watchdog stays quiet when pings are recent."""
