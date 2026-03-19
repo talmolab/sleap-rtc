@@ -291,6 +291,8 @@ class MeshCoordinator:
 
         except asyncio.CancelledError:
             logger.info("Admin WebSocket handler cancelled")
+        except KeyboardInterrupt:
+            raise  # Propagate to reconnection loop for clean exit
         except Exception as e:
             logger.error(f"Admin WebSocket handler error: {e}")
 
