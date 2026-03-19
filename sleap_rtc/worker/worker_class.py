@@ -3563,6 +3563,10 @@ class RTCWorkerClient:
                     break
 
                 except Exception as e:
+                    # Event loop damage from KeyboardInterrupt — exit immediately
+                    if "no running event loop" in str(e):
+                        logging.info("Worker shut down by user")
+                        break
                     # Unexpected errors: still retry but log as error
                     if reconnect_start is None:
                         reconnect_start = time.monotonic()
