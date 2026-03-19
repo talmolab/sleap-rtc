@@ -3355,6 +3355,22 @@ class RTCWorkerClient:
         try:
             # === One-time setup (outside reconnection loop) ===
 
+            # Install SIGINT handler so Ctrl+C sets shutting_down flag
+            # This ensures clean exit regardless of where the interrupt lands
+            import signal
+
+            def _handle_sigint(signum, frame):
+                logging.info("Worker shut down by user (SIGINT)")
+                self.shutting_down = True
+                # Close websocket to unblock any pending reads
+                if self.websocket:
+                    try:
+                        asyncio.get_event_loop().create_task(self.websocket.close())
+                    except Exception:
+                        pass
+
+            signal.signal(signal.SIGINT, _handle_sigint)
+
             # Set the RTCPeerConnection object for the worker.
             logging.info(f"Setting RTCPeerConnection...")
             self.pc = pc
