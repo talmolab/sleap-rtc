@@ -587,9 +587,17 @@ class MeshCoordinator:
 
         proto_msg = f"{MSG_JOB_SUBMIT}{MSG_SEPARATOR}{job_id}{MSG_SEPARATOR}{spec_json}"
 
-        # Call the worker's existing job submit handler
-        await self.worker.handle_job_submit(relay_channel, proto_msg)
-        logger.info(f"[RELAY] Job submit handler complete for {job_id}")
+        # Run the job in the background so the admin handler loop can
+        # continue processing messages (including heartbeat pings).
+        async def _run_job():
+            try:
+                await self.worker.handle_job_submit(relay_channel, proto_msg)
+            except Exception as e:
+                logger.error(f"[RELAY] Job {job_id} failed: {e}")
+            finally:
+                logger.info(f"[RELAY] Job submit handler complete for {job_id}")
+
+        asyncio.create_task(_run_job())
 
     async def _handle_client_offer(self, data: Dict[str, Any]):
         """Handle client connection offer received on admin WebSocket.
