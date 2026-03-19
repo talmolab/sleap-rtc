@@ -1966,7 +1966,7 @@ class RTCWorkerClient:
 
                 elif msg_type == "ping":
                     self._last_signaling_ping = time.monotonic()
-                    logging.info("Received signaling server ping (handle_connection)")
+                    logging.warning("\033[33m[HEARTBEAT] Received signaling server ping (handle_connection)\033[0m")
 
                 # Error handling
                 else:
