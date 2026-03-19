@@ -28,6 +28,7 @@ Admin role:
 import asyncio
 import logging
 import json
+import time
 from typing import Dict, Optional, Any, List, TYPE_CHECKING
 from aiortc import RTCPeerConnection, RTCSessionDescription, RTCIceCandidate
 
@@ -277,6 +278,12 @@ class MeshCoordinator:
                     elif msg_type == "job_assigned":
                         await self._handle_job_assigned(data)
 
+                    elif msg_type == "ping":
+                        self.worker._last_signaling_ping = time.monotonic()
+                        logging.warning(
+                            "\033[33m[HEARTBEAT] Received signaling server ping\033[0m"
+                        )
+
                     else:
                         logger.debug(f"Admin ignoring message type: {msg_type}")
 
@@ -287,6 +294,8 @@ class MeshCoordinator:
 
         except asyncio.CancelledError:
             logger.info("Admin WebSocket handler cancelled")
+        except KeyboardInterrupt:
+            raise  # Propagate to reconnection loop for clean exit
         except Exception as e:
             logger.error(f"Admin WebSocket handler error: {e}")
 
@@ -446,14 +455,14 @@ class MeshCoordinator:
         # Create a shim channel that sends responses via WebSocket→relay.
         # channel.send() is synchronous in the RTC API, so we schedule async
         # WebSocket sends on the event loop.
-        ws = self.websocket
+        coordinator = self  # Reference to mesh coordinator for dynamic websocket access
         loop = asyncio.get_event_loop()
 
         class RelayChannel:
             """Shim that mimics RTCDataChannel.send() but routes through WebSocket."""
 
-            def __init__(self, ws_ref, job_id_ref):
-                self._ws = ws_ref
+            def __init__(self, coordinator_ref, job_id_ref):
+                self._coordinator = coordinator_ref
                 self._job_id = job_id_ref
                 self.readyState = "open"
 
@@ -563,14 +572,14 @@ class MeshCoordinator:
 
                 if relay_msg:
                     asyncio.run_coroutine_threadsafe(
-                        self._ws.send(_j.dumps(relay_msg)), loop
+                        self._coordinator.websocket.send(_j.dumps(relay_msg)), loop
                     )
 
             @property
             def label(self):
                 return f"relay-job-{self._job_id}"
 
-        relay_channel = RelayChannel(ws, job_id)
+        relay_channel = RelayChannel(coordinator, job_id)
 
         # Build the protocol message: JOB_SUBMIT::{job_id}::{json_spec}
         import json as _json
@@ -580,9 +589,17 @@ class MeshCoordinator:
 
         proto_msg = f"{MSG_JOB_SUBMIT}{MSG_SEPARATOR}{job_id}{MSG_SEPARATOR}{spec_json}"
 
-        # Call the worker's existing job submit handler
-        await self.worker.handle_job_submit(relay_channel, proto_msg)
-        logger.info(f"[RELAY] Job submit handler complete for {job_id}")
+        # Run the job in the background so the admin handler loop can
+        # continue processing messages (including heartbeat pings).
+        async def _run_job():
+            try:
+                await self.worker.handle_job_submit(relay_channel, proto_msg)
+            except Exception as e:
+                logger.error(f"[RELAY] Job {job_id} failed: {e}")
+            finally:
+                logger.info(f"[RELAY] Job submit handler complete for {job_id}")
+
+        asyncio.create_task(_run_job())
 
     async def _handle_client_offer(self, data: Dict[str, Any]):
         """Handle client connection offer received on admin WebSocket.
@@ -1685,7 +1702,7 @@ class MeshCoordinator:
                         "peer_id": self.worker.peer_id,
                         "room_id": self.worker.room_id,
                         "token": self.worker.room_token,
-                        "id_token": self.worker.id_token,
+                        "api_key": self.worker.api_key,
                         "role": "worker",
                         "is_admin": True,  # Signal admin status
                         "metadata": {
@@ -1768,7 +1785,7 @@ class MeshCoordinator:
                         "peer_id": self.worker.peer_id,
                         "room_id": self.worker.room_id,
                         "token": self.worker.room_token,
-                        "id_token": self.worker.id_token,
+                        "api_key": self.worker.api_key,
                         "role": "worker",
                         "is_admin": False,  # Not admin anymore
                         "metadata": {
