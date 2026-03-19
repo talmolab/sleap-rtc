@@ -6,6 +6,8 @@ on:
       - main
     paths:
       - sleap_rtc/worker/**
+      - sleap_rtc/**/*.py
+      - pyproject.toml
       - .github/workflows/worker_test.yml
 
 jobs:
@@ -51,8 +53,8 @@ jobs:
       - name: Build and push Docker image
         uses: docker/build-push-action@v6
         with:
-          context: ./sleap_rtc/worker
-          file: ./sleap_rtc/worker/Dockerfile
+          context: .
+          file: ./sleap_rtc/worker/Dockerfile.test
           platforms: linux/amd64
           push: true
           # Enable GitHub Actions cache for Docker layers

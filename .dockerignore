@@ -1,0 +1,14 @@
+.git/
+tests/
+docs/
+scratch/
+*.pyc
+__pycache__/
+*.egg-info/
+.venv/
+.ruff_cache/
+.pytest_cache/
+*.log
+.env
+*.md
+openspec/
