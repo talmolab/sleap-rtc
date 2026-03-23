@@ -2850,6 +2850,28 @@ def doctor():
         click.echo(f"  Exists: {click.style('✗ not found', fg='yellow')}")
         click.echo("  Run 'sleap-rtc login' to create credentials")
 
+    # Account key
+    from sleap_rtc.auth.credentials import get_account_key
+
+    env_key = os.environ.get("SLEAP_RTC_ACCOUNT_KEY")
+    stored_key = get_account_key()
+    if env_key:
+        masked = env_key[:16] + "..." if len(env_key) > 16 else env_key
+        click.echo(
+            f"  Account key: {masked} {click.style('✓ (from env var)', fg='green')}"
+        )
+    elif stored_key:
+        masked = stored_key[:16] + "..." if len(stored_key) > 16 else stored_key
+        click.echo(
+            f"  Account key: {masked} {click.style('✓ (from credentials file)', fg='green')}"
+        )
+    else:
+        click.echo(f"  Account key: {click.style('✗ not found', fg='yellow')}")
+        click.echo(
+            "  Run 'sleap-rtc login' then 'sleap-rtc key create --save', "
+            "or set SLEAP_RTC_ACCOUNT_KEY env var"
+        )
+
     # Config file
     click.echo("")
     click.echo(click.style("Configuration:", bold=True))
@@ -2860,6 +2882,85 @@ def doctor():
         )
     else:
         click.echo(f"  Config file: {click.style('using defaults', fg='cyan')}")
+
+    # GPU
+    click.echo("")
+    click.echo(click.style("GPU:", bold=True))
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            try:
+                from sleap_rtc.worker.capabilities import WorkerCapabilities
+
+                caps = WorkerCapabilities()
+                click.echo(f"  GPU: {caps.gpu_model} {click.style('✓', fg='green')}")
+                click.echo(f"  Memory: {caps.gpu_memory_mb} MB")
+                click.echo(f"  CUDA: {caps.cuda_version}")
+            except Exception:
+                gpu_name = torch.cuda.get_device_name(0)
+                click.echo(f"  GPU: {gpu_name} {click.style('✓', fg='green')}")
+        else:
+            click.echo(
+                f"  GPU: {click.style('⚠ PyTorch installed but CUDA not available', fg='yellow')}"
+            )
+            click.echo(
+                "  Training will use CPU. For GPU support, install PyTorch with CUDA."
+            )
+    except ImportError:
+        click.echo(f"  GPU: {click.style('⚠ PyTorch not installed', fg='yellow')}")
+        click.echo(
+            "  Install with: pip install torch (or use the sleap-rtc Docker image)"
+        )
+
+    # Training dependencies
+    click.echo("")
+    click.echo(click.style("Training Dependencies:", bold=True))
+    try:
+        import sleap_nn
+
+        version = getattr(sleap_nn, "__version__", "unknown")
+        click.echo(f"  sleap-nn: {version} {click.style('✓', fg='green')}")
+    except ImportError:
+        click.echo(f"  sleap-nn: {click.style('⚠ not installed', fg='yellow')}")
+        click.echo("  Required for training jobs. Install with: pip install sleap-nn")
+
+    # Data mounts & working directory
+    click.echo("")
+    click.echo(click.style("Data Mounts & Working Directory:", bold=True))
+    worker_io = config.get_worker_io_config()
+
+    if worker_io.working_dir:
+        wd = Path(worker_io.working_dir)
+        if wd.exists() and wd.is_dir():
+            click.echo(f"  Working dir: {wd} {click.style('✓', fg='green')}")
+        else:
+            click.echo(f"  Working dir: {wd} {click.style('✗ not found', fg='red')}")
+            all_ok = False
+    else:
+        click.echo(
+            f"  Working dir: {click.style('not configured (using cwd)', fg='cyan')}"
+        )
+
+    mounts = worker_io.mounts
+    if mounts:
+        for mount in mounts:
+            mount_path = Path(mount.path)
+            label = mount.label or mount.path
+            if mount_path.exists() and mount_path.is_dir():
+                click.echo(
+                    f"  Mount '{label}': {mount.path} {click.style('✓', fg='green')}"
+                )
+            else:
+                click.echo(
+                    f"  Mount '{label}': {mount.path} {click.style('✗ not found', fg='red')}"
+                )
+                all_ok = False
+    else:
+        click.echo(f"  Mounts: {click.style('none configured', fg='cyan')}")
+        click.echo(
+            "  Use 'sleap-rtc config add-mount /path \"Label\"' to add data directories"
+        )
 
     # Summary
     click.echo("")
