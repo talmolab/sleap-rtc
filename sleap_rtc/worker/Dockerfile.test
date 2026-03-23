@@ -3,7 +3,9 @@ FROM ghcr.io/talmolab/sleap-nn-cuda:latest
 WORKDIR /app
 ENV DEBIAN_FRONTEND=noninteractive
 
-RUN uv pip install sleap-rtc
+COPY pyproject.toml README.md /app/
+COPY sleap_rtc/ /app/sleap_rtc/
+RUN uv pip install .
 
 RUN mkdir -p /app/shared_data && chmod 777 /app/shared_data
 

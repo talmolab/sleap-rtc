@@ -1064,6 +1064,251 @@ auto_select = true</code></pre>
         </div>
     </div>
 
+    <!-- Deploy Worker Modal -->
+    <div id="deploy-worker-modal" class="modal hidden">
+        <div class="modal-content dw-modal">
+            <div class="dw-header">
+                <div>
+                    <h3>Deploy Worker</h3>
+                    <p class="dw-subtitle">Generate a command to start a worker on your GPU machine</p>
+                </div>
+                <button class="btn-icon" data-close-modal>
+                    <i data-lucide="x"></i>
+                </button>
+            </div>
+
+            <!-- Tabs -->
+            <div class="dw-tabs">
+                <button class="dw-tab active" data-tab="docker" onclick="app.switchDeployTab('docker')">
+                    <i data-lucide="container"></i>
+                    Docker
+                </button>
+                <button class="dw-tab" data-tab="runai" onclick="app.switchDeployTab('runai')">
+                    <i data-lucide="layers"></i>
+                    Cluster
+                </button>
+                <button class="dw-tab" data-tab="direct" onclick="app.switchDeployTab('direct')">
+                    <i data-lucide="terminal"></i>
+                    Direct Install
+                </button>
+            </div>
+
+            <!-- Docker Tab -->
+            <div id="dw-tab-docker" class="dw-tab-content active">
+                <div class="dw-body">
+                    <p class="dw-tab-desc">Run a Docker container on any machine with a GPU and Docker installed.</p>
+
+                    <div class="dw-section-label">Authentication</div>
+                    <div class="form-group">
+                        <label for="dw-account-key">Account Key</label>
+                        <select id="dw-account-key" class="form-input" onchange="app.updateDockerCommand()"></select>
+                    </div>
+
+                    <div class="dw-divider"></div>
+                    <div class="dw-section-label">Worker Configuration</div>
+
+                    <div class="form-group">
+                        <label for="dw-name">Worker Name</label>
+                        <input type="text" id="dw-name" class="form-input" placeholder="e.g. gpu-node-1, lab-a100" oninput="app.updateDockerCommand()">
+                        <div class="dw-hint">Optional. Helps identify this worker in the dashboard.</div>
+                    </div>
+                    <div class="form-group">
+                        <label for="dw-workdir">Working Directory</label>
+                        <input type="text" id="dw-workdir" class="form-input" value="/mnt/data" oninput="app.updateDockerCommand()">
+                        <div class="dw-hint">Directory inside the container for job outputs.</div>
+                    </div>
+                    <div class="form-group">
+                        <label>Max Reconnect Time</label>
+                        <select id="dw-reconnect" class="form-input" onchange="app.updateDockerCommand()">
+                            <option value="forever" selected>Forever (keep retrying)</option>
+                            <option value="30m">30 minutes</option>
+                            <option value="1h">1 hour</option>
+                            <option value="2h">2 hours</option>
+                        </select>
+                    </div>
+
+                    <div class="dw-divider"></div>
+                    <div class="dw-section-label">Docker Options</div>
+
+                    <div class="dw-checkbox-row">
+                        <label class="dw-checkbox-item">
+                            <input type="checkbox" id="dw-gpu" checked onchange="app.updateDockerCommand()">
+                            <span>Enable GPU (--gpus all)</span>
+                        </label>
+                        <label class="dw-checkbox-item">
+                            <input type="checkbox" id="dw-restart" checked onchange="app.updateDockerCommand()">
+                            <span>Auto-restart</span>
+                        </label>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Data Mounts</label>
+                        <div class="dw-mounts-container" id="dw-mounts"></div>
+                        <button class="dw-btn-add-mount" onclick="app.addDeployMount('dw-mounts')">
+                            <i data-lucide="plus"></i>
+                            Add mount
+                        </button>
+                        <div class="dw-hint">Host paths to mount into the container (same path inside and outside).</div>
+                    </div>
+
+                    <div class="dw-command-preview">
+                        <div class="dw-command-header">
+                            <span>Docker Command</span>
+                            <button class="btn-copy" id="dw-copy-btn" onclick="app.copyDeployText('dw-command', 'dw-copy-btn')">
+                                <i data-lucide="copy"></i>
+                                Copy
+                            </button>
+                        </div>
+                        <pre id="dw-command"></pre>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Cluster Tab -->
+            <div id="dw-tab-runai" class="dw-tab-content">
+                <div class="dw-body">
+                    <p class="dw-tab-desc">Create a new workload in your cluster dashboard (RunAI, Kubernetes, Slurm, etc.) with these settings. Storage mounts are configured through your cluster UI.</p>
+
+                    <ol class="dw-step-list">
+                        <li class="dw-step-item">
+                            <h4>Set the container image</h4>
+                            <div class="dw-step-command-wrapper">
+                                <div class="dw-step-command" id="dw-cluster-image">ghcr.io/talmolab/sleap-rtc-worker:latest</div>
+                                <button class="dw-btn-copy-inline" onclick="app.copyDeployInline(this, 'dw-cluster-image')" title="Copy">
+                                    <i data-lucide="copy"></i>
+                                </button>
+                            </div>
+                        </li>
+
+                        <li class="dw-step-item">
+                            <h4>Add environment variable</h4>
+                            <div class="form-group" style="margin-bottom: 8px;">
+                                <select id="dw-runai-key" class="form-input" onchange="app.updateRunAIKey()" style="font-size: 12px;"></select>
+                            </div>
+                            <table class="dw-config-table">
+                                <tr><th>Variable</th><th>Value</th></tr>
+                                <tr>
+                                    <td><code>SLEAP_RTC_ACCOUNT_KEY</code></td>
+                                    <td><code id="dw-runai-key-display"></code></td>
+                                </tr>
+                            </table>
+                        </li>
+
+                        <li class="dw-step-item">
+                            <h4>Configure storage</h4>
+                            <p>Add your NFS or PVC storage through your cluster's storage settings. Example:</p>
+                            <table class="dw-config-table">
+                                <tr><th>Setting</th><th>Example Value</th></tr>
+                                <tr><td>Type</td><td>NFS</td></tr>
+                                <tr><td>NFS Server</td><td><code>nfs-server.example.com</code></td></tr>
+                                <tr><td>NFS Path</td><td><code>/shared/data</code></td></tr>
+                                <tr><td>Mount Path</td><td><code>/mnt/data</code></td></tr>
+                            </table>
+                        </li>
+
+                        <li class="dw-step-item">
+                            <h4>Set the command (optional)</h4>
+                            <p>Override the default command if you want to set a worker name or working directory:</p>
+                            <div class="dw-step-command-wrapper">
+                                <div class="dw-step-command" id="dw-cluster-cmd">worker --name my-gpu-worker --working-dir /mnt/data</div>
+                                <button class="dw-btn-copy-inline" onclick="app.copyDeployInline(this, 'dw-cluster-cmd')" title="Copy">
+                                    <i data-lucide="copy"></i>
+                                </button>
+                            </div>
+                        </li>
+
+                        <li class="dw-step-item">
+                            <h4>Enable GPU</h4>
+                            <p>Request at least 1 GPU in your workload's compute resources settings.</p>
+                        </li>
+                    </ol>
+
+                    <div class="dw-info-note">
+                        <i data-lucide="info" class="dw-info-note-icon"></i>
+                        <p>The container entrypoint is <code>sleap-rtc</code>. The default command is <code>worker</code>, so the worker starts automatically without any command override.</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Direct Install Tab -->
+            <div id="dw-tab-direct" class="dw-tab-content">
+                <div class="dw-body">
+                    <p class="dw-tab-desc">Install sleap-rtc directly on a machine or inside an existing container/workspace where your data is already accessible.</p>
+
+                    <div class="dw-section-label">Configuration</div>
+                    <div class="form-group">
+                        <label>Account Key</label>
+                        <select id="dw-direct-key" class="form-input" onchange="app.updateDirectCommands()"></select>
+                    </div>
+                    <div class="form-group">
+                        <label>Worker Name</label>
+                        <input type="text" id="dw-direct-name" class="form-input" placeholder="e.g. gpu-node-1" oninput="app.updateDirectCommands()">
+                    </div>
+                    <div class="form-group">
+                        <label>Data Mounts</label>
+                        <div class="dw-mounts-container" id="dw-direct-mounts"></div>
+                        <button class="dw-btn-add-mount" onclick="app.addDeployMount('dw-direct-mounts')">
+                            <i data-lucide="plus"></i>
+                            Add mount
+                        </button>
+                        <div class="dw-hint">Paths to register as data mounts (directories your worker can access).</div>
+                    </div>
+
+                    <div class="dw-divider"></div>
+
+                    <ol class="dw-step-list">
+                        <li class="dw-step-item">
+                            <h4>Install sleap-rtc</h4>
+                            <p>One-liner that installs sleap-rtc with sleap-nn and auto-detects your GPU:</p>
+                            <div class="dw-step-command-wrapper">
+                                <div class="dw-step-command" id="dw-direct-step1-text">uv tool install --python 3.11 sleap-rtc --with "sleap-nn[torch]" --with-executables-from sleap-nn --torch-backend auto</div>
+                                <button class="dw-btn-copy-inline" onclick="app.copyDeployInline(this, 'dw-direct-step1-text')" title="Copy">
+                                    <i data-lucide="copy"></i>
+                                </button>
+                            </div>
+                        </li>
+
+                        <li class="dw-step-item">
+                            <h4>Register data mounts</h4>
+                            <p>Tell the worker where your training data lives:</p>
+                            <div class="dw-step-command-wrapper">
+                                <div class="dw-step-command" id="dw-direct-step2"><span id="dw-direct-step2-text">sleap-rtc config add-mount /path/to/your/data "My Data" --global</span></div>
+                                <button class="dw-btn-copy-inline" onclick="app.copyDeployInline(this, 'dw-direct-step2-text')" title="Copy">
+                                    <i data-lucide="copy"></i>
+                                </button>
+                            </div>
+                        </li>
+
+                        <li class="dw-step-item">
+                            <h4>Start the worker</h4>
+                            <div class="dw-step-command-wrapper">
+                                <div class="dw-step-command" id="dw-direct-step3"><span id="dw-direct-step3-text">sleap-rtc worker --account-key slp_acct_xxx...</span></div>
+                                <button class="dw-btn-copy-inline" onclick="app.copyDeployInline(this, 'dw-direct-step3-text')" title="Copy">
+                                    <i data-lucide="copy"></i>
+                                </button>
+                            </div>
+                        </li>
+                    </ol>
+
+                    <div class="dw-command-preview">
+                        <div class="dw-command-header">
+                            <span>All Commands (copy &amp; paste)</span>
+                            <button class="btn-copy" id="dw-direct-copy-all" onclick="app.copyDeployText('dw-direct-all-commands', 'dw-direct-copy-all')">
+                                <i data-lucide="copy"></i>
+                                Copy All
+                            </button>
+                        </div>
+                        <pre id="dw-direct-all-commands"></pre>
+                    </div>
+                </div>
+            </div>
+
+            <div class="form-actions">
+                <button type="button" class="btn btn-primary" data-close-modal>Done</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Token Created Success Modal -->
     <div id="token-created-modal" class="modal hidden">
         <div class="modal-content modal-large">

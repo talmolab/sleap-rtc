@@ -961,6 +961,10 @@ class SleapRTCDashboard {
                     <i data-lucide="cpu"></i>
                     View Workers
                 </button>
+                <button class="btn btn-ghost btn-sm" onclick="app.openDeployWorkerModal('${room.room_id}')">
+                    <i data-lucide="plus"></i>
+                    Deploy Worker
+                </button>
                 ${!isExpired && room.role === 'owner' ? `
                     <button class="btn btn-ghost btn-sm" onclick="app.handleInvite('${room.room_id}')">
                         <i data-lucide="user-plus"></i>
@@ -3616,6 +3620,230 @@ class SleapRTCDashboard {
                 else if (i === step) dot.classList.add('active');
             }
         }
+    }
+    // =========================================================================
+    // Deploy Worker Modal
+    // =========================================================================
+
+    openDeployWorkerModal(roomId) {
+        this.deployWorkerRoomId = roomId;
+        this.deployMountCount = 0;
+        this.deployDirectMountCount = 0;
+
+        // Populate account key dropdowns from cached keys
+        const activeKeys = this.accountKeys.filter(k => !k.revoked_at);
+        const keyOptions = activeKeys.map(k =>
+            `<option value="${k.key_id}">${this.escapeHtml(k.name || k.key_id)}</option>`
+        ).join('');
+        const noKeysOption = '<option value="">No account keys — create one first</option>';
+        const options = activeKeys.length > 0 ? keyOptions : noKeysOption;
+
+        document.getElementById('dw-account-key').innerHTML = options;
+        document.getElementById('dw-runai-key').innerHTML = options;
+        document.getElementById('dw-direct-key').innerHTML = options;
+
+        // Set the cluster key display directly from first active key
+        const firstKey = activeKeys.length > 0 ? activeKeys[0].key_id : '';
+        const keyDisplay = document.getElementById('dw-runai-key-display');
+        if (keyDisplay) keyDisplay.textContent = firstKey;
+
+        // Reset form fields
+        document.getElementById('dw-name').value = '';
+        document.getElementById('dw-workdir').value = '/mnt/data';
+        document.getElementById('dw-reconnect').value = 'forever';
+        document.getElementById('dw-gpu').checked = true;
+        document.getElementById('dw-restart').checked = true;
+        document.getElementById('dw-mounts').innerHTML = '';
+        document.getElementById('dw-direct-name').value = '';
+        document.getElementById('dw-direct-mounts').innerHTML = '';
+
+        // Reset to Docker tab
+        this.switchDeployTab('docker');
+
+        // Load account keys if not yet loaded
+        if (this.accountKeys.length === 0) {
+            this.loadAccountKeys().then(() => {
+                const freshKeys = this.accountKeys.filter(k => !k.revoked_at);
+                const freshOptions = freshKeys.map(k =>
+                    `<option value="${k.key_id}">${this.escapeHtml(k.name || k.key_id)}</option>`
+                ).join('');
+                const opts = freshKeys.length > 0 ? freshOptions : noKeysOption;
+                document.getElementById('dw-account-key').innerHTML = opts;
+                document.getElementById('dw-runai-key').innerHTML = opts;
+                document.getElementById('dw-direct-key').innerHTML = opts;
+                this.updateDockerCommand();
+                this.updateRunAIKey();
+                this.updateDirectCommands();
+            });
+        }
+
+        this.updateDockerCommand();
+        this.updateRunAIKey();
+        this.updateDirectCommands();
+        this.updateClusterCommand();
+        this.showModal('deploy-worker-modal');
+    }
+
+    switchDeployTab(tabName) {
+        document.querySelectorAll('#deploy-worker-modal .dw-tab').forEach(t => t.classList.remove('active'));
+        document.querySelectorAll('#deploy-worker-modal .dw-tab-content').forEach(t => t.classList.remove('active'));
+        document.getElementById(`dw-tab-${tabName}`)?.classList.add('active');
+        document.querySelector(`#deploy-worker-modal .dw-tab[data-tab="${tabName}"]`)?.classList.add('active');
+    }
+
+    updateDockerCommand() {
+        const keyEl = document.getElementById('dw-account-key');
+        const key = keyEl ? keyEl.value : '';
+        const name = (document.getElementById('dw-name')?.value || '').trim();
+        const workdir = (document.getElementById('dw-workdir')?.value || '').trim();
+        const reconnect = document.getElementById('dw-reconnect')?.value || 'forever';
+        const gpu = document.getElementById('dw-gpu')?.checked;
+        const restart = document.getElementById('dw-restart')?.checked;
+        const mounts = this.getDeployMounts('dw-mounts');
+
+        const parts = ['docker run -d'];
+        if (gpu) parts.push('--gpus all');
+        if (restart) parts.push('--restart unless-stopped');
+        if (key) parts.push(`-e SLEAP_RTC_ACCOUNT_KEY=${key}`);
+        for (const mount of mounts) {
+            parts.push(`-v ${mount}:${mount}`);
+        }
+        parts.push('ghcr.io/talmolab/sleap-rtc-worker:latest');
+        parts.push('worker');
+        if (this.deployWorkerRoomId) parts.push(`--room ${this.deployWorkerRoomId}`);
+        if (name) parts.push(`--name ${name}`);
+        if (workdir) parts.push(`--working-dir ${workdir}`);
+        if (reconnect !== 'forever') parts.push(`--max-reconnect-time ${reconnect}`);
+
+        const el = document.getElementById('dw-command');
+        if (el) el.textContent = parts.join(' \\\n  ');
+    }
+
+    updateRunAIKey() {
+        const key = document.getElementById('dw-runai-key')?.value || '';
+        const display = document.getElementById('dw-runai-key-display');
+        if (display) display.textContent = key;
+    }
+
+    updateClusterCommand() {
+        const el = document.getElementById('dw-cluster-cmd');
+        if (!el) return;
+        let cmd = 'worker';
+        if (this.deployWorkerRoomId) cmd += ` --room ${this.deployWorkerRoomId}`;
+        cmd += ' --name my-gpu-worker --working-dir /mnt/data';
+        el.textContent = cmd;
+    }
+
+    updateDirectCommands() {
+        const key = document.getElementById('dw-direct-key')?.value || '';
+        const name = (document.getElementById('dw-direct-name')?.value || '').trim();
+        const mounts = this.getDeployMounts('dw-direct-mounts');
+
+        // Step 2: mount commands
+        const step2 = document.getElementById('dw-direct-step2-text');
+        if (step2) {
+            if (mounts.length > 0) {
+                step2.textContent = mounts.map(m => {
+                    const label = m.split('/').filter(Boolean).pop() || 'data';
+                    return `sleap-rtc config add-mount ${m} "${label}" --global`;
+                }).join('\n');
+            } else {
+                step2.textContent = 'sleap-rtc config add-mount /path/to/your/data "My Data" --global';
+            }
+        }
+
+        // Step 3: worker command
+        let workerCmd = `sleap-rtc worker --account-key ${key || 'slp_acct_xxx...'}`;
+        if (this.deployWorkerRoomId) workerCmd += ` --room ${this.deployWorkerRoomId}`;
+        if (name) workerCmd += ` --name ${name}`;
+        const step3 = document.getElementById('dw-direct-step3-text');
+        if (step3) step3.textContent = workerCmd;
+
+        // Combined copy block
+        const installCmd = 'uv tool install --python 3.11 sleap-rtc --with "sleap-nn[torch]" --with-executables-from sleap-nn --torch-backend auto';
+        const allLines = [`# Step 1: Install sleap-rtc`, installCmd, ''];
+        allLines.push('# Step 2: Register data mounts');
+        if (mounts.length > 0) {
+            for (const m of mounts) {
+                const label = m.split('/').filter(Boolean).pop() || 'data';
+                allLines.push(`sleap-rtc config add-mount ${m} "${label}" --global`);
+            }
+        } else {
+            allLines.push('sleap-rtc config add-mount /path/to/your/data "My Data" --global');
+        }
+        allLines.push('', '# Step 3: Start the worker', workerCmd);
+
+        const allEl = document.getElementById('dw-direct-all-commands');
+        if (allEl) allEl.textContent = allLines.join('\n');
+    }
+
+    getDeployMounts(containerId) {
+        const inputs = document.querySelectorAll(`#${containerId} .dw-mount-row input`);
+        return Array.from(inputs).map(i => i.value.trim()).filter(v => v);
+    }
+
+    addDeployMount(containerId, value = '') {
+        const isDocker = containerId === 'dw-mounts';
+        const count = isDocker ? ++this.deployMountCount : ++this.deployDirectMountCount;
+        const rowId = `${containerId}-row-${count}`;
+        const container = document.getElementById(containerId);
+        if (!container) return;
+
+        const row = document.createElement('div');
+        row.className = 'dw-mount-row';
+        row.id = rowId;
+        row.innerHTML = `
+            <input type="text" class="form-input" placeholder="/path/on/host" value="${value}"
+                oninput="app.${isDocker ? 'updateDockerCommand' : 'updateDirectCommands'}()">
+            <button class="dw-btn-mount-remove" onclick="app.removeDeployMount('${rowId}', '${containerId}')" title="Remove">
+                <i data-lucide="x"></i>
+            </button>
+        `;
+        container.appendChild(row);
+        lucide.createIcons({ nodes: [row] });
+        if (isDocker) this.updateDockerCommand();
+        else this.updateDirectCommands();
+    }
+
+    removeDeployMount(rowId, containerId) {
+        document.getElementById(rowId)?.remove();
+        if (containerId === 'dw-mounts') this.updateDockerCommand();
+        else this.updateDirectCommands();
+    }
+
+    copyDeployText(preId, btnId) {
+        const text = document.getElementById(preId)?.textContent;
+        if (!text) return;
+        navigator.clipboard.writeText(text).then(() => {
+            const btn = document.getElementById(btnId);
+            if (!btn) return;
+            btn.classList.add('copied');
+            const orig = btn.innerHTML;
+            btn.innerHTML = '<i data-lucide="check"></i> Copied!';
+            lucide.createIcons({ nodes: [btn] });
+            setTimeout(() => {
+                btn.classList.remove('copied');
+                btn.innerHTML = orig;
+                lucide.createIcons({ nodes: [btn] });
+            }, 2000);
+        });
+    }
+
+    copyDeployInline(btn, textElId) {
+        const textEl = document.getElementById(textElId);
+        const text = textEl ? textEl.textContent : '';
+        if (!text) return;
+        navigator.clipboard.writeText(text.trim()).then(() => {
+            btn.classList.add('copied');
+            const orig = btn.innerHTML;
+            btn.innerHTML = '<i data-lucide="check"></i>';
+            lucide.createIcons({ nodes: [btn] });
+            setTimeout(() => {
+                btn.classList.remove('copied');
+                btn.innerHTML = orig;
+                lucide.createIcons({ nodes: [btn] });
+            }, 2000);
+        });
     }
 }
 
