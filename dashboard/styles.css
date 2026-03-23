@@ -4003,3 +4003,226 @@ kbd {
 .wm-worker-card.busy-clickable:hover {
     border-color: rgba(139, 92, 246, 0.3);
 }
+
+/* =========================================================================
+   Deploy Worker Modal
+   ========================================================================= */
+
+.dw-modal {
+    width: 580px;
+    max-height: 85vh;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: var(--bg-tertiary) var(--bg-secondary);
+}
+.dw-modal::-webkit-scrollbar { width: 8px; }
+.dw-modal::-webkit-scrollbar-track { background: var(--bg-secondary); border-radius: 0 16px 16px 0; }
+.dw-modal::-webkit-scrollbar-thumb { background: var(--bg-tertiary); border-radius: 4px; }
+.dw-modal::-webkit-scrollbar-thumb:hover { background: var(--border-secondary); }
+
+.dw-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    padding: 24px 24px 0;
+}
+.dw-header h3 { font-size: 18px; font-weight: 600; margin-bottom: 4px; }
+.dw-subtitle { font-size: 13px; color: var(--text-secondary); }
+
+/* Tabs */
+.dw-tabs {
+    display: flex;
+    padding: 16px 24px 0;
+    border-bottom: 1px solid var(--border-primary);
+}
+.dw-tab {
+    padding: 10px 16px;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-tertiary);
+    background: none;
+    border: none;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    transition: all 0.15s;
+    font-family: inherit;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.dw-tab:hover { color: var(--text-secondary); }
+.dw-tab.active { color: var(--accent-primary); border-bottom-color: var(--accent-primary); }
+.dw-tab i { width: 14px; height: 14px; }
+
+/* Tab content */
+.dw-tab-content { display: none; }
+.dw-tab-content.active { display: block; }
+
+/* Body */
+.dw-body { padding: 20px 24px; }
+.dw-tab-desc { font-size: 13px; color: var(--text-secondary); margin-bottom: 20px; line-height: 1.6; }
+.dw-section-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-tertiary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 12px;
+}
+.dw-divider { height: 1px; background: var(--border-primary); margin: 16px 0; }
+.dw-hint { font-size: 11px; color: var(--text-tertiary); margin-top: 4px; }
+
+/* Checkboxes */
+.dw-checkbox-row { display: flex; gap: 20px; margin-bottom: 16px; }
+.dw-checkbox-item { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.dw-checkbox-item input[type="checkbox"] { accent-color: var(--accent-primary); width: 16px; height: 16px; cursor: pointer; }
+.dw-checkbox-item span { font-size: 13px; color: var(--text-secondary); }
+
+/* Mounts */
+.dw-mounts-container { display: flex; flex-direction: column; gap: 8px; }
+.dw-mounts-container:not(:empty) { margin-bottom: 8px; }
+.dw-mount-row { display: flex; gap: 8px; align-items: center; }
+.dw-mount-row input { flex: 1; }
+.dw-btn-mount-remove {
+    background: none;
+    border: 1px solid var(--border-primary);
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: 7px 10px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 34px;
+    transition: all 0.15s;
+}
+.dw-btn-mount-remove:hover { border-color: var(--status-error); color: var(--status-error); }
+.dw-btn-mount-remove i { width: 14px; height: 14px; }
+.dw-btn-add-mount {
+    align-self: flex-start;
+    background: none;
+    border: 1px dashed var(--border-primary);
+    color: var(--text-tertiary);
+    cursor: pointer;
+    padding: 6px 12px;
+    border-radius: 8px;
+    font-size: 12px;
+    font-family: inherit;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    transition: all 0.15s;
+}
+.dw-btn-add-mount:hover { border-color: var(--accent-primary); color: var(--accent-primary); }
+.dw-btn-add-mount i { width: 12px; height: 12px; }
+
+/* Command preview */
+.dw-command-preview {
+    margin-top: 20px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-primary);
+    border-radius: 10px;
+    overflow: hidden;
+}
+.dw-command-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border-primary);
+}
+.dw-command-header span { font-size: 12px; font-weight: 500; color: var(--text-secondary); }
+.dw-command-preview pre {
+    padding: 14px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12.5px;
+    line-height: 1.6;
+    color: var(--text-primary);
+    white-space: pre-wrap;
+    word-break: break-all;
+    margin: 0;
+}
+
+/* Step list */
+.dw-step-list { list-style: none; counter-reset: dw-step-counter; padding: 0; }
+.dw-step-item {
+    counter-increment: dw-step-counter;
+    margin-bottom: 20px;
+    padding-left: 36px;
+    position: relative;
+}
+.dw-step-item::before {
+    content: counter(dw-step-counter);
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 24px;
+    height: 24px;
+    background: var(--accent-primary);
+    color: white;
+    border-radius: 50%;
+    font-size: 12px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.dw-step-item h4 { font-size: 14px; font-weight: 600; margin-bottom: 6px; }
+.dw-step-item p { font-size: 13px; color: var(--text-secondary); margin-bottom: 8px; line-height: 1.5; }
+
+/* Step command blocks */
+.dw-step-command-wrapper { position: relative; }
+.dw-step-command {
+    background: var(--bg-primary);
+    border: 1px solid var(--border-primary);
+    border-radius: 8px;
+    padding: 10px 40px 10px 14px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--text-primary);
+    overflow-x: auto;
+    white-space: nowrap;
+}
+.dw-btn-copy-inline {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    z-index: 1;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-primary);
+    color: var(--text-tertiary);
+    cursor: pointer;
+    padding: 4px;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    transition: all 0.15s;
+}
+.dw-btn-copy-inline:hover { background: var(--accent-primary); border-color: var(--accent-primary); color: white; }
+.dw-btn-copy-inline.copied { background: var(--status-success); border-color: var(--status-success); color: white; }
+.dw-btn-copy-inline i { width: 14px; height: 14px; }
+
+/* Config table */
+.dw-config-table { width: 100%; border-collapse: collapse; margin: 8px 0; }
+.dw-config-table th,
+.dw-config-table td { padding: 8px 12px; text-align: left; font-size: 12px; border-bottom: 1px solid var(--border-primary); }
+.dw-config-table th { color: var(--text-tertiary); font-weight: 500; text-transform: uppercase; letter-spacing: 0.3px; font-size: 11px; }
+.dw-config-table td { color: var(--text-primary); }
+.dw-config-table td code { background: var(--bg-primary); padding: 2px 6px; border-radius: 4px; font-family: 'JetBrains Mono', monospace; font-size: 11px; }
+.dw-config-table tr:last-child td { border-bottom: none; }
+
+/* Info note */
+.dw-info-note {
+    display: flex;
+    gap: 10px;
+    padding: 12px 14px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-primary);
+    border-radius: 8px;
+    margin-top: 16px;
+}
+.dw-info-note-icon { color: var(--accent-primary); flex-shrink: 0; width: 16px; height: 16px; margin-top: 1px; }
+.dw-info-note p { font-size: 12px; color: var(--text-secondary); line-height: 1.5; }
+.dw-info-note code { background: var(--bg-primary); padding: 1px 5px; border-radius: 4px; font-family: 'JetBrains Mono', monospace; font-size: 11px; }
