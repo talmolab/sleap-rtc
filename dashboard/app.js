@@ -3642,6 +3642,11 @@ class SleapRTCDashboard {
         document.getElementById('dw-runai-key').innerHTML = options;
         document.getElementById('dw-direct-key').innerHTML = options;
 
+        // Set the cluster key display directly from first active key
+        const firstKey = activeKeys.length > 0 ? activeKeys[0].key_id : '';
+        const keyDisplay = document.getElementById('dw-runai-key-display');
+        if (keyDisplay) keyDisplay.textContent = firstKey;
+
         // Reset form fields
         document.getElementById('dw-name').value = '';
         document.getElementById('dw-workdir').value = '/mnt/data';
@@ -3667,6 +3672,7 @@ class SleapRTCDashboard {
                 document.getElementById('dw-runai-key').innerHTML = opts;
                 document.getElementById('dw-direct-key').innerHTML = opts;
                 this.updateDockerCommand();
+                this.updateRunAIKey();
                 this.updateDirectCommands();
             });
         }
