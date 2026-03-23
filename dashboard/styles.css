@@ -4008,8 +4008,10 @@ kbd {
    Deploy Worker Modal
    ========================================================================= */
 
-.dw-modal {
-    width: 720px;
+.modal-content.dw-modal {
+    max-width: 45%;
+    width: 45%;
+    padding: 0;
     max-height: 85vh;
     overflow-y: auto;
     scrollbar-width: thin;
