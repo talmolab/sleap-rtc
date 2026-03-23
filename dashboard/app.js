@@ -3674,6 +3674,7 @@ class SleapRTCDashboard {
         this.updateDockerCommand();
         this.updateRunAIKey();
         this.updateDirectCommands();
+        this.updateClusterCommand();
         this.showModal('deploy-worker-modal');
     }
 
@@ -3703,6 +3704,7 @@ class SleapRTCDashboard {
         }
         parts.push('ghcr.io/talmolab/sleap-rtc-worker:latest');
         parts.push('worker');
+        if (this.deployWorkerRoomId) parts.push(`--room ${this.deployWorkerRoomId}`);
         if (name) parts.push(`--name ${name}`);
         if (workdir) parts.push(`--working-dir ${workdir}`);
         if (reconnect !== 'forever') parts.push(`--max-reconnect-time ${reconnect}`);
@@ -3715,6 +3717,15 @@ class SleapRTCDashboard {
         const key = document.getElementById('dw-runai-key')?.value || '';
         const display = document.getElementById('dw-runai-key-display');
         if (display) display.textContent = key;
+    }
+
+    updateClusterCommand() {
+        const el = document.getElementById('dw-cluster-cmd');
+        if (!el) return;
+        let cmd = 'worker';
+        if (this.deployWorkerRoomId) cmd += ` --room ${this.deployWorkerRoomId}`;
+        cmd += ' --name my-gpu-worker --working-dir /mnt/data';
+        el.textContent = cmd;
     }
 
     updateDirectCommands() {
@@ -3737,6 +3748,7 @@ class SleapRTCDashboard {
 
         // Step 3: worker command
         let workerCmd = `sleap-rtc worker --account-key ${key || 'slp_acct_xxx...'}`;
+        if (this.deployWorkerRoomId) workerCmd += ` --room ${this.deployWorkerRoomId}`;
         if (name) workerCmd += ` --name ${name}`;
         const step3 = document.getElementById('dw-direct-step3-text');
         if (step3) step3.textContent = workerCmd;

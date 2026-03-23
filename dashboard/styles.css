@@ -4239,6 +4239,8 @@ kbd {
 .dw-config-table th,
 .dw-config-table td { padding: 8px 12px; text-align: left; font-size: 12px; border-bottom: 1px solid var(--border-primary); }
 .dw-config-table th { color: var(--text-tertiary); font-weight: 500; text-transform: uppercase; letter-spacing: 0.3px; font-size: 11px; }
+.dw-config-table th:first-child,
+.dw-config-table td:first-child { width: 40%; }
 .dw-config-table td { color: var(--text-primary); }
 .dw-config-table td code { background: var(--bg-primary); padding: 2px 6px; border-radius: 4px; font-family: 'JetBrains Mono', monospace; font-size: 11px; }
 .dw-config-table tr:last-child td { border-bottom: none; }
