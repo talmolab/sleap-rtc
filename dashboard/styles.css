@@ -4009,7 +4009,7 @@ kbd {
    ========================================================================= */
 
 .dw-modal {
-    width: 580px;
+    width: 720px;
     max-height: 85vh;
     overflow-y: auto;
     scrollbar-width: thin;
@@ -4133,6 +4133,24 @@ kbd {
     border-bottom: 1px solid var(--border-primary);
 }
 .dw-command-header span { font-size: 12px; font-weight: 500; color: var(--text-secondary); }
+.dw-modal .btn-copy {
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-primary);
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: 4px 10px;
+    border-radius: 6px;
+    font-size: 11px;
+    font-family: inherit;
+    font-weight: 500;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    transition: all 0.15s;
+}
+.dw-modal .btn-copy i { width: 12px; height: 12px; }
+.dw-modal .btn-copy:hover { background: var(--accent-primary); border-color: var(--accent-primary); color: white; }
+.dw-modal .btn-copy.copied { background: var(--status-success); border-color: var(--status-success); color: white; }
 .dw-command-preview pre {
     padding: 14px;
     font-family: 'JetBrains Mono', monospace;
