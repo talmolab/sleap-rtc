@@ -4013,20 +4013,17 @@ kbd {
     width: 45%;
     padding: 0;
     max-height: 85vh;
-    overflow-y: auto;
-    scrollbar-width: thin;
-    scrollbar-color: var(--bg-tertiary) var(--bg-secondary);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
 }
-.dw-modal::-webkit-scrollbar { width: 8px; }
-.dw-modal::-webkit-scrollbar-track { background: var(--bg-secondary); border-radius: 0 16px 16px 0; }
-.dw-modal::-webkit-scrollbar-thumb { background: var(--bg-tertiary); border-radius: 4px; }
-.dw-modal::-webkit-scrollbar-thumb:hover { background: var(--border-secondary); }
 
 .dw-header {
     display: flex;
     justify-content: space-between;
     align-items: flex-start;
     padding: 24px 24px 0;
+    flex-shrink: 0;
 }
 .dw-header h3 { font-size: 18px; font-weight: 600; margin-bottom: 4px; }
 .dw-subtitle { font-size: 13px; color: var(--text-secondary); }
@@ -4036,6 +4033,7 @@ kbd {
     display: flex;
     padding: 16px 24px 0;
     border-bottom: 1px solid var(--border-primary);
+    flex-shrink: 0;
 }
 .dw-tab {
     padding: 10px 16px;
@@ -4059,7 +4057,18 @@ kbd {
 
 /* Tab content */
 .dw-tab-content { display: none; }
-.dw-tab-content.active { display: block; }
+.dw-tab-content.active {
+    display: block;
+    overflow-y: auto;
+    flex: 1;
+    min-height: 0;
+    scrollbar-width: thin;
+    scrollbar-color: var(--bg-tertiary) var(--bg-secondary);
+}
+.dw-tab-content.active::-webkit-scrollbar { width: 8px; }
+.dw-tab-content.active::-webkit-scrollbar-track { background: var(--bg-secondary); }
+.dw-tab-content.active::-webkit-scrollbar-thumb { background: var(--bg-tertiary); border-radius: 4px; }
+.dw-tab-content.active::-webkit-scrollbar-thumb:hover { background: var(--border-secondary); }
 
 /* Body */
 .dw-body { padding: 20px 24px; }
@@ -4207,22 +4216,23 @@ kbd {
 }
 .dw-btn-copy-inline {
     position: absolute;
-    top: 8px;
-    right: 8px;
+    top: 7px;
+    right: 7px;
     z-index: 1;
     background: var(--bg-tertiary);
     border: 1px solid var(--border-primary);
     color: var(--text-tertiary);
     cursor: pointer;
-    padding: 4px;
+    padding: 2px;
     border-radius: 4px;
     display: flex;
     align-items: center;
     transition: all 0.15s;
+    line-height: 1;
 }
 .dw-btn-copy-inline:hover { background: var(--accent-primary); border-color: var(--accent-primary); color: white; }
 .dw-btn-copy-inline.copied { background: var(--status-success); border-color: var(--status-success); color: white; }
-.dw-btn-copy-inline i { width: 14px; height: 14px; }
+.dw-btn-copy-inline i { width: 12px; height: 12px; }
 
 /* Config table */
 .dw-config-table { width: 100%; border-collapse: collapse; margin: 8px 0; }
@@ -4246,3 +4256,10 @@ kbd {
 .dw-info-note-icon { color: var(--accent-primary); flex-shrink: 0; width: 16px; height: 16px; margin-top: 1px; }
 .dw-info-note p { font-size: 12px; color: var(--text-secondary); line-height: 1.5; }
 .dw-info-note code { background: var(--bg-primary); padding: 1px 5px; border-radius: 4px; font-family: 'JetBrains Mono', monospace; font-size: 11px; }
+
+/* Footer */
+.dw-modal .form-actions {
+    padding: 16px 24px;
+    border-top: 1px solid var(--border-primary);
+    flex-shrink: 0;
+}
