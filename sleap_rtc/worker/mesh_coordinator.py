@@ -108,6 +108,67 @@ class MeshCoordinator:
         # Non-admin WebSocket handler task (for post-demotion signaling)
         self._non_admin_handler_task: Optional[asyncio.Task] = None
 
+    def _build_registration_msg(self, is_admin: bool) -> dict:
+        """Build a registration message with full worker metadata.
+
+        Used for re-registration after promotion/demotion to ensure the
+        signaling server has complete metadata (name, mounts, GPU info, etc.).
+        """
+        import socket
+
+        try:
+            import sleap
+
+            sleap_version = sleap.__version__
+        except (ImportError, AttributeError):
+            sleap_version = "unknown"
+
+        try:
+            from sleap_rtc.worker.worker_class import _get_sleap_nn_version
+
+            sleap_nn_version = _get_sleap_nn_version()
+        except Exception:
+            sleap_nn_version = "unknown"
+
+        mounts = []
+        if hasattr(self.worker, "file_manager") and self.worker.file_manager:
+            mounts = self.worker.file_manager.get_mounts()
+
+        return {
+            "type": "register",
+            "peer_id": self.worker.peer_id,
+            "room_id": self.worker.room_id,
+            "token": self.worker.room_token,
+            "api_key": self.worker.api_key,
+            "role": "worker",
+            "is_admin": is_admin,
+            "metadata": {
+                "tags": [
+                    "sleap-rtc",
+                    "training-worker",
+                    "inference-worker",
+                ],
+                "properties": {
+                    "gpu_memory_mb": self.worker.gpu_memory_mb,
+                    "gpu_model": self.worker.gpu_model,
+                    "sleap_version": sleap_version,
+                    "sleap_nn_version": sleap_nn_version,
+                    "cuda_version": self.worker.cuda_version,
+                    "hostname": socket.gethostname(),
+                    "worker_name": self.worker.name,
+                    "status": self.worker.status,
+                    "max_concurrent_jobs": getattr(
+                        self.worker, "max_concurrent_jobs", 1
+                    ),
+                    "supported_models": getattr(self.worker, "supported_models", []),
+                    "supported_job_types": getattr(
+                        self.worker, "supported_job_types", []
+                    ),
+                    "mounts": mounts,
+                },
+            },
+        }
+
     async def initialize(self, websocket: "ClientConnection", dns: str):
         """Initialize mesh coordinator with initial WebSocket connection.
 
@@ -1696,29 +1757,7 @@ class MeshCoordinator:
 
             # Re-register with server as admin (include full metadata for discovery)
             await self.websocket.send(
-                json.dumps(
-                    {
-                        "type": "register",
-                        "peer_id": self.worker.peer_id,
-                        "room_id": self.worker.room_id,
-                        "token": self.worker.room_token,
-                        "api_key": self.worker.api_key,
-                        "role": "worker",
-                        "is_admin": True,  # Signal admin status
-                        "metadata": {
-                            "tags": [
-                                "sleap-rtc",
-                                "training-worker",
-                                "inference-worker",
-                            ],
-                            "properties": {
-                                "gpu_memory_mb": self.worker.gpu_memory_mb,
-                                "gpu_model": self.worker.gpu_model,
-                                "status": self.worker.status,
-                            },
-                        },
-                    }
-                )
+                json.dumps(self._build_registration_msg(is_admin=True))
             )
 
             logger.info("Admin WebSocket reconnected")
@@ -1779,29 +1818,7 @@ class MeshCoordinator:
 
             # 4. Re-register as non-admin worker
             await self.websocket.send(
-                json.dumps(
-                    {
-                        "type": "register",
-                        "peer_id": self.worker.peer_id,
-                        "room_id": self.worker.room_id,
-                        "token": self.worker.room_token,
-                        "api_key": self.worker.api_key,
-                        "role": "worker",
-                        "is_admin": False,  # Not admin anymore
-                        "metadata": {
-                            "tags": [
-                                "sleap-rtc",
-                                "training-worker",
-                                "inference-worker",
-                            ],
-                            "properties": {
-                                "gpu_memory_mb": self.worker.gpu_memory_mb,
-                                "gpu_model": self.worker.gpu_model,
-                                "status": self.worker.status,
-                            },
-                        },
-                    }
-                )
+                json.dumps(self._build_registration_msg(is_admin=False))
             )
             logger.info("Re-registered as non-admin worker")
 
