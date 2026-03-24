@@ -2965,7 +2965,8 @@ class SleapRTCDashboard {
                 .on('worker_path_error', (data) => this._sjHandlePathError(data))
                 .on('fs_check_videos_response', (data) => this._sjHandleVideoCheck(data));
 
-            // Get mount points from cached worker metadata
+            // Re-fetch worker data to get fresh metadata (mounts may change after reconnection)
+            await this.loadRoomWorkers(this._sjRoomId);
             const workers = this.roomWorkers[this._sjRoomId]?.workers ?? [];
             const worker = workers.find(w => w.peer_id === this._sjWorkerId);
             const mounts = worker?.properties?.mounts ?? [];
