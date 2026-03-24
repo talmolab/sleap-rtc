@@ -3379,15 +3379,33 @@ class RTCWorkerClient:
             def _handle_sigint(signum, frame):
                 logging.info("Worker shut down by user (SIGINT)")
                 self.shutting_down = True
-                # Cancel admin handler task to unblock handle_connection
+
+                # Cancel all mesh coordinator tasks
+                if self.mesh_coordinator:
+                    for task_name in (
+                        "_admin_handler_task",
+                        "_non_admin_handler_task",
+                    ):
+                        task = getattr(self.mesh_coordinator, task_name, None)
+                        if task and not task.done():
+                            task.cancel()
+
+                    # Close mesh coordinator's websocket (may differ from self.websocket)
+                    mc_ws = getattr(self.mesh_coordinator, "websocket", None)
+                    if mc_ws:
+                        try:
+                            mc_ws.transport.close()
+                        except Exception:
+                            pass
+
+                # Cancel heartbeat watchdog
                 if (
-                    self.mesh_coordinator
-                    and hasattr(self.mesh_coordinator, "_admin_handler_task")
-                    and self.mesh_coordinator._admin_handler_task
-                    and not self.mesh_coordinator._admin_handler_task.done()
+                    self._heartbeat_watchdog_task
+                    and not self._heartbeat_watchdog_task.done()
                 ):
-                    self.mesh_coordinator._admin_handler_task.cancel()
-                # Force-close websocket transport to break any pending reads
+                    self._heartbeat_watchdog_task.cancel()
+
+                # Force-close main websocket transport to break any pending reads
                 if self.websocket:
                     try:
                         self.websocket.transport.close()
