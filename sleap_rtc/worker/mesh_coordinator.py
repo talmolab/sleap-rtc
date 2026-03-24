@@ -1890,6 +1890,25 @@ class MeshCoordinator:
                     elif msg_type == "error":
                         logger.error(f"Non-admin received error: {data.get('reason')}")
 
+                    # ── Relay-forwarded requests from dashboard ──────────
+                    elif msg_type == "fs_list_req":
+                        await self._handle_fs_list_req(data)
+
+                    elif msg_type == "use_worker_path":
+                        await self._handle_use_worker_path(data)
+
+                    elif msg_type == "fs_check_videos":
+                        await self._handle_fs_check_videos(data)
+
+                    elif msg_type == "job_assigned":
+                        await self._handle_job_assigned(data)
+
+                    elif msg_type == "ping":
+                        self.worker._last_signaling_ping = time.monotonic()
+                        logging.warning(
+                            "\033[33m[HEARTBEAT] Received signaling server ping\033[0m"
+                        )
+
                     else:
                         logger.debug(f"Non-admin ignoring message type: {msg_type}")
 
