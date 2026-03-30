@@ -3026,11 +3026,30 @@ class SleapRTCDashboard {
         // Show mini dropzone for adding more
         dropzone.classList.add('sj-dropzone-mini');
         dropzone.innerHTML = `
-            <i data-lucide="plus"></i>
-            <span>Add Another Config</span>
+            <label for="sj-config-input" style="display:flex;align-items:center;gap:8px;cursor:pointer;margin:0">
+                <i data-lucide="plus"></i>
+                <span>Add Another Config</span>
+            </label>
             <input type="file" id="sj-config-input" accept=".yaml,.yml" class="hidden">
         `;
-        this._sjInitDropzone();
+        // Re-wire event listeners for the new file input
+        const newInput = document.getElementById('sj-config-input');
+        if (newInput) {
+            newInput.addEventListener('change', () => {
+                const f = newInput.files[0];
+                if (f) this._sjHandleConfigFile(f);
+                newInput.value = '';  // Reset so same file can be re-added
+            });
+        }
+        // Re-wire drag and drop on dropzone
+        dropzone.ondragover = (e) => { e.preventDefault(); dropzone.classList.add('drag-over'); };
+        dropzone.ondragleave = () => dropzone.classList.remove('drag-over');
+        dropzone.ondrop = (e) => {
+            e.preventDefault();
+            dropzone.classList.remove('drag-over');
+            const file = e.dataTransfer.files[0];
+            if (file) this._sjHandleConfigFile(file);
+        };
 
         // Show hyperparams for first config
         try {
