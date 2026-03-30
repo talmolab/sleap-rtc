@@ -2042,6 +2042,80 @@ body::before {
     text-decoration: underline;
 }
 
+/* Multi-config list */
+.sj-config-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.sj-config-card {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius);
+    padding: 10px 12px;
+}
+
+.sj-config-card-info {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+}
+
+.sj-config-card-info i {
+    width: 18px;
+    height: 18px;
+    color: var(--status-success);
+    flex-shrink: 0;
+}
+
+.sj-config-card-name {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-primary);
+}
+
+.sj-config-card-detail {
+    font-size: 11px;
+    color: var(--text-muted);
+}
+
+.sj-config-remove {
+    width: 24px;
+    height: 24px;
+    flex-shrink: 0;
+    color: var(--text-muted);
+}
+
+.sj-config-remove:hover {
+    color: var(--status-error);
+}
+
+/* Mini dropzone for adding more configs */
+.sj-dropzone.sj-dropzone-mini {
+    padding: 14px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    border-style: dashed;
+}
+
+.sj-dropzone.sj-dropzone-mini i {
+    width: 16px;
+    height: 16px;
+    margin-bottom: 0;
+}
+
+.sj-dropzone.sj-dropzone-mini span {
+    font-size: 13px;
+}
+
 /* Hyperparameter display */
 .sj-hyperparams {
     border: 1px solid var(--border-default);
