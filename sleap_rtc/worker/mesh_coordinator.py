@@ -668,16 +668,32 @@ class MeshCoordinator:
     def _handle_job_cancel(self, data: Dict[str, Any]):
         """Handle job_cancel forwarded from dashboard via signaling server.
 
-        Cancels the running job by sending SIGTERM to the subprocess.
+        Sends a ZMQ cancel command to the training process, matching the
+        approach used by the SLEAP GUI and sleap-app. sleap-nn's
+        TrainingControllerZMQ callback sets trainer.should_stop=True and
+        coordinates DDP shutdown via reduce_boolean_decision.
+
+        Falls back to cancel_running_job() (SIGTERM→SIGKILL) if no
+        ProgressReporter is available (e.g., inference jobs).
         """
+        import jsonpickle
+
         job_id = data.get("job_id", "unknown")
         logger.info(f"[RELAY] Job cancel received for {job_id}")
 
-        if self.worker.job_executor:
-            self.worker.job_executor.cancel_running_job()
-            logger.info(f"[RELAY] Cancel signal sent for job {job_id}")
-        else:
+        if not self.worker.job_executor:
             logger.warning(f"[RELAY] No job executor available to cancel job {job_id}")
+            return
+
+        if self.worker.job_executor._progress_reporter is not None:
+            # Use ZMQ — graceful stop that coordinates DDP ranks
+            cancel_msg = jsonpickle.encode({"command": "stop"})
+            self.worker.job_executor.send_control_message(cancel_msg)
+            logger.info(f"[RELAY] ZMQ stop command sent for job {job_id}")
+        else:
+            # No ZMQ reporter (inference job or reporter not started yet) — signal fallback
+            self.worker.job_executor.cancel_running_job()
+            logger.info(f"[RELAY] SIGTERM cancel sent for job {job_id} (no ZMQ reporter)")
 
     async def _handle_client_offer(self, data: Dict[str, Any]):
         """Handle client connection offer received on admin WebSocket.
