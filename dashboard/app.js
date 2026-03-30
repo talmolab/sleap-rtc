@@ -2398,6 +2398,19 @@ class SleapRTCDashboard {
         document.getElementById('sj-next-2').disabled = true;
         document.getElementById('sj-submit-btn').disabled = true;
 
+        // Clear stale innerHTML from previous session (hidden but persists in DOM)
+        const missingVideos = document.getElementById('sj-missing-videos');
+        if (missingVideos) { missingVideos.innerHTML = ''; missingVideos.classList.add('hidden'); }
+        const validationStatus = document.getElementById('sj-validation-status');
+        if (validationStatus) { validationStatus.innerHTML = ''; validationStatus.classList.add('hidden'); }
+        const selectedPath = document.getElementById('sj-selected-path');
+        if (selectedPath) { selectedPath.innerHTML = ''; selectedPath.classList.add('hidden'); }
+        const fileColumns = document.getElementById('sj-file-columns');
+        if (fileColumns) { fileColumns.innerHTML = ''; fileColumns.classList.add('hidden'); }
+        const trainingLog = document.getElementById('sj-training-log');
+        if (trainingLog) { trainingLog.innerHTML = ''; }
+        console.log('[submitJob] openSubmitJobModal: stale UI elements cleared');
+
         // Find room name for subtitle
         const room = this.rooms?.find(r => r.room_id === roomId);
         document.getElementById('sj-subtitle').textContent = room?.name || roomId;
