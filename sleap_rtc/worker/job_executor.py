@@ -249,6 +249,7 @@ class JobExecutor:
     def cancel_running_job(self):
         """Send SIGTERM to the running job's process group for immediate cancellation.
 
+        If the process doesn't exit within 10 seconds, escalates to SIGKILL.
         On Windows, falls back to proc.kill() (no process groups).
         """
         proc = self._running_process
@@ -262,6 +263,31 @@ class JobExecutor:
                         f"Sending SIGTERM to process group {pgid} (hard cancel)"
                     )
                     os.killpg(pgid, signal.SIGTERM)
+
+                    # Escalate to SIGKILL after timeout if process doesn't exit
+                    import threading
+
+                    def _escalate_to_sigkill():
+                        try:
+                            proc.wait(timeout=10)
+                            logging.info(
+                                f"Process {proc.pid} exited after SIGTERM"
+                            )
+                        except Exception:
+                            # Still alive after 10s — force kill
+                            try:
+                                pgid2 = os.getpgid(proc.pid)
+                                logging.warning(
+                                    f"Process group {pgid2} did not exit after "
+                                    f"SIGTERM, escalating to SIGKILL"
+                                )
+                                os.killpg(pgid2, signal.SIGKILL)
+                            except ProcessLookupError:
+                                pass
+
+                    threading.Thread(
+                        target=_escalate_to_sigkill, daemon=True
+                    ).start()
             except ProcessLookupError:
                 pass
 
