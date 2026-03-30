@@ -576,6 +576,13 @@ class MeshCoordinator:
                         relay_msg = {**_j.loads(payload), **_base, "status": "failed"}
                     except Exception:
                         relay_msg = {**_base, "status": "failed", "error": payload}
+                elif message.startswith("MODEL_TYPE::"):
+                    model_type = message.split("::", 1)[1]
+                    relay_msg = {
+                        **_base,
+                        "event": "model_type_switch",
+                        "model_type": model_type,
+                    }
                 elif message.startswith("TRAIN_JOB_START::"):
                     relay_msg = {**_base, "status": "running", "message": message}
                 elif message == "TRAINING_JOBS_DONE":
