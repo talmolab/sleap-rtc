@@ -696,7 +696,9 @@ class MeshCoordinator:
         else:
             # No ZMQ reporter (inference job or reporter not started yet) — signal fallback
             self.worker.job_executor.cancel_running_job()
-            logger.info(f"[RELAY] SIGTERM cancel sent for job {job_id} (no ZMQ reporter)")
+            logger.info(
+                f"[RELAY] SIGTERM cancel sent for job {job_id} (no ZMQ reporter)"
+            )
 
     async def _handle_client_offer(self, data: Dict[str, Any]):
         """Handle client connection offer received on admin WebSocket.

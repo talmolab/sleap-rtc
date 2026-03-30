@@ -196,7 +196,9 @@ class JobExecutor:
         self._running_process: asyncio.subprocess.Process | None = None
         self._progress_reporter = None
         self._stop_requested = False  # True when ZMQ "stop" command was sent
-        self._cancel_requested = False  # True when ZMQ "cancel" command was sent (skips inference)
+        self._cancel_requested = (
+            False  # True when ZMQ "cancel" command was sent (skips inference)
+        )
 
     def send_control_message(self, raw_zmq_message: str):
         """Forward a raw ZMQ control message to the training process.
@@ -275,9 +277,7 @@ class JobExecutor:
                     def _escalate_to_sigkill():
                         try:
                             proc.wait(timeout=10)
-                            logging.info(
-                                f"Process {proc.pid} exited after SIGTERM"
-                            )
+                            logging.info(f"Process {proc.pid} exited after SIGTERM")
                         except Exception:
                             # Still alive after 10s — force kill
                             try:
@@ -290,9 +290,7 @@ class JobExecutor:
                             except ProcessLookupError:
                                 pass
 
-                    threading.Thread(
-                        target=_escalate_to_sigkill, daemon=True
-                    ).start()
+                    threading.Thread(target=_escalate_to_sigkill, daemon=True).start()
             except ProcessLookupError:
                 pass
 
@@ -1292,10 +1290,10 @@ class JobExecutor:
                 sys.platform != "win32" and process.returncode == -signal.SIGTERM
             )
             stopped_early = (
-                self._stop_requested and not cancelled
-            ) or (
-                sys.platform != "win32" and process.returncode == -signal.SIGINT
-            ) or (self._stop_requested and not cancelled and process.returncode != 0)
+                (self._stop_requested and not cancelled)
+                or (sys.platform != "win32" and process.returncode == -signal.SIGINT)
+                or (self._stop_requested and not cancelled and process.returncode != 0)
+            )
 
             if process.returncode == 0 or stopped_early:
                 # Job completed successfully (or stopped early with checkpoint)
