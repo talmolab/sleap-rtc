@@ -3047,8 +3047,7 @@ class SleapRTCDashboard {
         const reqId = data.req_id;
         const pending = this._sjPendingRequests?.[reqId];
         if (!pending) {
-            // No matching request — stale or duplicate response, ignore
-            console.warn('[SSE] Ignoring fs_list_res with unknown req_id:', reqId);
+            // Stale or duplicate response from SSE replay — silently ignore
             return;
         }
         const colIndex = pending.colIndex;
@@ -3067,7 +3066,7 @@ class SleapRTCDashboard {
 
     _sjHandlePathOk(data) {
         if (!this._sjLabelsPath) {
-            console.warn('[submitJob] _sjHandlePathOk: ignoring — no labels path selected yet (stale SSE event)');
+            console.debug('[submitJob] _sjHandlePathOk: ignoring stale SSE event (no labels path)');
             return;
         }
         console.log('[submitJob] _sjHandlePathOk: labelsPath=%s', this._sjLabelsPath);
@@ -3082,7 +3081,7 @@ class SleapRTCDashboard {
 
     _sjHandlePathError(data) {
         if (!this._sjLabelsPath) {
-            console.warn('[submitJob] _sjHandlePathError: ignoring — no labels path selected yet (stale SSE event)');
+            console.debug('[submitJob] _sjHandlePathError: ignoring stale SSE event (no labels path)');
             return;
         }
         console.log('[submitJob] _sjHandlePathError: error=%s', data.error || data.message);
@@ -3101,7 +3100,7 @@ class SleapRTCDashboard {
     _sjHandleVideoCheck(data) {
         // Guard: ignore if no labels path selected yet (stale SSE replay)
         if (!this._sjLabelsPath) {
-            console.warn('[submitJob] _sjHandleVideoCheck: ignoring — no labels path selected yet (stale SSE event)');
+            console.debug('[submitJob] _sjHandleVideoCheck: ignoring stale SSE event (no labels path)');
             return;
         }
         console.log('[submitJob] _sjHandleVideoCheck: missing=%d total=%d labelsPath=%s',
