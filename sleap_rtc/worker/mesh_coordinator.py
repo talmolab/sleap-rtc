@@ -339,6 +339,9 @@ class MeshCoordinator:
                     elif msg_type == "job_assigned":
                         await self._handle_job_assigned(data)
 
+                    elif msg_type == "job_cancel":
+                        self._handle_job_cancel(data)
+
                     elif msg_type == "ping":
                         self.worker._last_signaling_ping = time.monotonic()
                         logging.warning(
@@ -661,6 +664,41 @@ class MeshCoordinator:
                 logger.info(f"[RELAY] Job submit handler complete for {job_id}")
 
         asyncio.create_task(_run_job())
+
+    def _handle_job_cancel(self, data: Dict[str, Any]):
+        """Handle job_cancel forwarded from dashboard via signaling server.
+
+        Sends a ZMQ cancel command to the training process, matching the
+        approach used by the SLEAP GUI and sleap-app. sleap-nn's
+        TrainingControllerZMQ callback sets trainer.should_stop=True and
+        coordinates DDP shutdown via reduce_boolean_decision.
+
+        Falls back to cancel_running_job() (SIGTERM→SIGKILL) if no
+        ProgressReporter is available (e.g., inference jobs).
+        """
+        import jsonpickle
+
+        job_id = data.get("job_id", "unknown")
+        logger.info(f"[RELAY] Job cancel received for {job_id}")
+
+        if not self.worker.job_executor:
+            logger.warning(f"[RELAY] No job executor available to cancel job {job_id}")
+            return
+
+        if self.worker.job_executor._progress_reporter is not None:
+            # Send ZMQ "stop" to sleap-nn (it only handles "stop", not "cancel")
+            # but set _cancel_requested flag so the pipeline skips inference.
+            # This gives us: training stops gracefully + inference is skipped.
+            stop_msg = jsonpickle.encode({"command": "stop"})
+            self.worker.job_executor.send_control_message(stop_msg)
+            self.worker.job_executor._cancel_requested = True
+            logger.info(f"[RELAY] ZMQ stop + cancel flag set for job {job_id}")
+        else:
+            # No ZMQ reporter (inference job or reporter not started yet) — signal fallback
+            self.worker.job_executor.cancel_running_job()
+            logger.info(
+                f"[RELAY] SIGTERM cancel sent for job {job_id} (no ZMQ reporter)"
+            )
 
     async def _handle_client_offer(self, data: Dict[str, Any]):
         """Handle client connection offer received on admin WebSocket.
@@ -1902,6 +1940,9 @@ class MeshCoordinator:
 
                     elif msg_type == "job_assigned":
                         await self._handle_job_assigned(data)
+
+                    elif msg_type == "job_cancel":
+                        self._handle_job_cancel(data)
 
                     elif msg_type == "ping":
                         self.worker._last_signaling_ping = time.monotonic()

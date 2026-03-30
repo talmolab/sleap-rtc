@@ -407,6 +407,17 @@ body::before {
     background: rgba(239, 68, 68, 0.2);
 }
 
+.btn-danger.btn-confirming {
+    background: rgba(239, 68, 68, 0.25);
+    border-color: rgba(239, 68, 68, 0.5);
+    animation: pulse-confirm 1s ease-in-out infinite;
+}
+
+@keyframes pulse-confirm {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.7; }
+}
+
 .btn-sm {
     padding: 6px 10px;
     font-size: 12px;

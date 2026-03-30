@@ -1590,8 +1590,9 @@ auto_select = true</code></pre>
                         <div id="sj-training-log" class="sj-training-log"></div>
                     </div>
                 </div>
-                <div class="form-actions">
-                    <button class="btn btn-primary" id="sj-close-btn" onclick="app.closeSubmitJobModal()">Close</button>
+                <div class="form-actions" id="sj-status-actions">
+                    <button class="btn btn-danger" id="sj-cancel-btn" onclick="app.sjCancelJob()">Cancel Training</button>
+                    <button class="btn btn-secondary" id="sj-close-btn" onclick="app.closeSubmitJobModal()">Close</button>
                 </div>
             </div>
 

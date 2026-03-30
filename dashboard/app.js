@@ -2368,6 +2368,27 @@ class SleapRTCDashboard {
         this._sjWorkerId = null;
         this._sjConfigContent = null;
         this._sjLabelsPath = null;
+        this._sjPathMappings = {};
+        this._sjMissingVideos = [];
+        this._sjModelType = null;
+        this._sjMaxEpochs = null;
+        this._sjBrowseMode = null;
+        this._sjResolvingVideoIndex = -1;
+        this._sjPendingRequests = {};
+        this._sjSessionId = Date.now();  // Guard against stale SSE events
+        console.log('[submitJob] openSubmitJobModal: all wizard state reset for room=%s sessionId=%s', roomId, this._sjSessionId);
+
+        // Reset dropzone to default state (clears stale filename from previous session)
+        const dropzone = document.getElementById('sj-config-dropzone');
+        if (dropzone) {
+            dropzone.innerHTML = `
+                <i data-lucide="upload-cloud"></i>
+                <p>Drop your sleap-nn config YAML here, or <label for="sj-config-input" class="sj-browse-link">browse</label></p>
+                <input type="file" id="sj-config-input" accept=".yaml,.yml" class="hidden">
+            `;
+            lucide.createIcons();
+            console.log('[submitJob] openSubmitJobModal: dropzone UI reset');
+        }
 
         // Reset all views to initial state
         document.getElementById('sj-hyperparams').classList.add('hidden');
@@ -2378,6 +2399,19 @@ class SleapRTCDashboard {
         document.getElementById('sj-next-1').disabled = true;
         document.getElementById('sj-next-2').disabled = true;
         document.getElementById('sj-submit-btn').disabled = true;
+
+        // Clear stale innerHTML from previous session (hidden but persists in DOM)
+        const missingVideos = document.getElementById('sj-missing-videos');
+        if (missingVideos) { missingVideos.innerHTML = ''; missingVideos.classList.add('hidden'); }
+        const validationStatus = document.getElementById('sj-validation-status');
+        if (validationStatus) { validationStatus.innerHTML = ''; validationStatus.classList.add('hidden'); }
+        const selectedPath = document.getElementById('sj-selected-path');
+        if (selectedPath) { selectedPath.innerHTML = ''; selectedPath.classList.add('hidden'); }
+        const fileColumns = document.getElementById('sj-file-columns');
+        if (fileColumns) { fileColumns.innerHTML = ''; fileColumns.classList.add('hidden'); }
+        const trainingLog = document.getElementById('sj-training-log');
+        if (trainingLog) { trainingLog.innerHTML = ''; }
+        console.log('[submitJob] openSubmitJobModal: stale UI elements cleared');
 
         // Find room name for subtitle
         const room = this.rooms?.find(r => r.room_id === roomId);
@@ -2937,6 +2971,14 @@ class SleapRTCDashboard {
 
     async sjEnterStep3() {
         this.sjGoToStep(3);
+        console.log('[submitJob] sjEnterStep3: entering step 3, resetting state');
+
+        // Close any existing worker SSE before opening new one
+        if (this._sjWorkerSSE) {
+            console.log('[submitJob] sjEnterStep3: closing previous worker SSE');
+            this._sjWorkerSSE.close();
+            this._sjWorkerSSE = null;
+        }
 
         // Reset state
         this._sjLabelsPath = null;
@@ -3005,8 +3047,7 @@ class SleapRTCDashboard {
         const reqId = data.req_id;
         const pending = this._sjPendingRequests?.[reqId];
         if (!pending) {
-            // No matching request — stale or duplicate response, ignore
-            console.warn('[SSE] Ignoring fs_list_res with unknown req_id:', reqId);
+            // Stale or duplicate response from SSE replay — silently ignore
             return;
         }
         const colIndex = pending.colIndex;
@@ -3024,6 +3065,11 @@ class SleapRTCDashboard {
     }
 
     _sjHandlePathOk(data) {
+        if (!this._sjLabelsPath) {
+            console.debug('[submitJob] _sjHandlePathOk: ignoring stale SSE event (no labels path)');
+            return;
+        }
+        console.log('[submitJob] _sjHandlePathOk: labelsPath=%s', this._sjLabelsPath);
         const statusEl = document.getElementById('sj-validation-status');
         if (statusEl) {
             statusEl.innerHTML = '<i data-lucide="loader-2" class="spin"></i> Checking videos…';
@@ -3034,6 +3080,11 @@ class SleapRTCDashboard {
     }
 
     _sjHandlePathError(data) {
+        if (!this._sjLabelsPath) {
+            console.debug('[submitJob] _sjHandlePathError: ignoring stale SSE event (no labels path)');
+            return;
+        }
+        console.log('[submitJob] _sjHandlePathError: error=%s', data.error || data.message);
         const statusEl = document.getElementById('sj-validation-status');
         const msg = data.error || data.message || 'Path rejected by worker';
         if (statusEl) {
@@ -3047,6 +3098,13 @@ class SleapRTCDashboard {
     }
 
     _sjHandleVideoCheck(data) {
+        // Guard: ignore if no labels path selected yet (stale SSE replay)
+        if (!this._sjLabelsPath) {
+            console.debug('[submitJob] _sjHandleVideoCheck: ignoring stale SSE event (no labels path)');
+            return;
+        }
+        console.log('[submitJob] _sjHandleVideoCheck: missing=%d total=%d labelsPath=%s',
+            (data.missing || []).length, data.total_videos || 0, this._sjLabelsPath);
         const statusEl = document.getElementById('sj-validation-status');
         const missing = data.missing || [];
         const total = data.total_videos || 0;
@@ -3354,8 +3412,10 @@ class SleapRTCDashboard {
             // Switch to status view and reset progress panel
             this.sjGoToStep('status');
             this._sjResetProgressPanel();
+            this._sjShowCancelButton();
             const label = document.getElementById('sj-status-label');
             if (label) label.textContent = 'Submitted…';
+            console.log('[submitJob] job submitted jobId=%s, cancel button shown', jobId);
 
         } catch (err) {
             const errEl = document.getElementById('sj-browser-error');
@@ -3372,6 +3432,7 @@ class SleapRTCDashboard {
         const status = data.status;
         const stage = data.stage;
         const modelLabel = this._sjModelType || 'model';
+        console.log('[submitJob] _sjHandleJobStatus: status=%s stage=%s jobId=%s', status, stage, this._currentJobId);
 
         // Update activeJobs entry
         const job = this._currentJobId ? this.activeJobs.get(this._currentJobId) : null;
@@ -3393,15 +3454,18 @@ class SleapRTCDashboard {
         } else if (status === 'accepted') {
             if (label) label.textContent = 'Worker accepted! Starting training job…';
         } else if (status === 'complete') {
+            console.log('[submitJob] job complete, hiding cancel button');
             if (label) label.textContent = 'Complete';
             this._sjUpdateStatusIcon('complete');
             this._sjShowCloseButton();
         } else if (status === 'failed') {
             const msg = data.message || data.error || 'Job failed';
+            console.log('[submitJob] job failed: %s', msg);
             if (label) label.textContent = `Failed: ${msg}`;
             this._sjUpdateStatusIcon('failed');
             this._sjShowCloseButton();
         } else if (status === 'cancelled') {
+            console.log('[submitJob] job cancelled');
             if (label) label.textContent = 'Cancelled';
             this._sjUpdateStatusIcon('cancelled');
             this._sjShowCloseButton();
@@ -3587,9 +3651,60 @@ class SleapRTCDashboard {
     }
 
     _sjShowCloseButton() {
-        const actions = document.querySelector('#sj-status .form-actions');
-        if (actions) {
-            actions.innerHTML = `<button class="btn btn-secondary" onclick="app.closeSubmitJobModal()">Close</button>`;
+        const cancelBtn = document.getElementById('sj-cancel-btn');
+        if (cancelBtn) cancelBtn.classList.add('hidden');
+        const closeBtn = document.getElementById('sj-close-btn');
+        if (closeBtn) closeBtn.classList.remove('hidden');
+    }
+
+    _sjShowCancelButton() {
+        const cancelBtn = document.getElementById('sj-cancel-btn');
+        if (cancelBtn) {
+            cancelBtn.classList.remove('hidden');
+            cancelBtn.disabled = false;
+            cancelBtn.textContent = 'Cancel Training';
+            cancelBtn.dataset.confirming = 'false';
+            cancelBtn.classList.remove('btn-confirming');
+        }
+        const closeBtn = document.getElementById('sj-close-btn');
+        if (closeBtn) closeBtn.classList.remove('hidden');
+    }
+
+    sjCancelJob() {
+        const btn = document.getElementById('sj-cancel-btn');
+        if (!btn) return;
+
+        if (btn.dataset.confirming === 'true') {
+            // Second click — actually cancel
+            btn.dataset.confirming = 'false';
+            btn.textContent = 'Cancelling...';
+            btn.disabled = true;
+            btn.classList.remove('btn-confirming');
+            console.log('[submitJob] sjCancelJob: sending cancel for jobId=%s roomId=%s workerId=%s',
+                this._currentJobId, this._sjRoomId, this._sjWorkerId);
+            this.apiJobCancel(this._currentJobId, this._sjRoomId, this._sjWorkerId)
+                .then(() => {
+                    console.log('[submitJob] sjCancelJob: cancel request sent successfully');
+                })
+                .catch(err => {
+                    console.error('[submitJob] sjCancelJob: cancel request failed:', err);
+                    btn.textContent = 'Cancel Failed';
+                    btn.disabled = false;
+                });
+        } else {
+            // First click — ask for confirmation
+            console.log('[submitJob] sjCancelJob: awaiting confirmation for jobId=%s', this._currentJobId);
+            btn.dataset.confirming = 'true';
+            btn.textContent = 'Confirm Cancel?';
+            btn.classList.add('btn-confirming');
+            this._sjCancelTimeout = setTimeout(() => {
+                if (btn.dataset.confirming === 'true') {
+                    btn.dataset.confirming = 'false';
+                    btn.textContent = 'Cancel Training';
+                    btn.classList.remove('btn-confirming');
+                    console.log('[submitJob] sjCancelJob: confirmation timed out, reverted');
+                }
+            }, 3000);
         }
     }
 
