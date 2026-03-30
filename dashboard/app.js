@@ -2374,7 +2374,9 @@ class SleapRTCDashboard {
         this._sjMaxEpochs = null;
         this._sjBrowseMode = null;
         this._sjResolvingVideoIndex = -1;
-        console.log('[submitJob] openSubmitJobModal: all wizard state reset for room=%s', roomId);
+        this._sjPendingRequests = {};
+        this._sjSessionId = Date.now();  // Guard against stale SSE events
+        console.log('[submitJob] openSubmitJobModal: all wizard state reset for room=%s sessionId=%s', roomId, this._sjSessionId);
 
         // Reset dropzone to default state (clears stale filename from previous session)
         const dropzone = document.getElementById('sj-config-dropzone');
@@ -2969,6 +2971,14 @@ class SleapRTCDashboard {
 
     async sjEnterStep3() {
         this.sjGoToStep(3);
+        console.log('[submitJob] sjEnterStep3: entering step 3, resetting state');
+
+        // Close any existing worker SSE before opening new one
+        if (this._sjWorkerSSE) {
+            console.log('[submitJob] sjEnterStep3: closing previous worker SSE');
+            this._sjWorkerSSE.close();
+            this._sjWorkerSSE = null;
+        }
 
         // Reset state
         this._sjLabelsPath = null;
@@ -3056,6 +3066,11 @@ class SleapRTCDashboard {
     }
 
     _sjHandlePathOk(data) {
+        if (!this._sjLabelsPath) {
+            console.warn('[submitJob] _sjHandlePathOk: ignoring — no labels path selected yet (stale SSE event)');
+            return;
+        }
+        console.log('[submitJob] _sjHandlePathOk: labelsPath=%s', this._sjLabelsPath);
         const statusEl = document.getElementById('sj-validation-status');
         if (statusEl) {
             statusEl.innerHTML = '<i data-lucide="loader-2" class="spin"></i> Checking videos…';
@@ -3066,6 +3081,11 @@ class SleapRTCDashboard {
     }
 
     _sjHandlePathError(data) {
+        if (!this._sjLabelsPath) {
+            console.warn('[submitJob] _sjHandlePathError: ignoring — no labels path selected yet (stale SSE event)');
+            return;
+        }
+        console.log('[submitJob] _sjHandlePathError: error=%s', data.error || data.message);
         const statusEl = document.getElementById('sj-validation-status');
         const msg = data.error || data.message || 'Path rejected by worker';
         if (statusEl) {
@@ -3079,6 +3099,13 @@ class SleapRTCDashboard {
     }
 
     _sjHandleVideoCheck(data) {
+        // Guard: ignore if no labels path selected yet (stale SSE replay)
+        if (!this._sjLabelsPath) {
+            console.warn('[submitJob] _sjHandleVideoCheck: ignoring — no labels path selected yet (stale SSE event)');
+            return;
+        }
+        console.log('[submitJob] _sjHandleVideoCheck: missing=%d total=%d labelsPath=%s',
+            (data.missing || []).length, data.total_videos || 0, this._sjLabelsPath);
         const statusEl = document.getElementById('sj-validation-status');
         const missing = data.missing || [];
         const total = data.total_videos || 0;
