@@ -339,6 +339,9 @@ class MeshCoordinator:
                     elif msg_type == "job_assigned":
                         await self._handle_job_assigned(data)
 
+                    elif msg_type == "job_cancel":
+                        self._handle_job_cancel(data)
+
                     elif msg_type == "ping":
                         self.worker._last_signaling_ping = time.monotonic()
                         logging.warning(
@@ -661,6 +664,20 @@ class MeshCoordinator:
                 logger.info(f"[RELAY] Job submit handler complete for {job_id}")
 
         asyncio.create_task(_run_job())
+
+    def _handle_job_cancel(self, data: Dict[str, Any]):
+        """Handle job_cancel forwarded from dashboard via signaling server.
+
+        Cancels the running job by sending SIGTERM to the subprocess.
+        """
+        job_id = data.get("job_id", "unknown")
+        logger.info(f"[RELAY] Job cancel received for {job_id}")
+
+        if self.worker.job_executor:
+            self.worker.job_executor.cancel_running_job()
+            logger.info(f"[RELAY] Cancel signal sent for job {job_id}")
+        else:
+            logger.warning(f"[RELAY] No job executor available to cancel job {job_id}")
 
     async def _handle_client_offer(self, data: Dict[str, Any]):
         """Handle client connection offer received on admin WebSocket.
@@ -1902,6 +1919,9 @@ class MeshCoordinator:
 
                     elif msg_type == "job_assigned":
                         await self._handle_job_assigned(data)
+
+                    elif msg_type == "job_cancel":
+                        self._handle_job_cancel(data)
 
                     elif msg_type == "ping":
                         self.worker._last_signaling_ping = time.monotonic()
