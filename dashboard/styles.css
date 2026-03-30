@@ -2051,12 +2051,16 @@ body::before {
 }
 
 .sj-config-card {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
     background: var(--bg-elevated);
     border: 1px solid var(--border-default);
     border-radius: var(--radius);
+    overflow: hidden;
+}
+
+.sj-config-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
     padding: 10px 12px;
 }
 
@@ -2094,6 +2098,16 @@ body::before {
 
 .sj-config-remove:hover {
     color: var(--status-error);
+}
+
+.sj-config-card-params {
+    border-top: 1px solid var(--border-default);
+    padding: 8px 12px;
+    background: var(--bg-primary);
+}
+
+.sj-config-card-params .sj-hyperparam-item {
+    padding: 2px 0;
 }
 
 /* Mini dropzone for adding more configs */
