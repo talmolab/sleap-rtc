@@ -12,10 +12,11 @@ Remote training and inference for [SLEAP](https://sleap.ai) — run `sleap-nn` o
 4. **Deploy a worker** — On your GPU machine, install and start a worker:
 
    ```bash
-   # Install sleap-rtc with sleap-nn and GPU support
+   # Install sleap-rtc with sleap-nn (auto-detects GPU)
    uv tool install --python 3.11 sleap-rtc \
-     --with "sleap-nn[torch-cuda130]" \
-     --with-executables-from sleap-nn
+     --with "sleap-nn[torch]" \
+     --with-executables-from sleap-nn \
+     --torch-backend auto
 
    # Login and start the worker
    sleap-rtc login
@@ -28,10 +29,11 @@ Remote training and inference for [SLEAP](https://sleap.ai) — run `sleap-nn` o
 ### Option 2: CLI
 
 ```bash
-# Install on the GPU machine
+# Install on the GPU machine (auto-detects GPU)
 uv tool install --python 3.11 sleap-rtc \
-  --with "sleap-nn[torch-cuda130]" \
-  --with-executables-from sleap-nn
+  --with "sleap-nn[torch]" \
+  --with-executables-from sleap-nn \
+  --torch-backend auto
 
 # Login with GitHub (opens browser)
 sleap-rtc login
@@ -63,7 +65,17 @@ docker run --gpus all \
 **Worker (GPU machine):**
 
 ```bash
-# With CUDA GPU
+# Auto-detect GPU (recommended)
+uv tool install --python 3.11 sleap-rtc \
+  --with "sleap-nn[torch]" \
+  --with-executables-from sleap-nn \
+  --torch-backend auto
+```
+
+Or specify a backend explicitly:
+
+```bash
+# CUDA GPU
 uv tool install --python 3.11 sleap-rtc \
   --with "sleap-nn[torch-cuda130]" \
   --with-executables-from sleap-nn
@@ -71,11 +83,6 @@ uv tool install --python 3.11 sleap-rtc \
 # CPU only
 uv tool install --python 3.11 sleap-rtc \
   --with "sleap-nn[torch-cpu]" \
-  --with-executables-from sleap-nn
-
-# Apple Silicon (MPS)
-uv tool install --python 3.11 sleap-rtc \
-  --with "sleap-nn[torch]" \
   --with-executables-from sleap-nn
 ```
 
