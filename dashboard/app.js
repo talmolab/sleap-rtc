@@ -3361,8 +3361,10 @@ class SleapRTCDashboard {
             // Switch to status view and reset progress panel
             this.sjGoToStep('status');
             this._sjResetProgressPanel();
+            this._sjShowCancelButton();
             const label = document.getElementById('sj-status-label');
             if (label) label.textContent = 'Submitted…';
+            console.log('[submitJob] job submitted jobId=%s, cancel button shown', jobId);
 
         } catch (err) {
             const errEl = document.getElementById('sj-browser-error');
@@ -3379,6 +3381,7 @@ class SleapRTCDashboard {
         const status = data.status;
         const stage = data.stage;
         const modelLabel = this._sjModelType || 'model';
+        console.log('[submitJob] _sjHandleJobStatus: status=%s stage=%s jobId=%s', status, stage, this._currentJobId);
 
         // Update activeJobs entry
         const job = this._currentJobId ? this.activeJobs.get(this._currentJobId) : null;
@@ -3400,15 +3403,18 @@ class SleapRTCDashboard {
         } else if (status === 'accepted') {
             if (label) label.textContent = 'Worker accepted! Starting training job…';
         } else if (status === 'complete') {
+            console.log('[submitJob] job complete, hiding cancel button');
             if (label) label.textContent = 'Complete';
             this._sjUpdateStatusIcon('complete');
             this._sjShowCloseButton();
         } else if (status === 'failed') {
             const msg = data.message || data.error || 'Job failed';
+            console.log('[submitJob] job failed: %s', msg);
             if (label) label.textContent = `Failed: ${msg}`;
             this._sjUpdateStatusIcon('failed');
             this._sjShowCloseButton();
         } else if (status === 'cancelled') {
+            console.log('[submitJob] job cancelled');
             if (label) label.textContent = 'Cancelled';
             this._sjUpdateStatusIcon('cancelled');
             this._sjShowCloseButton();
@@ -3594,9 +3600,60 @@ class SleapRTCDashboard {
     }
 
     _sjShowCloseButton() {
-        const actions = document.querySelector('#sj-status .form-actions');
-        if (actions) {
-            actions.innerHTML = `<button class="btn btn-secondary" onclick="app.closeSubmitJobModal()">Close</button>`;
+        const cancelBtn = document.getElementById('sj-cancel-btn');
+        if (cancelBtn) cancelBtn.classList.add('hidden');
+        const closeBtn = document.getElementById('sj-close-btn');
+        if (closeBtn) closeBtn.classList.remove('hidden');
+    }
+
+    _sjShowCancelButton() {
+        const cancelBtn = document.getElementById('sj-cancel-btn');
+        if (cancelBtn) {
+            cancelBtn.classList.remove('hidden');
+            cancelBtn.disabled = false;
+            cancelBtn.textContent = 'Cancel Training';
+            cancelBtn.dataset.confirming = 'false';
+            cancelBtn.classList.remove('btn-confirming');
+        }
+        const closeBtn = document.getElementById('sj-close-btn');
+        if (closeBtn) closeBtn.classList.remove('hidden');
+    }
+
+    sjCancelJob() {
+        const btn = document.getElementById('sj-cancel-btn');
+        if (!btn) return;
+
+        if (btn.dataset.confirming === 'true') {
+            // Second click — actually cancel
+            btn.dataset.confirming = 'false';
+            btn.textContent = 'Cancelling...';
+            btn.disabled = true;
+            btn.classList.remove('btn-confirming');
+            console.log('[submitJob] sjCancelJob: sending cancel for jobId=%s roomId=%s workerId=%s',
+                this._currentJobId, this._sjRoomId, this._sjWorkerId);
+            this.apiJobCancel(this._currentJobId, this._sjRoomId, this._sjWorkerId)
+                .then(() => {
+                    console.log('[submitJob] sjCancelJob: cancel request sent successfully');
+                })
+                .catch(err => {
+                    console.error('[submitJob] sjCancelJob: cancel request failed:', err);
+                    btn.textContent = 'Cancel Failed';
+                    btn.disabled = false;
+                });
+        } else {
+            // First click — ask for confirmation
+            console.log('[submitJob] sjCancelJob: awaiting confirmation for jobId=%s', this._currentJobId);
+            btn.dataset.confirming = 'true';
+            btn.textContent = 'Confirm Cancel?';
+            btn.classList.add('btn-confirming');
+            this._sjCancelTimeout = setTimeout(() => {
+                if (btn.dataset.confirming === 'true') {
+                    btn.dataset.confirming = 'false';
+                    btn.textContent = 'Cancel Training';
+                    btn.classList.remove('btn-confirming');
+                    console.log('[submitJob] sjCancelJob: confirmation timed out, reverted');
+                }
+            }, 3000);
         }
     }
 
