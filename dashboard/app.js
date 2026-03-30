@@ -2995,28 +2995,38 @@ class SleapRTCDashboard {
             return;
         }
 
-        // Render config cards
+        // Render config cards with per-config hyperparams
         let html = this._sjConfigContents.map((text, i) => {
-            let detail = '';
+            let hyperparamRows = '';
             try {
                 const fields = this.parseTrainingConfig(text);
-                const parts = [];
-                if (fields.max_epochs !== 'unknown') parts.push(`${fields.max_epochs} epochs`);
-                if (fields.learning_rate !== 'unknown') parts.push(`lr ${fields.learning_rate}`);
-                detail = parts.join(' · ');
+                const rows = [
+                    ['Batch size', fields.batch_size],
+                    ['Learning rate', fields.learning_rate],
+                    ['Max epochs', fields.max_epochs],
+                    ['Run name', fields.run_name],
+                    ['WandB project', fields.wandb_project],
+                    ['WandB entity', fields.wandb_entity],
+                ].filter(([, val]) => val !== 'unknown');
+                hyperparamRows = rows.map(([label, val]) =>
+                    `<div class="sj-hyperparam-item"><span class="sj-hyperparam-label">${label}</span><span class="sj-hyperparam-value">${val}</span></div>`
+                ).join('');
             } catch { /* ignore */ }
 
             return `<div class="sj-config-card">
-                <div class="sj-config-card-info">
-                    <i data-lucide="file-check"></i>
-                    <div>
-                        <div class="sj-config-card-name">${this._escapeHtml(this._sjConfigNames[i])}</div>
-                        <div class="sj-config-card-detail">${this._escapeHtml(this._sjModelTypes[i])}${detail ? ' · ' + detail : ''}</div>
+                <div class="sj-config-card-header">
+                    <div class="sj-config-card-info">
+                        <i data-lucide="file-check"></i>
+                        <div>
+                            <div class="sj-config-card-name">${this._escapeHtml(this._sjConfigNames[i])}</div>
+                            <div class="sj-config-card-detail">${this._escapeHtml(this._sjModelTypes[i])}</div>
+                        </div>
                     </div>
+                    <button class="btn-icon sj-config-remove" onclick="app._sjRemoveConfig(${i})" title="Remove">
+                        <i data-lucide="x"></i>
+                    </button>
                 </div>
-                <button class="btn-icon sj-config-remove" onclick="app._sjRemoveConfig(${i})" title="Remove">
-                    <i data-lucide="x"></i>
-                </button>
+                ${hyperparamRows ? `<div class="sj-config-card-params">${hyperparamRows}</div>` : ''}
             </div>`;
         }).join('');
 
@@ -3051,11 +3061,8 @@ class SleapRTCDashboard {
             if (file) this._sjHandleConfigFile(file);
         };
 
-        // Show hyperparams for first config
-        try {
-            const fields = this.parseTrainingConfig(this._sjConfigContents[0]);
-            this._sjRenderHyperparams(fields);
-        } catch { /* ignore */ }
+        // Hide shared hyperparams panel — each card shows its own
+        document.getElementById('sj-hyperparams')?.classList.add('hidden');
 
         if (window.lucide) {
             const step2 = document.getElementById('sj-step2');
