@@ -2376,6 +2376,18 @@ class SleapRTCDashboard {
         this._sjResolvingVideoIndex = -1;
         console.log('[submitJob] openSubmitJobModal: all wizard state reset for room=%s', roomId);
 
+        // Reset dropzone to default state (clears stale filename from previous session)
+        const dropzone = document.getElementById('sj-config-dropzone');
+        if (dropzone) {
+            dropzone.innerHTML = `
+                <i data-lucide="upload-cloud"></i>
+                <p>Drop your sleap-nn config YAML here, or <label for="sj-config-input" class="sj-browse-link">browse</label></p>
+                <input type="file" id="sj-config-input" accept=".yaml,.yml" class="hidden">
+            `;
+            lucide.createIcons();
+            console.log('[submitJob] openSubmitJobModal: dropzone UI reset');
+        }
+
         // Reset all views to initial state
         document.getElementById('sj-hyperparams').classList.add('hidden');
         document.getElementById('sj-config-error').classList.add('hidden');
