@@ -2368,6 +2368,13 @@ class SleapRTCDashboard {
         this._sjWorkerId = null;
         this._sjConfigContent = null;
         this._sjLabelsPath = null;
+        this._sjPathMappings = {};
+        this._sjMissingVideos = [];
+        this._sjModelType = null;
+        this._sjMaxEpochs = null;
+        this._sjBrowseMode = null;
+        this._sjResolvingVideoIndex = -1;
+        console.log('[submitJob] openSubmitJobModal: all wizard state reset for room=%s', roomId);
 
         // Reset all views to initial state
         document.getElementById('sj-hyperparams').classList.add('hidden');
