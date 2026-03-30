@@ -686,10 +686,13 @@ class MeshCoordinator:
             return
 
         if self.worker.job_executor._progress_reporter is not None:
-            # Use ZMQ — graceful stop that coordinates DDP ranks
-            cancel_msg = jsonpickle.encode({"command": "stop"})
-            self.worker.job_executor.send_control_message(cancel_msg)
-            logger.info(f"[RELAY] ZMQ stop command sent for job {job_id}")
+            # Send ZMQ "stop" to sleap-nn (it only handles "stop", not "cancel")
+            # but set _cancel_requested flag so the pipeline skips inference.
+            # This gives us: training stops gracefully + inference is skipped.
+            stop_msg = jsonpickle.encode({"command": "stop"})
+            self.worker.job_executor.send_control_message(stop_msg)
+            self.worker.job_executor._cancel_requested = True
+            logger.info(f"[RELAY] ZMQ stop + cancel flag set for job {job_id}")
         else:
             # No ZMQ reporter (inference job or reporter not started yet) — signal fallback
             self.worker.job_executor.cancel_running_job()

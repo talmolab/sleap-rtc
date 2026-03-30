@@ -3209,9 +3209,10 @@ class RTCWorkerClient:
                     logging.info(f"ZMQ LossViewer control message received: {message}")
                     _, zmq_msg = message.split("ZMQ_CTRL::", 1)
 
-                    # Send LossViewer's control message to the Trainer client (listening on control port 9000).
-                    # Remember, the Trainer printed: "ZMQ controller subscribed to: tcp://127.0.0.1:9000", so publish there.
-                    self.progress_reporter.send_control_message(zmq_msg)
+                    # Route through job_executor.send_control_message() so
+                    # _stop_requested / _cancel_requested flags are set correctly.
+                    # This ensures "Cancel Training" skips post-training inference.
+                    self.job_executor.send_control_message(zmq_msg)
                 else:
                     logging.info(f"Client sent: {message}")
                     # await self.send_worker_messages(self.pc, channel)

@@ -196,6 +196,7 @@ class JobExecutor:
         self._running_process: asyncio.subprocess.Process | None = None
         self._progress_reporter = None
         self._stop_requested = False  # True when ZMQ "stop" command was sent
+        self._cancel_requested = False  # True when ZMQ "cancel" command was sent (skips inference)
 
     def send_control_message(self, raw_zmq_message: str):
         """Forward a raw ZMQ control message to the training process.
@@ -220,8 +221,12 @@ class JobExecutor:
 
         try:
             payload = json.loads(raw_zmq_message)
-            if payload.get("command") == "stop":
+            cmd = payload.get("command")
+            if cmd == "stop":
                 self._stop_requested = True
+            elif cmd == "cancel":
+                self._stop_requested = True
+                self._cancel_requested = True
         except (json.JSONDecodeError, AttributeError):
             pass
 
@@ -1278,14 +1283,17 @@ class JobExecutor:
                 f"(return code: {process.returncode})"
             )
 
-            # Treat as stopped-early if:
-            # - killed by SIGINT (-2): process group killed by OS signal, OR
-            # - exited with code 1 after a stop was requested: PyTorch Lightning
-            #   caught SIGINT, ran graceful shutdown, then called sys.exit(1)
-            cancelled = sys.platform != "win32" and (
-                process.returncode == -signal.SIGTERM
+            # Detect cancellation or early stop:
+            # - ZMQ cancel: _cancel_requested flag set (user chose "Cancel Training")
+            # - SIGTERM: process killed by signal (legacy/fallback)
+            # - ZMQ stop: _stop_requested flag set (user chose "Stop Early")
+            # - SIGINT: process group killed by signal (legacy/fallback)
+            cancelled = self._cancel_requested or (
+                sys.platform != "win32" and process.returncode == -signal.SIGTERM
             )
             stopped_early = (
+                self._stop_requested and not cancelled
+            ) or (
                 sys.platform != "win32" and process.returncode == -signal.SIGINT
             ) or (self._stop_requested and not cancelled and process.returncode != 0)
 
@@ -1364,6 +1372,7 @@ class JobExecutor:
 
         finally:
             self._stop_requested = False  # reset so next job starts clean
+            self._cancel_requested = False
             if _owned_reporter and progress_reporter is not None:
                 await progress_reporter.async_cleanup()
                 self._progress_reporter = None
