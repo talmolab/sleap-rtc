@@ -715,10 +715,10 @@ class SleapRTCDashboard {
     /**
      * Cancel a running training job.
      */
-    async apiJobCancel(jobId, roomId, peerId) {
+    async apiJobCancel(jobId, roomId, peerId, mode = 'cancel') {
         return this.apiRequest(`/api/jobs/${jobId}/cancel`, {
             method: 'POST',
-            body: JSON.stringify({ room_id: roomId, peer_id: peerId }),
+            body: JSON.stringify({ room_id: roomId, peer_id: peerId, mode }),
         });
     }
 
@@ -2366,27 +2366,35 @@ class SleapRTCDashboard {
 
         this._sjRoomId = roomId;
         this._sjWorkerId = null;
-        this._sjConfigContent = null;
+        this._sjConfigContents = [];
+        this._sjModelTypes = [];
+        this._sjConfigNames = [];
         this._sjLabelsPath = null;
         this._sjPathMappings = {};
         this._sjMissingVideos = [];
         this._sjModelType = null;
         this._sjMaxEpochs = null;
+        this._sjCurrentModelIndex = 0;
+        this._sjModelResults = [];  // Per-model snapshots: [{name, status, epoch, maxEpoch, loss, valLoss, ...}]
+        this._sjActiveTabIndex = 0;
         this._sjBrowseMode = null;
         this._sjResolvingVideoIndex = -1;
         this._sjPendingRequests = {};
         this._sjSessionId = Date.now();  // Guard against stale SSE events
         console.log('[submitJob] openSubmitJobModal: all wizard state reset for room=%s sessionId=%s', roomId, this._sjSessionId);
 
-        // Reset dropzone to default state (clears stale filename from previous session)
+        // Reset config list and dropzone UI
+        const configList = document.getElementById('sj-config-list');
+        if (configList) { configList.innerHTML = ''; configList.classList.add('hidden'); }
         const dropzone = document.getElementById('sj-config-dropzone');
         if (dropzone) {
+            dropzone.classList.remove('sj-dropzone-mini');
             dropzone.innerHTML = `
                 <i data-lucide="upload-cloud"></i>
                 <p>Drop your sleap-nn config YAML here, or <label for="sj-config-input" class="sj-browse-link">browse</label></p>
                 <input type="file" id="sj-config-input" accept=".yaml,.yml" class="hidden">
             `;
-            lucide.createIcons();
+            if (window.lucide) lucide.createIcons({ nodes: Array.from(dropzone.querySelectorAll('[data-lucide]')) });
             console.log('[submitJob] openSubmitJobModal: dropzone UI reset');
         }
 
@@ -2551,7 +2559,8 @@ class SleapRTCDashboard {
                 .on('status', (data) => this._sjHandleJobStatus(data))
                 .on('job_status', (data) => this._sjHandleJobStatus(data))
                 .on('job_progress', (data) => this._sjHandleJobProgress(data))
-                .on('epoch', (data) => this._sjHandleJobEpoch(data));
+                .on('epoch', (data) => this._sjHandleJobEpoch(data))
+                .on('model_type_switch', (data) => this._sjHandleModelTypeSwitch(data));
             job.sseConnection = this._sjJobSSE;
 
             // Append reconnect marker to log
@@ -2907,42 +2916,160 @@ class SleapRTCDashboard {
             const text = e.target.result;
             const errorEl = document.getElementById('sj-config-error');
             const next2 = document.getElementById('sj-next-2');
-            const dropzone = document.getElementById('sj-config-dropzone');
             try {
                 const fields = this.parseTrainingConfig(text);
-                this._sjConfigContent = text;
-                this._sjMaxEpochs = fields.max_epochs !== 'unknown' ? Number(fields.max_epochs) : null;
-                this._sjModelType = fields.model_type !== 'unknown' ? fields.model_type : null;
-                this._sjRenderHyperparams(fields);
+                const modelType = fields.model_type !== 'unknown' ? fields.model_type : 'unknown';
+                const maxEpochs = fields.max_epochs !== 'unknown' ? Number(fields.max_epochs) : null;
+
+                // Add to config arrays
+                this._sjConfigContents.push(text);
+                this._sjModelTypes.push(modelType);
+                this._sjConfigNames.push(file.name);
+
+                // Use first config's max_epochs for progress display (update if larger)
+                if (maxEpochs && (!this._sjMaxEpochs || maxEpochs > this._sjMaxEpochs)) {
+                    this._sjMaxEpochs = maxEpochs;
+                }
+                // Set model type to first config's type for backward compat
+                if (!this._sjModelType) {
+                    this._sjModelType = modelType;
+                }
+
                 errorEl.classList.add('hidden');
                 next2.disabled = false;
-                // Show filename and allow re-upload
-                if (dropzone) {
-                    dropzone.innerHTML = `
-                        <i data-lucide="file-check"></i>
-                        <p><strong>${file.name}</strong></p>
-                        <p style="font-size:0.8em;opacity:0.7">Drop a different file or <label for="sj-config-input" class="sj-browse-link">browse</label> to replace</p>
-                        <input type="file" id="sj-config-input" accept=".yaml,.yml" class="hidden">
-                    `;
-                    lucide.createIcons();
-                    // Re-wire the new file input
-                    const newInput = document.getElementById('sj-config-input');
-                    if (newInput) {
-                        newInput.addEventListener('change', () => {
-                            const f = newInput.files[0];
-                            if (f) this._sjHandleConfigFile(f);
-                        });
-                    }
-                }
+                console.log('[submitJob] config added: %s (model: %s, total: %d)',
+                    file.name, modelType, this._sjConfigContents.length);
+
+                this._sjRenderConfigList();
             } catch (err) {
-                this._sjConfigContent = null;
-                document.getElementById('sj-hyperparams').classList.add('hidden');
-                errorEl.textContent = `Invalid YAML: ${err.message}`;
+                errorEl.textContent = `Invalid YAML (${file.name}): ${err.message}`;
                 errorEl.classList.remove('hidden');
-                next2.disabled = true;
+                console.error('[submitJob] config parse error:', err);
             }
         };
         reader.readAsText(file);
+    }
+
+    _sjRemoveConfig(index) {
+        this._sjConfigContents.splice(index, 1);
+        this._sjModelTypes.splice(index, 1);
+        this._sjConfigNames.splice(index, 1);
+
+        // Update model type to first remaining config
+        this._sjModelType = this._sjModelTypes[0] || null;
+
+        // Recalculate max epochs from remaining configs
+        this._sjMaxEpochs = null;
+        this._sjConfigContents.forEach(text => {
+            try {
+                const fields = this.parseTrainingConfig(text);
+                const epochs = fields.max_epochs !== 'unknown' ? Number(fields.max_epochs) : null;
+                if (epochs && (!this._sjMaxEpochs || epochs > this._sjMaxEpochs)) {
+                    this._sjMaxEpochs = epochs;
+                }
+            } catch { /* ignore */ }
+        });
+
+        const next2 = document.getElementById('sj-next-2');
+        if (next2) next2.disabled = this._sjConfigContents.length === 0;
+
+        console.log('[submitJob] config removed at index %d, remaining: %d', index, this._sjConfigContents.length);
+        this._sjRenderConfigList();
+    }
+
+    _sjRenderConfigList() {
+        const container = document.getElementById('sj-config-list');
+        const dropzone = document.getElementById('sj-config-dropzone');
+        if (!container || !dropzone) return;
+
+        if (this._sjConfigContents.length === 0) {
+            // No configs — show full dropzone, hide config list
+            container.classList.add('hidden');
+            dropzone.classList.remove('sj-dropzone-mini');
+            dropzone.innerHTML = `
+                <i data-lucide="upload-cloud"></i>
+                <p>Drop your sleap-nn config YAML here, or <label for="sj-config-input" class="sj-browse-link">browse</label></p>
+                <input type="file" id="sj-config-input" accept=".yaml,.yml" class="hidden">
+            `;
+            this._sjInitDropzone();
+            if (window.lucide) lucide.createIcons({ nodes: Array.from(dropzone.querySelectorAll('[data-lucide]')) });
+            document.getElementById('sj-hyperparams')?.classList.add('hidden');
+            return;
+        }
+
+        // Render config cards with per-config hyperparams
+        let html = this._sjConfigContents.map((text, i) => {
+            let hyperparamRows = '';
+            try {
+                const fields = this.parseTrainingConfig(text);
+                const rows = [
+                    ['Batch size', fields.batch_size],
+                    ['Learning rate', fields.learning_rate],
+                    ['Max epochs', fields.max_epochs],
+                    ['Run name', fields.run_name],
+                    ['WandB project', fields.wandb_project],
+                    ['WandB entity', fields.wandb_entity],
+                ].filter(([, val]) => val !== 'unknown');
+                hyperparamRows = rows.map(([label, val]) =>
+                    `<div class="sj-hyperparam-item"><span class="sj-hyperparam-label">${label}</span><span class="sj-hyperparam-value">${val}</span></div>`
+                ).join('');
+            } catch { /* ignore */ }
+
+            return `<div class="sj-config-card">
+                <div class="sj-config-card-header">
+                    <div class="sj-config-card-info">
+                        <i data-lucide="file-check"></i>
+                        <div>
+                            <div class="sj-config-card-name">${this._escapeHtml(this._sjConfigNames[i])}</div>
+                            <div class="sj-config-card-detail">${this._escapeHtml(this._sjModelTypes[i])}</div>
+                        </div>
+                    </div>
+                    <button class="btn-icon sj-config-remove" onclick="app._sjRemoveConfig(${i})" title="Remove">
+                        <i data-lucide="x"></i>
+                    </button>
+                </div>
+                ${hyperparamRows ? `<div class="sj-config-card-params">${hyperparamRows}</div>` : ''}
+            </div>`;
+        }).join('');
+
+        container.innerHTML = html;
+        container.classList.remove('hidden');
+
+        // Show mini dropzone for adding more
+        dropzone.classList.add('sj-dropzone-mini');
+        dropzone.innerHTML = `
+            <label for="sj-config-input" style="display:flex;align-items:center;gap:8px;cursor:pointer;margin:0">
+                <i data-lucide="plus"></i>
+                <span>Add Another Config</span>
+            </label>
+            <input type="file" id="sj-config-input" accept=".yaml,.yml" class="hidden">
+        `;
+        // Re-wire event listeners for the new file input
+        const newInput = document.getElementById('sj-config-input');
+        if (newInput) {
+            newInput.addEventListener('change', () => {
+                const f = newInput.files[0];
+                if (f) this._sjHandleConfigFile(f);
+                newInput.value = '';  // Reset so same file can be re-added
+            });
+        }
+        // Re-wire drag and drop on dropzone
+        dropzone.ondragover = (e) => { e.preventDefault(); dropzone.classList.add('drag-over'); };
+        dropzone.ondragleave = () => dropzone.classList.remove('drag-over');
+        dropzone.ondrop = (e) => {
+            e.preventDefault();
+            dropzone.classList.remove('drag-over');
+            const file = e.dataTransfer.files[0];
+            if (file) this._sjHandleConfigFile(file);
+        };
+
+        // Hide shared hyperparams panel — each card shows its own
+        document.getElementById('sj-hyperparams')?.classList.add('hidden');
+
+        if (window.lucide) {
+            const step2 = document.getElementById('sj-step2');
+            if (step2) lucide.createIcons({ nodes: Array.from(step2.querySelectorAll('[data-lucide]')) });
+        }
     }
 
     _sjInitDropzone() {
@@ -3358,11 +3485,13 @@ class SleapRTCDashboard {
         try {
             const config = {
                 type: 'train',
-                config_content: this._sjConfigContent,
+                config_contents: this._sjConfigContents,
                 labels_path: this._sjLabelsPath,
                 path_mappings: this._sjPathMappings,
-                model_types: [],
+                model_types: this._sjModelTypes,
             };
+            console.log('[submitJob] submitting %d config(s): %s',
+                this._sjConfigContents.length, this._sjModelTypes.join(', '));
 
             const result = await this.apiJobSubmit(
                 this._sjRoomId, this._sjWorkerId, config
@@ -3402,12 +3531,29 @@ class SleapRTCDashboard {
                 .on('status', (data) => this._sjHandleJobStatus(data))
                 .on('job_status', (data) => this._sjHandleJobStatus(data))
                 .on('job_progress', (data) => this._sjHandleJobProgress(data))
-                .on('epoch', (data) => this._sjHandleJobEpoch(data));
+                .on('epoch', (data) => this._sjHandleJobEpoch(data))
+                .on('model_type_switch', (data) => this._sjHandleModelTypeSwitch(data));
 
             // Optimistically mark worker as busy in local cache
             if (worker?.properties) {
                 worker.properties.status = 'busy';
             }
+
+            // Initialize per-model results tracking
+            this._sjModelResults = this._sjModelTypes.map((name, i) => ({
+                name,
+                status: i === 0 ? 'active' : 'queued',
+                epoch: 0,
+                maxEpoch: null,
+                loss: null,
+                valLoss: null,
+                trainTime: null,
+                lr: null,
+            }));
+            // Add inference step
+            this._sjModelResults.push({ name: 'inference', status: 'queued' });
+            this._sjActiveTabIndex = 0;
+            this._sjCurrentModelIndex = 0;
 
             // Switch to status view and reset progress panel
             this.sjGoToStep('status');
@@ -3415,7 +3561,8 @@ class SleapRTCDashboard {
             this._sjShowCancelButton();
             const label = document.getElementById('sj-status-label');
             if (label) label.textContent = 'Submitted…';
-            console.log('[submitJob] job submitted jobId=%s, cancel button shown', jobId);
+            console.log('[submitJob] job submitted jobId=%s, %d models, cancel button shown',
+                jobId, this._sjModelTypes.length);
 
         } catch (err) {
             const errEl = document.getElementById('sj-browser-error');
@@ -3428,11 +3575,22 @@ class SleapRTCDashboard {
     }
 
     _sjHandleJobStatus(data) {
+        // Log ALL incoming data for debugging
+        console.log('[submitJob] _sjHandleJobStatus RAW:', JSON.stringify(data));
+
+        // Handle model type switch (comes through job_status SSE with event field)
+        if (data.event === 'model_type_switch' && data.model_type) {
+            console.log('[submitJob] → DETECTED model_type_switch: %s', data.model_type);
+            this._sjHandleModelTypeSwitch(data);
+            return;
+        }
+
         const label = document.getElementById('sj-status-label');
         const status = data.status;
         const stage = data.stage;
         const modelLabel = this._sjModelType || 'model';
-        console.log('[submitJob] _sjHandleJobStatus: status=%s stage=%s jobId=%s', status, stage, this._currentJobId);
+        console.log('[submitJob] _sjHandleJobStatus: status=%s stage=%s modelType=%s modelIndex=%d',
+            status, stage, this._sjModelType, this._sjCurrentModelIndex);
 
         // Update activeJobs entry
         const job = this._currentJobId ? this.activeJobs.get(this._currentJobId) : null;
@@ -3502,12 +3660,87 @@ class SleapRTCDashboard {
         }
     }
 
+    _sjHandleModelTypeSwitch(data) {
+        const newModelType = data.model_type;
+        if (!newModelType) return;
+
+        const prevModelType = this._sjModelType;
+        console.log('[submitJob] ★ MODEL TYPE SWITCH: %s → %s (index %d → %d)',
+            prevModelType, newModelType, this._sjCurrentModelIndex, this._sjCurrentModelIndex + 1);
+
+        this._sjModelType = newModelType;
+        this._sjCurrentModelIndex = (this._sjCurrentModelIndex || 0) + 1;
+
+        // Update queue label
+        const totalModels = this._sjModelTypes?.length || 1;
+        const queue = document.getElementById('sj-job-queue');
+        if (queue) {
+            queue.textContent = `Model ${this._sjCurrentModelIndex + 1} / ${totalModels}`;
+            queue.classList.remove('hidden');
+        }
+
+        // Reset epoch counter for new model
+        const epochCur = document.getElementById('sj-epoch-current');
+        if (epochCur) epochCur.textContent = '0';
+
+        // Update epoch total from new model's config
+        const epochTotal = document.getElementById('sj-epoch-total');
+        if (epochTotal && this._sjConfigContents?.[this._sjCurrentModelIndex]) {
+            try {
+                const fields = this.parseTrainingConfig(this._sjConfigContents[this._sjCurrentModelIndex]);
+                const maxEpochs = fields.max_epochs !== 'unknown' ? Number(fields.max_epochs) : null;
+                this._sjMaxEpochs = maxEpochs;
+                epochTotal.textContent = maxEpochs ? ` / ${maxEpochs}` : '';
+            } catch { /* ignore */ }
+        }
+
+        // Update status label — show "Starting {next model}" briefly
+        const label = document.getElementById('sj-status-label');
+        if (label) {
+            label.className = 'sj-status-label';
+            label.textContent = `Starting ${newModelType}…`;
+        }
+        // Reset spinner to loading (remove any checkmark from previous model)
+        const spinner = document.getElementById('sj-status-spinner');
+        if (spinner) {
+            spinner.className = 'sj-status-spinner';
+            spinner.innerHTML = '<i data-lucide="loader-2"></i>';
+        }
+
+        // Reset metrics for new model
+        ['sj-metric-train-loss', 'sj-metric-val-loss', 'sj-metric-train-time', 'sj-metric-lr'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.textContent = '—';
+        });
+
+        // Re-enable Stop Early and Cancel buttons for the new model
+        this._sjShowCancelButton();
+
+        // Update activeJobs entry
+        const job = this._currentJobId ? this.activeJobs.get(this._currentJobId) : null;
+        if (job) {
+            job.modelType = newModelType;
+            job.lastEpoch = 0;
+            job.lastLoss = null;
+            this._persistActiveJobs();
+        }
+
+        this._sjAppendLog(`— ${prevModelType} stopped, starting ${newModelType} —`, 'log-info');
+
+        // Re-init icons
+        const statusView = document.getElementById('sj-status');
+        if (window.lucide && statusView) {
+            lucide.createIcons({ nodes: Array.from(statusView.querySelectorAll('[data-lucide]')) });
+        }
+    }
+
     _sjHandleJobProgress(data) {
         const event = data.event;
         const what = data.what ? `[${data.what}] ` : '';
 
         if (event === 'train_begin') {
-            this._sjAppendLog(`${what}Training started`);
+            const modelLabel = this._sjModelType || 'model';
+            this._sjAppendLog(`${what}Training started (${modelLabel})`);
             if (data.wandb_url) {
                 const link = document.getElementById('sj-wandb-link');
                 if (link) {
@@ -3533,7 +3766,8 @@ class SleapRTCDashboard {
             this._sjUpdateEpoch(epoch);
             this._sjUpdateMetrics(logs);
         } else if (event === 'train_end') {
-            this._sjAppendLog(`${what}Training complete`, 'log-info');
+            const modelLabel = this._sjModelType || 'model';
+            this._sjAppendLog(`${what}Training complete (${modelLabel})`, 'log-info');
         }
 
         // Update activeJobs entry with log line
@@ -3570,10 +3804,12 @@ class SleapRTCDashboard {
         if (label) {
             label.className = 'sj-status-label';
         }
-        // Show job queue tracker
+        // Show job queue tracker with model count
         const queue = document.getElementById('sj-job-queue');
         if (queue) {
-            queue.textContent = 'Job 1 / 1';
+            const totalModels = this._sjModelTypes?.length || 1;
+            this._sjCurrentModelIndex = 0;
+            queue.textContent = totalModels > 1 ? `Model 1 / ${totalModels}` : 'Job 1 / 1';
             queue.classList.remove('hidden');
         }
         // Hide epoch section and metrics until training starts
@@ -3651,6 +3887,8 @@ class SleapRTCDashboard {
     }
 
     _sjShowCloseButton() {
+        const stopBtn = document.getElementById('sj-stop-btn');
+        if (stopBtn) stopBtn.classList.add('hidden');
         const cancelBtn = document.getElementById('sj-cancel-btn');
         if (cancelBtn) cancelBtn.classList.add('hidden');
         const closeBtn = document.getElementById('sj-close-btn');
@@ -3658,6 +3896,12 @@ class SleapRTCDashboard {
     }
 
     _sjShowCancelButton() {
+        const stopBtn = document.getElementById('sj-stop-btn');
+        if (stopBtn) {
+            stopBtn.classList.remove('hidden');
+            stopBtn.disabled = false;
+            stopBtn.textContent = 'Stop Early';
+        }
         const cancelBtn = document.getElementById('sj-cancel-btn');
         if (cancelBtn) {
             cancelBtn.classList.remove('hidden');
@@ -3682,8 +3926,11 @@ class SleapRTCDashboard {
             btn.classList.remove('btn-confirming');
             console.log('[submitJob] sjCancelJob: sending cancel for jobId=%s roomId=%s workerId=%s',
                 this._currentJobId, this._sjRoomId, this._sjWorkerId);
-            this.apiJobCancel(this._currentJobId, this._sjRoomId, this._sjWorkerId)
-                .then(() => {
+            this.apiWorkerMessage(this._sjRoomId, this._sjWorkerId, {
+                type: 'job_cancel',
+                job_id: this._currentJobId,
+                mode: 'cancel',
+            }).then(() => {
                     console.log('[submitJob] sjCancelJob: cancel request sent successfully');
                 })
                 .catch(err => {
@@ -3706,6 +3953,28 @@ class SleapRTCDashboard {
                 }
             }, 3000);
         }
+    }
+
+    sjStopEarly() {
+        const btn = document.getElementById('sj-stop-btn');
+        if (!btn || btn.disabled) return;  // Idempotent — ignore if already stopping
+
+        btn.textContent = 'Stopping...';
+        btn.disabled = true;
+        console.log('[submitJob] sjStopEarly: sending stop for jobId=%s roomId=%s workerId=%s',
+            this._currentJobId, this._sjRoomId, this._sjWorkerId);
+        this.apiWorkerMessage(this._sjRoomId, this._sjWorkerId, {
+            type: 'job_cancel',
+            job_id: this._currentJobId,
+            mode: 'stop',
+        }).then(() => {
+                console.log('[submitJob] sjStopEarly: stop request sent successfully');
+            })
+            .catch(err => {
+                console.error('[submitJob] sjStopEarly: stop request failed:', err);
+                btn.textContent = 'Stop Failed';
+                btn.disabled = false;
+            });
     }
 
     sjGoToStep(step) {

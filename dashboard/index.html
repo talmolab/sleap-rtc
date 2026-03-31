@@ -1497,6 +1497,7 @@ auto_select = true</code></pre>
 
             <!-- Step 2: Configure Job (config YAML upload) -->
             <div id="sj-step2" class="sj-view hidden">
+                <div id="sj-config-list" class="sj-config-list hidden"></div>
                 <div id="sj-config-dropzone" class="sj-dropzone">
                     <i data-lucide="upload-cloud"></i>
                     <p>Drop your sleap-nn config YAML here, or <label for="sj-config-input" class="sj-browse-link">browse</label></p>
@@ -1591,6 +1592,7 @@ auto_select = true</code></pre>
                     </div>
                 </div>
                 <div class="form-actions" id="sj-status-actions">
+                    <button class="btn btn-warning" id="sj-stop-btn" onclick="app.sjStopEarly()">Stop Early</button>
                     <button class="btn btn-danger" id="sj-cancel-btn" onclick="app.sjCancelJob()">Cancel Training</button>
                     <button class="btn btn-secondary" id="sj-close-btn" onclick="app.closeSubmitJobModal()">Close</button>
                 </div>

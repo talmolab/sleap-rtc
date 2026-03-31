@@ -407,6 +407,16 @@ body::before {
     background: rgba(239, 68, 68, 0.2);
 }
 
+.btn-warning {
+    background: rgba(234, 179, 8, 0.1);
+    color: var(--status-warning, #eab308);
+    border: 1px solid rgba(234, 179, 8, 0.2);
+}
+
+.btn-warning:hover {
+    background: rgba(234, 179, 8, 0.2);
+}
+
 .btn-danger.btn-confirming {
     background: rgba(239, 68, 68, 0.25);
     border-color: rgba(239, 68, 68, 0.5);
@@ -2040,6 +2050,174 @@ body::before {
     color: var(--accent-secondary);
     cursor: pointer;
     text-decoration: underline;
+}
+
+/* Multi-config list */
+.sj-config-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.sj-config-card {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius);
+    overflow: hidden;
+}
+
+.sj-config-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 12px;
+}
+
+.sj-config-card-info {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+}
+
+.sj-config-card-info i {
+    width: 18px;
+    height: 18px;
+    color: var(--status-success);
+    flex-shrink: 0;
+}
+
+.sj-config-card-name {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-primary);
+}
+
+.sj-config-card-detail {
+    font-size: 11px;
+    color: var(--text-muted);
+}
+
+.sj-config-remove {
+    width: 24px;
+    height: 24px;
+    flex-shrink: 0;
+    color: var(--text-muted);
+}
+
+.sj-config-remove:hover {
+    color: var(--status-error);
+}
+
+.sj-config-card-params {
+    border-top: 1px solid var(--border-default);
+    padding: 8px 12px;
+    background: var(--bg-primary);
+}
+
+.sj-config-card-params .sj-hyperparam-item {
+    padding: 2px 0;
+}
+
+/* Model tabs in training status view */
+.sj-model-tabs {
+    display: flex;
+    gap: 4px;
+    padding: 8px 16px;
+    border-bottom: 1px solid var(--border-default);
+    background: var(--bg-elevated);
+}
+
+.sj-model-tab {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 12px;
+    font-size: 11px;
+    font-weight: 500;
+    border-radius: 4px;
+    cursor: pointer;
+    color: var(--text-muted);
+    background: transparent;
+    border: 1px solid transparent;
+    transition: all 0.15s;
+}
+
+.sj-model-tab:hover {
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.sj-model-tab.active {
+    background: rgba(249, 115, 22, 0.08);
+    border-color: rgba(249, 115, 22, 0.2);
+    color: var(--text-primary);
+}
+
+.sj-model-tab .sj-tab-dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 7px;
+    flex-shrink: 0;
+    line-height: 1;
+}
+
+.sj-tab-dot.queued {
+    border: 2px solid var(--border-default);
+    background: transparent;
+}
+
+.sj-tab-dot.active {
+    border: 2px solid var(--accent-primary);
+    color: var(--accent-primary);
+    animation: tab-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes tab-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+.sj-tab-dot.complete {
+    background: var(--status-success);
+    color: #000;
+    border: none;
+}
+
+.sj-tab-dot.stopped {
+    background: var(--status-warning, #eab308);
+    color: #000;
+    border: none;
+}
+
+.sj-tab-dot.failed {
+    background: var(--status-error);
+    color: #fff;
+    border: none;
+}
+
+/* Mini dropzone for adding more configs */
+.sj-dropzone.sj-dropzone-mini {
+    padding: 14px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    border-style: dashed;
+}
+
+.sj-dropzone.sj-dropzone-mini i {
+    width: 16px;
+    height: 16px;
+    margin-bottom: 0;
+}
+
+.sj-dropzone.sj-dropzone-mini span {
+    font-size: 13px;
 }
 
 /* Hyperparameter display */

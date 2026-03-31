@@ -226,9 +226,13 @@ class JobExecutor:
             cmd = payload.get("command")
             if cmd == "stop":
                 self._stop_requested = True
+                logging.info(f"[ZMQ] _stop_requested set to True (command=stop)")
             elif cmd == "cancel":
                 self._stop_requested = True
                 self._cancel_requested = True
+                logging.info(
+                    f"[ZMQ] _stop_requested + _cancel_requested set to True (command=cancel)"
+                )
         except (json.JSONDecodeError, AttributeError):
             pass
 
@@ -1286,6 +1290,11 @@ class JobExecutor:
             # - SIGTERM: process killed by signal (legacy/fallback)
             # - ZMQ stop: _stop_requested flag set (user chose "Stop Early")
             # - SIGINT: process group killed by signal (legacy/fallback)
+            logging.info(
+                f"[JOB {job_id}] Exit analysis: returncode={process.returncode} "
+                f"_stop_requested={self._stop_requested} "
+                f"_cancel_requested={self._cancel_requested}"
+            )
             cancelled = self._cancel_requested or (
                 sys.platform != "win32" and process.returncode == -signal.SIGTERM
             )
@@ -1294,8 +1303,31 @@ class JobExecutor:
                 or (sys.platform != "win32" and process.returncode == -signal.SIGINT)
                 or (self._stop_requested and not cancelled and process.returncode != 0)
             )
+            logging.info(
+                f"[JOB {job_id}] Result: cancelled={cancelled} stopped_early={stopped_early}"
+            )
 
-            if process.returncode == 0 or stopped_early:
+            if cancelled:
+                # Job was cancelled by user — report as failed/cancelled
+                import json
+
+                error_data = {
+                    "job_id": job_id,
+                    "job_type": job_type,
+                    "duration_seconds": duration_seconds,
+                    "message": "Job cancelled by user",
+                }
+                if channel.readyState == "open":
+                    channel.send(
+                        f"{MSG_JOB_FAILED}{MSG_SEPARATOR}{json.dumps(error_data)}"
+                    )
+                logging.info(f"[JOB {job_id}] Job cancelled by user")
+                return {
+                    "success": False,
+                    "stopped_early": False,
+                    "cancelled": True,
+                }
+            elif process.returncode == 0 or stopped_early:
                 # Job completed successfully (or stopped early with checkpoint)
                 import json
 
