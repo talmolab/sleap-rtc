@@ -693,6 +693,7 @@ class MeshCoordinator:
         """
         import jsonpickle
 
+        logger.info(f"[RELAY] _handle_job_cancel raw data: {data}")
         job_id = data.get("job_id", "unknown")
         mode = data.get("mode", "cancel")  # "cancel" or "stop"
         logger.info(f"[RELAY] Job {mode} received for {job_id}")
