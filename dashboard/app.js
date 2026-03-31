@@ -3667,6 +3667,20 @@ class SleapRTCDashboard {
             if (el) el.textContent = '—';
         });
 
+        // Re-enable Stop Early and Cancel buttons for the new model
+        this._sjShowCancelButton();
+
+        // Reset status spinner back to loading (in case previous model showed checkmark)
+        const spinner = document.getElementById('sj-status-spinner');
+        if (spinner) {
+            spinner.className = 'sj-status-spinner';
+            spinner.innerHTML = '<i data-lucide="loader-2"></i>';
+            const statusView = document.getElementById('sj-status');
+            if (window.lucide && statusView) {
+                lucide.createIcons({ nodes: Array.from(statusView.querySelectorAll('[data-lucide]')) });
+            }
+        }
+
         // Update activeJobs entry
         const job = this._currentJobId ? this.activeJobs.get(this._currentJobId) : null;
         if (job) {
