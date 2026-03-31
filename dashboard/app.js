@@ -3869,8 +3869,11 @@ class SleapRTCDashboard {
             btn.classList.remove('btn-confirming');
             console.log('[submitJob] sjCancelJob: sending cancel for jobId=%s roomId=%s workerId=%s',
                 this._currentJobId, this._sjRoomId, this._sjWorkerId);
-            this.apiJobCancel(this._currentJobId, this._sjRoomId, this._sjWorkerId)
-                .then(() => {
+            this.apiWorkerMessage(this._sjRoomId, this._sjWorkerId, {
+                type: 'job_cancel',
+                job_id: this._currentJobId,
+                mode: 'cancel',
+            }).then(() => {
                     console.log('[submitJob] sjCancelJob: cancel request sent successfully');
                 })
                 .catch(err => {
@@ -3903,8 +3906,11 @@ class SleapRTCDashboard {
         btn.disabled = true;
         console.log('[submitJob] sjStopEarly: sending stop for jobId=%s roomId=%s workerId=%s',
             this._currentJobId, this._sjRoomId, this._sjWorkerId);
-        this.apiJobCancel(this._currentJobId, this._sjRoomId, this._sjWorkerId, 'stop')
-            .then(() => {
+        this.apiWorkerMessage(this._sjRoomId, this._sjWorkerId, {
+            type: 'job_cancel',
+            job_id: this._currentJobId,
+            mode: 'stop',
+        }).then(() => {
                 console.log('[submitJob] sjStopEarly: stop request sent successfully');
             })
             .catch(err => {
