@@ -3612,37 +3612,17 @@ class SleapRTCDashboard {
             if (label) label.textContent = 'Complete';
             this._sjUpdateStatusIcon('complete');
             this._sjShowCloseButton();
-            // Mark all models and inference as complete
-            this._sjUpdateCurrentModelResult();
-            if (this._sjModelResults) {
-                this._sjModelResults.forEach(m => {
-                    if (m.status === 'active' || m.status === 'queued') m.status = 'complete';
-                });
-                // Auto-select inference tab (last tab)
-                this._sjActiveTabIndex = this._sjModelResults.length - 1;
-                this._sjRenderModelTabs();
-            }
         } else if (status === 'failed') {
             const msg = data.message || data.error || 'Job failed';
             console.log('[submitJob] job failed: %s', msg);
             if (label) label.textContent = `Failed: ${msg}`;
             this._sjUpdateStatusIcon('failed');
             this._sjShowCloseButton();
-            // Mark current model as failed
-            this._sjUpdateCurrentModelResult();
-            const cur = this._sjModelResults?.[this._sjCurrentModelIndex];
-            if (cur) cur.status = 'failed';
-            this._sjRenderModelTabs();
         } else if (status === 'cancelled') {
             console.log('[submitJob] job cancelled');
             if (label) label.textContent = 'Cancelled';
             this._sjUpdateStatusIcon('cancelled');
             this._sjShowCloseButton();
-            // Mark current model as failed (cancelled)
-            this._sjUpdateCurrentModelResult();
-            const cur = this._sjModelResults?.[this._sjCurrentModelIndex];
-            if (cur) cur.status = 'failed';
-            this._sjRenderModelTabs();
         }
     }
 
@@ -3840,18 +3820,36 @@ class SleapRTCDashboard {
         // Update queue label
         const totalModels = this._sjModelTypes?.length || 1;
         const queue = document.getElementById('sj-job-queue');
-        if (queue && totalModels > 1) {
+        if (queue) {
             queue.textContent = `Model ${this._sjCurrentModelIndex + 1} / ${totalModels}`;
+            queue.classList.remove('hidden');
         }
 
         // Reset epoch counter for new model
-        const cur = document.getElementById('sj-epoch-current');
-        if (cur) cur.textContent = '0';
+        const epochCur = document.getElementById('sj-epoch-current');
+        if (epochCur) epochCur.textContent = '0';
 
-        // Update status label
+        // Update epoch total from new model's config
+        const epochTotal = document.getElementById('sj-epoch-total');
+        if (epochTotal && this._sjConfigContents?.[this._sjCurrentModelIndex]) {
+            try {
+                const fields = this.parseTrainingConfig(this._sjConfigContents[this._sjCurrentModelIndex]);
+                const maxEpochs = fields.max_epochs !== 'unknown' ? Number(fields.max_epochs) : null;
+                this._sjMaxEpochs = maxEpochs;
+                epochTotal.textContent = maxEpochs ? ` / ${maxEpochs}` : '';
+            } catch { /* ignore */ }
+        }
+
+        // Update status label and spinner
         const label = document.getElementById('sj-status-label');
         if (label) {
+            label.className = 'sj-status-label';
             label.textContent = `Training ${newModelType}…`;
+        }
+        const spinner = document.getElementById('sj-status-spinner');
+        if (spinner) {
+            spinner.className = 'sj-status-spinner';
+            spinner.innerHTML = '<i data-lucide="loader-2"></i>';
         }
 
         // Reset metrics for new model
@@ -3862,17 +3860,6 @@ class SleapRTCDashboard {
 
         // Re-enable Stop Early and Cancel buttons for the new model
         this._sjShowCancelButton();
-
-        // Reset status spinner back to loading (in case previous model showed checkmark)
-        const spinner = document.getElementById('sj-status-spinner');
-        if (spinner) {
-            spinner.className = 'sj-status-spinner';
-            spinner.innerHTML = '<i data-lucide="loader-2"></i>';
-            const statusView = document.getElementById('sj-status');
-            if (window.lucide && statusView) {
-                lucide.createIcons({ nodes: Array.from(statusView.querySelectorAll('[data-lucide]')) });
-            }
-        }
 
         // Update activeJobs entry
         const job = this._currentJobId ? this.activeJobs.get(this._currentJobId) : null;
@@ -3885,8 +3872,11 @@ class SleapRTCDashboard {
 
         this._sjAppendLog(`— Switching to ${newModelType} —`, 'log-info');
 
-        // Re-render tabs to reflect status changes
-        this._sjRenderModelTabs();
+        // Re-init icons
+        const statusView = document.getElementById('sj-status');
+        if (window.lucide && statusView) {
+            lucide.createIcons({ nodes: Array.from(statusView.querySelectorAll('[data-lucide]')) });
+        }
     }
 
     _sjHandleJobProgress(data) {
@@ -3975,17 +3965,13 @@ class SleapRTCDashboard {
         if (label) {
             label.className = 'sj-status-label';
         }
-        // Show job queue tracker (hidden when model tabs are visible)
+        // Show job queue tracker with model count
         const queue = document.getElementById('sj-job-queue');
         if (queue) {
             const totalModels = this._sjModelTypes?.length || 1;
-            if (totalModels > 1) {
-                // Multi-model: tabs handle the display, hide queue label
-                queue.classList.add('hidden');
-            } else {
-                queue.textContent = 'Job 1 / 1';
-                queue.classList.remove('hidden');
-            }
+            this._sjCurrentModelIndex = 0;
+            queue.textContent = totalModels > 1 ? `Model 1 / ${totalModels}` : 'Job 1 / 1';
+            queue.classList.remove('hidden');
         }
         // Hide epoch section and metrics until training starts
         document.getElementById('sj-epoch-section')?.classList.add('hidden');
