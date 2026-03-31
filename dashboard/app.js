@@ -3575,8 +3575,12 @@ class SleapRTCDashboard {
     }
 
     _sjHandleJobStatus(data) {
+        // Log ALL incoming data for debugging
+        console.log('[submitJob] _sjHandleJobStatus RAW:', JSON.stringify(data));
+
         // Handle model type switch (comes through job_status SSE with event field)
         if (data.event === 'model_type_switch' && data.model_type) {
+            console.log('[submitJob] → DETECTED model_type_switch: %s', data.model_type);
             this._sjHandleModelTypeSwitch(data);
             return;
         }
@@ -3585,7 +3589,8 @@ class SleapRTCDashboard {
         const status = data.status;
         const stage = data.stage;
         const modelLabel = this._sjModelType || 'model';
-        console.log('[submitJob] _sjHandleJobStatus: status=%s stage=%s event=%s jobId=%s', status, stage, data.event, this._currentJobId);
+        console.log('[submitJob] _sjHandleJobStatus: status=%s stage=%s modelType=%s modelIndex=%d',
+            status, stage, this._sjModelType, this._sjCurrentModelIndex);
 
         // Update activeJobs entry
         const job = this._currentJobId ? this.activeJobs.get(this._currentJobId) : null;
@@ -3660,7 +3665,8 @@ class SleapRTCDashboard {
         if (!newModelType) return;
 
         const prevModelType = this._sjModelType;
-        console.log('[submitJob] model type switch: %s → %s', prevModelType, newModelType);
+        console.log('[submitJob] ★ MODEL TYPE SWITCH: %s → %s (index %d → %d)',
+            prevModelType, newModelType, this._sjCurrentModelIndex, this._sjCurrentModelIndex + 1);
 
         this._sjModelType = newModelType;
         this._sjCurrentModelIndex = (this._sjCurrentModelIndex || 0) + 1;

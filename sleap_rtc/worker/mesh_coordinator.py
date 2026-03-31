@@ -583,6 +583,11 @@ class MeshCoordinator:
                         "event": "model_type_switch",
                         "model_type": model_type,
                     }
+                    import logging as _logging
+
+                    _logging.info(
+                        f"[RELAY] Forwarding MODEL_TYPE switch to: {model_type}"
+                    )
                 elif message.startswith("TRAIN_JOB_START::"):
                     relay_msg = {**_base, "status": "running", "message": message}
                 elif message == "TRAINING_JOBS_DONE":
