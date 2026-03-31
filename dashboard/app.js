@@ -715,10 +715,10 @@ class SleapRTCDashboard {
     /**
      * Cancel a running training job.
      */
-    async apiJobCancel(jobId, roomId, peerId) {
+    async apiJobCancel(jobId, roomId, peerId, mode = 'cancel') {
         return this.apiRequest(`/api/jobs/${jobId}/cancel`, {
             method: 'POST',
-            body: JSON.stringify({ room_id: roomId, peer_id: peerId }),
+            body: JSON.stringify({ room_id: roomId, peer_id: peerId, mode }),
         });
     }
 
@@ -3556,11 +3556,17 @@ class SleapRTCDashboard {
     }
 
     _sjHandleJobStatus(data) {
+        // Handle model type switch (comes through job_status SSE with event field)
+        if (data.event === 'model_type_switch' && data.model_type) {
+            this._sjHandleModelTypeSwitch(data);
+            return;
+        }
+
         const label = document.getElementById('sj-status-label');
         const status = data.status;
         const stage = data.stage;
         const modelLabel = this._sjModelType || 'model';
-        console.log('[submitJob] _sjHandleJobStatus: status=%s stage=%s jobId=%s', status, stage, this._currentJobId);
+        console.log('[submitJob] _sjHandleJobStatus: status=%s stage=%s event=%s jobId=%s', status, stage, data.event, this._currentJobId);
 
         // Update activeJobs entry
         const job = this._currentJobId ? this.activeJobs.get(this._currentJobId) : null;
@@ -3824,6 +3830,8 @@ class SleapRTCDashboard {
     }
 
     _sjShowCloseButton() {
+        const stopBtn = document.getElementById('sj-stop-btn');
+        if (stopBtn) stopBtn.classList.add('hidden');
         const cancelBtn = document.getElementById('sj-cancel-btn');
         if (cancelBtn) cancelBtn.classList.add('hidden');
         const closeBtn = document.getElementById('sj-close-btn');
@@ -3831,6 +3839,12 @@ class SleapRTCDashboard {
     }
 
     _sjShowCancelButton() {
+        const stopBtn = document.getElementById('sj-stop-btn');
+        if (stopBtn) {
+            stopBtn.classList.remove('hidden');
+            stopBtn.disabled = false;
+            stopBtn.textContent = 'Stop Early';
+        }
         const cancelBtn = document.getElementById('sj-cancel-btn');
         if (cancelBtn) {
             cancelBtn.classList.remove('hidden');
@@ -3879,6 +3893,25 @@ class SleapRTCDashboard {
                 }
             }, 3000);
         }
+    }
+
+    sjStopEarly() {
+        const btn = document.getElementById('sj-stop-btn');
+        if (!btn) return;
+
+        btn.textContent = 'Stopping...';
+        btn.disabled = true;
+        console.log('[submitJob] sjStopEarly: sending stop for jobId=%s roomId=%s workerId=%s',
+            this._currentJobId, this._sjRoomId, this._sjWorkerId);
+        this.apiJobCancel(this._currentJobId, this._sjRoomId, this._sjWorkerId, 'stop')
+            .then(() => {
+                console.log('[submitJob] sjStopEarly: stop request sent successfully');
+            })
+            .catch(err => {
+                console.error('[submitJob] sjStopEarly: stop request failed:', err);
+                btn.textContent = 'Stop Failed';
+                btn.disabled = false;
+            });
     }
 
     sjGoToStep(step) {

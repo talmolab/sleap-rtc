@@ -675,9 +675,12 @@ class MeshCoordinator:
     def _handle_job_cancel(self, data: Dict[str, Any]):
         """Handle job_cancel forwarded from dashboard via signaling server.
 
-        Sends a ZMQ cancel command to the training process, matching the
-        approach used by the SLEAP GUI and sleap-app. sleap-nn's
-        TrainingControllerZMQ callback sets trainer.should_stop=True and
+        Supports two modes via the ``mode`` field:
+        - ``"cancel"`` (default): Stop training AND skip inference/remaining models.
+        - ``"stop"``: Stop current model early but continue to next model and inference.
+
+        Both modes send ZMQ ``{"command": "stop"}`` to sleap-nn's
+        TrainingControllerZMQ callback, which sets trainer.should_stop=True and
         coordinates DDP shutdown via reduce_boolean_decision.
 
         Falls back to cancel_running_job() (SIGTERM→SIGKILL) if no
@@ -686,20 +689,25 @@ class MeshCoordinator:
         import jsonpickle
 
         job_id = data.get("job_id", "unknown")
-        logger.info(f"[RELAY] Job cancel received for {job_id}")
+        mode = data.get("mode", "cancel")  # "cancel" or "stop"
+        logger.info(f"[RELAY] Job {mode} received for {job_id}")
 
         if not self.worker.job_executor:
-            logger.warning(f"[RELAY] No job executor available to cancel job {job_id}")
+            logger.warning(f"[RELAY] No job executor available to {mode} job {job_id}")
             return
 
         if self.worker.job_executor._progress_reporter is not None:
-            # Send ZMQ "stop" to sleap-nn (it only handles "stop", not "cancel")
-            # but set _cancel_requested flag so the pipeline skips inference.
-            # This gives us: training stops gracefully + inference is skipped.
+            # Send ZMQ "stop" to sleap-nn (it only handles "stop")
             stop_msg = jsonpickle.encode({"command": "stop"})
             self.worker.job_executor.send_control_message(stop_msg)
-            self.worker.job_executor._cancel_requested = True
-            logger.info(f"[RELAY] ZMQ stop + cancel flag set for job {job_id}")
+
+            if mode == "cancel":
+                # Cancel: skip remaining models + inference
+                self.worker.job_executor._cancel_requested = True
+                logger.info(f"[RELAY] ZMQ stop + cancel flag set for job {job_id}")
+            else:
+                # Stop Early: continue to next model + inference
+                logger.info(f"[RELAY] ZMQ stop (early) sent for job {job_id}")
         else:
             # No ZMQ reporter (inference job or reporter not started yet) — signal fallback
             self.worker.job_executor.cancel_running_job()
