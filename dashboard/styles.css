@@ -407,6 +407,16 @@ body::before {
     background: rgba(239, 68, 68, 0.2);
 }
 
+.btn-warning {
+    background: rgba(234, 179, 8, 0.1);
+    color: var(--status-warning, #eab308);
+    border: 1px solid rgba(234, 179, 8, 0.2);
+}
+
+.btn-warning:hover {
+    background: rgba(234, 179, 8, 0.2);
+}
+
 .btn-danger.btn-confirming {
     background: rgba(239, 68, 68, 0.25);
     border-color: rgba(239, 68, 68, 0.5);
