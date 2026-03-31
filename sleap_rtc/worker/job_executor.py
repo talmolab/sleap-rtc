@@ -1307,7 +1307,27 @@ class JobExecutor:
                 f"[JOB {job_id}] Result: cancelled={cancelled} stopped_early={stopped_early}"
             )
 
-            if process.returncode == 0 or stopped_early:
+            if cancelled:
+                # Job was cancelled by user — report as failed/cancelled
+                import json
+
+                error_data = {
+                    "job_id": job_id,
+                    "job_type": job_type,
+                    "duration_seconds": duration_seconds,
+                    "message": "Job cancelled by user",
+                }
+                if channel.readyState == "open":
+                    channel.send(
+                        f"{MSG_JOB_FAILED}{MSG_SEPARATOR}{json.dumps(error_data)}"
+                    )
+                logging.info(f"[JOB {job_id}] Job cancelled by user")
+                return {
+                    "success": False,
+                    "stopped_early": False,
+                    "cancelled": True,
+                }
+            elif process.returncode == 0 or stopped_early:
                 # Job completed successfully (or stopped early with checkpoint)
                 import json
 
