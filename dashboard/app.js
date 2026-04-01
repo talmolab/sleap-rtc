@@ -2366,9 +2366,13 @@ class SleapRTCDashboard {
 
         this._sjRoomId = roomId;
         this._sjWorkerId = null;
+        this._sjJobType = 'train';  // 'train' or 'track'
         this._sjConfigContents = [];
         this._sjModelTypes = [];
         this._sjConfigNames = [];
+        // Inference-specific state
+        this._sjInferenceModelPaths = [];
+        this._sjInferenceDataPath = '';
         this._sjLabelsPath = null;
         this._sjPathMappings = {};
         this._sjMissingVideos = [];
@@ -2427,8 +2431,290 @@ class SleapRTCDashboard {
 
         this._sjRenderWorkerList();
         this._sjInitDropzone();
+        this.sjSetJobType('train');  // Reset to training mode
         this.sjGoToStep(1);
         this.showModal('submit-job-modal');
+    }
+
+    sjSetJobType(type) {
+        this._sjJobType = type;
+        console.log('[submitJob] job type set to: %s', type);
+
+        // Update toggle buttons
+        document.getElementById('sj-type-train')?.classList.toggle('active', type === 'train');
+        document.getElementById('sj-type-track')?.classList.toggle('active', type === 'track');
+
+        // Show/hide inference info box
+        const infoBox = document.getElementById('sj-inference-info');
+        if (infoBox) infoBox.classList.toggle('hidden', type !== 'track');
+
+        // Update step indicator for inference (2 steps) vs training (3 steps)
+        const step2 = document.getElementById('sj-step-dot-2');
+        const step3 = document.getElementById('sj-step-dot-3');
+        const line2 = document.querySelectorAll('.sj-step-line')[1]; // second connector line
+        if (type === 'track') {
+            // Inference: 2 steps — rename step 2 and hide step 3
+            if (step2) step2.querySelector('.sj-step-label').textContent = 'Select Files';
+            if (step3) step3.style.display = 'none';
+            if (line2) line2.style.display = 'none';
+        } else {
+            // Training: 3 steps
+            if (step2) step2.querySelector('.sj-step-label').textContent = 'Configure Job';
+            if (step3) step3.style.display = '';
+            if (line2) line2.style.display = '';
+        }
+    }
+
+    sjNextFromStep1() {
+        if (this._sjJobType === 'track') {
+            // Inference: skip config upload, go to inference file selection
+            this.sjGoToInferenceStep();
+        } else {
+            // Training: go to config upload
+            this.sjGoToStep(2);
+        }
+    }
+
+    sjGoToInferenceStep() {
+        // Hide all views
+        ['sj-step1', 'sj-step2', 'sj-step3', 'sj-status'].forEach(id => {
+            document.getElementById(id)?.classList.add('hidden');
+        });
+        document.getElementById('sj-step-inference')?.classList.remove('hidden');
+
+        // Update stepper
+        const stepper = document.querySelector('.sj-step-indicator');
+        if (stepper) stepper.classList.remove('hidden');
+        const title = document.getElementById('sj-title');
+        if (title) title.textContent = 'Submit Inference Job';
+        // Mark step 1 done, step 2 active
+        const dot1 = document.getElementById('sj-step-dot-1');
+        const dot2 = document.getElementById('sj-step-dot-2');
+        if (dot1) { dot1.classList.remove('active'); dot1.classList.add('done'); }
+        if (dot2) { dot2.classList.remove('done'); dot2.classList.add('active'); }
+
+        // Reset inference UI
+        this._sjInferenceModelPaths = [];
+        this._sjInferenceDataPath = '';
+        this._sjRenderInferenceModels();
+        const dataInput = document.getElementById('sj-inference-data-input');
+        if (dataInput) dataInput.value = '';
+        document.getElementById('sj-submit-inference-btn').disabled = true;
+        document.getElementById('sj-inference-error')?.classList.add('hidden');
+
+        // Open SSE for file browsing (same as training step 3)
+        if (this._sjWorkerSSE) { this._sjWorkerSSE.close(); this._sjWorkerSSE = null; }
+        this._sjWorkerSSE = this.sseConnect(`worker:${this._sjWorkerId}`);
+        this._sjWorkerSSE
+            .on('fs_list_res', (data) => this._sjHandleFsListRes(data))
+            .on('worker_path_ok', (data) => this._sjHandlePathOk(data))
+            .on('worker_path_error', (data) => this._sjHandlePathError(data));
+
+        // Init icons
+        const inferenceView = document.getElementById('sj-step-inference');
+        if (window.lucide && inferenceView) {
+            lucide.createIcons({ nodes: Array.from(inferenceView.querySelectorAll('[data-lucide]')) });
+        }
+
+        console.log('[submitJob] entered inference file selection step');
+    }
+
+    sjBrowseInferenceModel() {
+        this._sjBrowseMode = 'inference-model';
+        this._sjInferenceBrowseTarget = 'model';
+        const fb = document.getElementById('sj-inference-file-browser');
+        if (fb) { fb.innerHTML = ''; fb.classList.remove('hidden'); }
+        this._loadInferenceBrowserMounts();
+    }
+
+    sjBrowseInferenceData() {
+        this._sjBrowseMode = 'inference-data';
+        this._sjInferenceBrowseTarget = 'data';
+        const fb = document.getElementById('sj-inference-file-browser');
+        if (fb) { fb.innerHTML = ''; fb.classList.remove('hidden'); }
+        this._loadInferenceBrowserMounts();
+    }
+
+    async _loadInferenceBrowserMounts() {
+        const workers = this.roomWorkers[this._sjRoomId]?.workers ?? [];
+        const worker = workers.find(w => w.peer_id === this._sjWorkerId);
+        const mounts = worker?.properties?.mounts ?? [];
+
+        if (mounts.length > 0) {
+            const entries = mounts.map(m => ({
+                name: m.label || m.path,
+                path: m.path,
+                is_dir: true,
+            }));
+            this._sjRenderInferenceBrowserColumn(entries, 0);
+        } else {
+            // No mounts, try root
+            const reqId = crypto.randomUUID();
+            this._sjPendingRequests = this._sjPendingRequests || {};
+            this._sjPendingRequests[reqId] = { colIndex: 0, target: 'inference' };
+            await this.apiFsList(this._sjRoomId, this._sjWorkerId, '/', reqId);
+        }
+    }
+
+    _sjRenderInferenceBrowserColumn(entries, colIndex) {
+        const wrapper = document.getElementById('sj-inference-file-browser');
+        if (!wrapper) return;
+
+        // Get or create the columns container
+        let container = wrapper.querySelector('.sj-inf-columns');
+        if (!container) {
+            wrapper.innerHTML = '';
+            container = document.createElement('div');
+            container.className = 'sj-inf-columns sj-file-columns';
+            wrapper.appendChild(container);
+        }
+
+        // Remove columns after this one
+        while (container.children.length > colIndex) {
+            container.removeChild(container.lastChild);
+        }
+
+        const col = document.createElement('div');
+        col.className = 'sj-file-column';
+        col.dataset.colIndex = colIndex;
+
+        const isDataMode = this._sjInferenceBrowseTarget === 'data';
+        // Don't reset selection when loading subfolder contents — the parent
+        // folder click already set the selection for model browsing.
+        // Only reset when starting a fresh browse (colIndex 0).
+        if (colIndex === 0) {
+            this._sjSelectedInferencePath = null;
+        }
+
+        entries.forEach(entry => {
+            const name = entry.name ?? entry.path.split('/').pop();
+            const row = document.createElement('div');
+            row.className = 'sj-file-entry' + (entry.is_dir ? ' is-dir' : (isDataMode ? ' is-slp' : ''));
+            row.innerHTML = this._sjFileIcon(entry.is_dir, false, name) + `<span>${this._escapeHtml(name)}</span>`;
+
+            if (entry.is_dir) {
+                row.onclick = () => {
+                    const reqId = crypto.randomUUID();
+                    this._sjPendingRequests = this._sjPendingRequests || {};
+                    this._sjPendingRequests[reqId] = { colIndex: colIndex + 1, target: 'inference' };
+                    this.apiFsList(this._sjRoomId, this._sjWorkerId, entry.path, reqId);
+                    col.querySelectorAll('.sj-file-entry').forEach(r => r.classList.remove('selected'));
+                    row.classList.add('selected');
+                    if (!isDataMode) {
+                        // Model browsing: folder IS the selectable item
+                        this._sjSelectedInferencePath = entry.path;
+                        this._sjUpdateInferenceSelectBtn();
+                    }
+                    // Data browsing: folder just navigates, no selection
+                };
+            } else {
+                // File click — only selectable in data mode for .slp files
+                if (isDataMode && (name.endsWith('.slp') || name.endsWith('.pkg.slp'))) {
+                    row.onclick = () => {
+                        col.querySelectorAll('.sj-file-entry').forEach(r => r.classList.remove('selected'));
+                        row.classList.add('selected');
+                        this._sjSelectedInferencePath = entry.path;
+                        this._sjUpdateInferenceSelectBtn();
+                    };
+                }
+            }
+
+            col.appendChild(row);
+        });
+
+        container.appendChild(col);
+        container.scrollLeft = container.scrollWidth;
+
+        // Add or update the select button below the columns
+        this._sjUpdateInferenceSelectBtn();
+    }
+
+    _sjUpdateInferenceSelectBtn() {
+        const wrapper = document.getElementById('sj-inference-file-browser');
+        if (!wrapper) return;
+
+        // Remove old button
+        const oldBtn = wrapper.querySelector('.sj-inf-select-btn');
+        if (oldBtn) oldBtn.remove();
+
+        if (!this._sjSelectedInferencePath) return;
+
+        const isDataMode = this._sjInferenceBrowseTarget === 'data';
+        const btnLabel = isDataMode ? 'Select File' : 'Select Folder';
+        const btn = document.createElement('button');
+        btn.className = 'btn btn-primary btn-sm sj-inf-select-btn';
+        btn.style.marginTop = '8px';
+        btn.style.width = '100%';
+        btn.textContent = btnLabel;
+        btn.onclick = () => {
+            const path = this._sjSelectedInferencePath;
+            if (isDataMode) {
+                this._sjInferenceDataPath = path;
+                const input = document.getElementById('sj-inference-data-input');
+                if (input) input.value = path;
+                console.log('[submitJob] inference data path set: %s', path);
+            } else {
+                if (!this._sjInferenceModelPaths.includes(path)) {
+                    this._sjInferenceModelPaths.push(path);
+                    this._sjRenderInferenceModels();
+                    console.log('[submitJob] inference model added: %s', path);
+                }
+            }
+            this._sjUpdateInferenceSubmitBtn();
+            // Hide file browser
+            wrapper.classList.add('hidden');
+        };
+        wrapper.appendChild(btn);
+    }
+
+    _sjRenderInferenceModels() {
+        const container = document.getElementById('sj-inference-models');
+        if (!container) return;
+
+        if (this._sjInferenceModelPaths.length === 0) {
+            container.innerHTML = '';
+            // Show full browse button
+            const browseBtn = document.getElementById('sj-inference-browse-model');
+            if (browseBtn) {
+                browseBtn.classList.remove('sj-browse-mini');
+                browseBtn.querySelector('span').textContent = 'Browse Worker Filesystem';
+            }
+            return;
+        }
+
+        container.innerHTML = this._sjInferenceModelPaths.map((path, i) => {
+            const name = path.split('/').pop();
+            return `<div class="sj-inference-model-card">
+                <i data-lucide="folder"></i>
+                <span class="path" title="${this._escapeHtml(path)}">${this._escapeHtml(path)}</span>
+                <button class="remove" onclick="app._sjRemoveInferenceModel(${i})">&times;</button>
+            </div>`;
+        }).join('');
+
+        // Switch to mini browse button
+        const browseBtn = document.getElementById('sj-inference-browse-model');
+        if (browseBtn) {
+            browseBtn.classList.add('sj-browse-mini');
+            browseBtn.querySelector('span').textContent = '+ Add Another Model';
+        }
+
+        // Init icons
+        if (window.lucide) {
+            lucide.createIcons({ nodes: Array.from(container.querySelectorAll('[data-lucide]')) });
+        }
+    }
+
+    _sjRemoveInferenceModel(index) {
+        this._sjInferenceModelPaths.splice(index, 1);
+        this._sjRenderInferenceModels();
+        this._sjUpdateInferenceSubmitBtn();
+    }
+
+    _sjUpdateInferenceSubmitBtn() {
+        const btn = document.getElementById('sj-submit-inference-btn');
+        if (btn) {
+            btn.disabled = this._sjInferenceModelPaths.length === 0 || !this._sjInferenceDataPath;
+        }
     }
 
     _sjRenderWorkerList() {
@@ -3178,6 +3464,7 @@ class SleapRTCDashboard {
             return;
         }
         const colIndex = pending.colIndex;
+        const target = pending.target;
         delete this._sjPendingRequests[reqId];
 
         // Normalize entries
@@ -3188,7 +3475,11 @@ class SleapRTCDashboard {
             is_dir: e.is_dir ?? (e.type === 'directory'),
         }));
 
-        this._sjRenderColumn(entries, colIndex);
+        if (target === 'inference') {
+            this._sjRenderInferenceBrowserColumn(entries, colIndex);
+        } else {
+            this._sjRenderColumn(entries, colIndex);
+        }
     }
 
     _sjHandlePathOk(data) {
@@ -3479,19 +3770,30 @@ class SleapRTCDashboard {
     // ── Job submission + status (via relay) ───────────────────────────────────
 
     async submitJob() {
-        const submitBtn = document.getElementById('sj-submit-btn');
+        const submitBtn = document.getElementById('sj-submit-btn') || document.getElementById('sj-submit-inference-btn');
         if (submitBtn) submitBtn.disabled = true;
 
         try {
-            const config = {
-                type: 'train',
-                config_contents: this._sjConfigContents,
-                labels_path: this._sjLabelsPath,
-                path_mappings: this._sjPathMappings,
-                model_types: this._sjModelTypes,
-            };
-            console.log('[submitJob] submitting %d config(s): %s',
-                this._sjConfigContents.length, this._sjModelTypes.join(', '));
+            let config;
+            if (this._sjJobType === 'track') {
+                config = {
+                    type: 'track',
+                    data_path: this._sjInferenceDataPath,
+                    model_paths: this._sjInferenceModelPaths,
+                };
+                console.log('[submitJob] submitting inference: data=%s, %d model(s)',
+                    this._sjInferenceDataPath, this._sjInferenceModelPaths.length);
+            } else {
+                config = {
+                    type: 'train',
+                    config_contents: this._sjConfigContents,
+                    labels_path: this._sjLabelsPath,
+                    path_mappings: this._sjPathMappings,
+                    model_types: this._sjModelTypes,
+                };
+                console.log('[submitJob] submitting %d config(s): %s',
+                    this._sjConfigContents.length, this._sjModelTypes.join(', '));
+            }
 
             const result = await this.apiJobSubmit(
                 this._sjRoomId, this._sjWorkerId, config
@@ -3507,7 +3809,8 @@ class SleapRTCDashboard {
                 workerId: this._sjWorkerId,
                 workerName: worker?.worker_name || this._sjWorkerId,
                 status: 'submitted',
-                modelType: this._sjModelType || 'model',
+                jobType: this._sjJobType,
+                modelType: this._sjJobType === 'track' ? 'inference' : (this._sjModelType || 'model'),
                 lastEpoch: 0,
                 maxEpochs: this._sjMaxEpochs || null,
                 lastLoss: null,
@@ -3559,10 +3862,21 @@ class SleapRTCDashboard {
             this.sjGoToStep('status');
             this._sjResetProgressPanel();
             this._sjShowCancelButton();
+
+            if (this._sjJobType === 'track') {
+                // Inference: hide training-specific UI
+                document.getElementById('sj-epoch-section')?.classList.add('hidden');
+                document.getElementById('sj-metrics')?.classList.add('hidden');
+                document.getElementById('sj-job-queue')?.classList.add('hidden');
+                // Hide Stop Early (no multi-step pipeline for inference)
+                const stopBtn = document.getElementById('sj-stop-btn');
+                if (stopBtn) stopBtn.classList.add('hidden');
+            }
+
             const label = document.getElementById('sj-status-label');
             if (label) label.textContent = 'Submitted…';
-            console.log('[submitJob] job submitted jobId=%s, %d models, cancel button shown',
-                jobId, this._sjModelTypes.length);
+            console.log('[submitJob] job submitted jobId=%s type=%s, cancel button shown',
+                jobId, this._sjJobType);
 
         } catch (err) {
             const errEl = document.getElementById('sj-browser-error');
@@ -3605,9 +3919,19 @@ class SleapRTCDashboard {
 
         if (status === 'running' || status === 'submitted') {
             if (label) {
-                if (stage === 'inference') label.textContent = 'Running inference…';
+                if (stage === 'inference' || this._sjJobType === 'track') label.textContent = 'Running inference…';
                 else if (status === 'running') label.textContent = `Training ${modelLabel}…`;
                 else label.textContent = 'Submitted…';
+            }
+            // Append log message if present (stdout/stderr lines from inference)
+            if (data.message && status === 'running') {
+                this._sjAppendLog(data.message);
+                // Save to activeJobs for replay in Job Summary
+                const job = this._currentJobId ? this.activeJobs.get(this._currentJobId) : null;
+                if (job) {
+                    job.logs.push({ text: data.message });
+                    this._persistActiveJobs();
+                }
             }
         } else if (status === 'accepted') {
             if (label) label.textContent = 'Worker accepted! Starting training job…';
@@ -3978,8 +4302,8 @@ class SleapRTCDashboard {
     }
 
     sjGoToStep(step) {
-        // Hide all views
-        ['sj-step1', 'sj-step2', 'sj-step3', 'sj-status'].forEach(id => {
+        // Hide all views (including inference step)
+        ['sj-step1', 'sj-step2', 'sj-step3', 'sj-step-inference', 'sj-status'].forEach(id => {
             document.getElementById(id)?.classList.add('hidden');
         });
 
@@ -3992,10 +4316,10 @@ class SleapRTCDashboard {
         const title = document.getElementById('sj-title');
         if (step === 'status') {
             if (stepper) stepper.classList.add('hidden');
-            if (title) title.textContent = 'Training Job';
+            if (title) title.textContent = this._sjJobType === 'track' ? 'Inference Job' : 'Training Job';
         } else {
             if (stepper) stepper.classList.remove('hidden');
-            if (title) title.textContent = 'Submit Training Job';
+            if (title) title.textContent = this._sjJobType === 'track' ? 'Submit Inference Job' : 'Submit Training Job';
             // Update step indicator dots (steps 1-3 only)
             for (let i = 1; i <= 3; i++) {
                 const dot = document.getElementById(`sj-step-dot-${i}`);

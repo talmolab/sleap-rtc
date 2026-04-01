@@ -1485,11 +1485,21 @@ auto_select = true</code></pre>
 
             <!-- Step 1: Select Worker -->
             <div id="sj-step1" class="sj-view">
+                <div class="sj-job-type-section">
+                    <div class="sj-section-label">Job Type</div>
+                    <div class="sj-job-type-toggle">
+                        <button class="sj-job-type-btn active" id="sj-type-train" onclick="app.sjSetJobType('train')">Training</button>
+                        <button class="sj-job-type-btn" id="sj-type-track" onclick="app.sjSetJobType('track')">Inference</button>
+                    </div>
+                </div>
+                <div id="sj-inference-info" class="sj-info-box hidden">
+                    Run inference on trained models. You'll select model checkpoints and a data file on the worker's filesystem.
+                </div>
                 <p class="sj-instruction">Choose an available worker. The job will run on the selected machine.</p>
                 <div id="sj-worker-list" class="sj-worker-list"></div>
                 <div class="form-actions">
                     <button class="btn btn-secondary" onclick="app.closeSubmitJobModal()">Cancel</button>
-                    <button class="btn btn-primary" id="sj-next-1" disabled onclick="app.sjGoToStep(2)">
+                    <button class="btn btn-primary" id="sj-next-1" disabled onclick="app.sjNextFromStep1()">
                         Next <i data-lucide="arrow-right"></i>
                     </button>
                 </div>
@@ -1535,6 +1545,38 @@ auto_select = true</code></pre>
                     </button>
                     <button class="btn btn-primary" id="sj-submit-btn" disabled onclick="app.submitJob()">
                         Submit
+                    </button>
+                </div>
+            </div>
+
+            <!-- Step: Inference file selection (models + data) -->
+            <div id="sj-step-inference" class="sj-view hidden">
+                <div class="sj-section-label">Model Checkpoints</div>
+                <div id="sj-inference-models" class="sj-inference-models"></div>
+                <button class="sj-browse-action" id="sj-inference-browse-model" onclick="app.sjBrowseInferenceModel()">
+                    <i data-lucide="folder-open"></i>
+                    <span>Browse Worker Filesystem</span>
+                </button>
+                <div style="font-size:10px;color:var(--text-muted);margin-top:4px;margin-bottom:16px">
+                    Select one or more model checkpoint directories
+                </div>
+
+                <div class="sj-section-label">Data File (.slp)</div>
+                <div class="sj-inference-data-row">
+                    <input type="text" id="sj-inference-data-input" class="sj-inference-data-input" placeholder="Select a .slp file on the worker" readonly>
+                    <button class="btn btn-outline btn-sm" onclick="app.sjBrowseInferenceData()">
+                        <i data-lucide="folder-open"></i>
+                    </button>
+                </div>
+
+                <div id="sj-inference-file-browser" class="hidden"></div>
+                <p id="sj-inference-error" class="sj-error hidden"></p>
+                <div class="form-actions">
+                    <button class="btn btn-secondary" onclick="app.sjGoToStep(1)">
+                        <i data-lucide="arrow-left"></i> Back
+                    </button>
+                    <button class="btn btn-primary" id="sj-submit-inference-btn" disabled onclick="app.submitJob()">
+                        Submit Inference
                     </button>
                 </div>
             </div>

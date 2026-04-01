@@ -644,7 +644,36 @@ class MeshCoordinator:
                             relay_msg = progress_data
                     except Exception:
                         pass  # Silently drop malformed progress reports
-                # Log lines and other messages — skip to avoid flooding relay
+                elif message.startswith("[stderr] "):
+                    # Forward stderr log lines (inference progress, warnings)
+                    line = message[len("[stderr] ") :].rstrip()
+                    if line:
+                        relay_msg = {
+                            **_base,
+                            "status": "running",
+                            "message": line,
+                        }
+                elif message.startswith("CR::"):
+                    # tqdm/rich progress bar update — forward for live display
+                    line = message[4:].strip()
+                    if line:
+                        relay_msg = {
+                            **_base,
+                            "status": "running",
+                            "message": line,
+                        }
+                else:
+                    # Catch-all for unrecognised text lines (e.g., inference
+                    # stdout output). Forward as running status with message
+                    # so they appear in the dashboard worker logs.
+                    line = message.rstrip("\n").strip()
+                    if line and not line.startswith("PROGRESS_REPORT::"):
+                        relay_msg = {
+                            **_base,
+                            "status": "running",
+                            "message": line,
+                        }
+                # (end of message routing)
 
                 if relay_msg:
                     asyncio.run_coroutine_threadsafe(
