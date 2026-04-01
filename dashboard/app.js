@@ -2520,48 +2520,18 @@ class SleapRTCDashboard {
     }
 
     sjBrowseInferenceModel() {
-        // Use the existing file browser in directory mode
         this._sjBrowseMode = 'inference-model';
         this._sjInferenceBrowseTarget = 'model';
-
-        // Show the file browser columns inside a temporary container
-        const container = document.getElementById('sj-inference-file-browser');
-        if (!container) {
-            // Create file browser container dynamically
-            const view = document.getElementById('sj-step-inference');
-            const existing = document.getElementById('sj-inference-file-browser');
-            if (!existing) {
-                const div = document.createElement('div');
-                div.id = 'sj-inference-file-browser';
-                div.className = 'sj-file-columns';
-                // Insert before the form-actions
-                const actions = view.querySelector('.form-actions');
-                view.insertBefore(div, actions);
-            }
-        }
         const fb = document.getElementById('sj-inference-file-browser');
         if (fb) { fb.innerHTML = ''; fb.classList.remove('hidden'); }
-
-        // Load worker mounts
         this._loadInferenceBrowserMounts();
     }
 
     sjBrowseInferenceData() {
         this._sjBrowseMode = 'inference-data';
         this._sjInferenceBrowseTarget = 'data';
-
-        const container = document.getElementById('sj-inference-file-browser');
-        if (!container) {
-            const view = document.getElementById('sj-step-inference');
-            const div = document.createElement('div');
-            div.id = 'sj-inference-file-browser';
-            div.className = 'sj-file-columns';
-            const actions = view.querySelector('.form-actions');
-            view.insertBefore(div, actions);
-        }
         const fb = document.getElementById('sj-inference-file-browser');
         if (fb) { fb.innerHTML = ''; fb.classList.remove('hidden'); }
-
         this._loadInferenceBrowserMounts();
     }
 

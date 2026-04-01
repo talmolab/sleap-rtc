@@ -937,11 +937,20 @@ class JobExecutor:
         self._progress_reporter = progress_reporter
 
         try:
-            # Start the process
+            # Start the process.
+            # For track (inference) jobs, merge stderr into stdout so all
+            # output (rich progress, logs) goes through one stream and
+            # reaches the relay channel.  Training uses separate stderr
+            # for DDP duplicate filtering.
+            stderr_mode = (
+                asyncio.subprocess.STDOUT
+                if job_type == "track"
+                else asyncio.subprocess.PIPE
+            )
             process = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+                stderr=stderr_mode,
                 cwd=working_dir,
                 env={**os.environ, "PYTHONUNBUFFERED": "1"},
                 start_new_session=True,
@@ -1094,7 +1103,12 @@ class JobExecutor:
                 except Exception as e:
                     logging.exception(f"[JOB {job_id}] Stderr stream error: {e}")
 
-            stderr_task = asyncio.create_task(_stream_stderr())
+            # Only start stderr stream if stderr is separate (training jobs)
+            stderr_task = (
+                asyncio.create_task(_stream_stderr())
+                if process.stderr is not None
+                else None
+            )
 
             # Memory monitor: log worker + full process tree RSS + VRAM every 30 s.
             worker_pid = os.getpid()
@@ -1248,10 +1262,11 @@ class JobExecutor:
             await stream_logs_with_progress()
             # Drain any remaining stderr — crash output (e.g. NCCL errors,
             # Python tracebacks) often arrives just after stdout EOF.
-            try:
-                await asyncio.wait_for(stderr_task, timeout=5.0)
-            except (asyncio.TimeoutError, asyncio.CancelledError):
-                stderr_task.cancel()
+            if stderr_task is not None:
+                try:
+                    await asyncio.wait_for(stderr_task, timeout=5.0)
+                except (asyncio.TimeoutError, asyncio.CancelledError):
+                    stderr_task.cancel()
             watchdog_task.cancel()
             memory_monitor_task.cancel()
             _w = _read_rss_mb(worker_pid)
