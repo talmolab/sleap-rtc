@@ -2579,7 +2579,12 @@ class SleapRTCDashboard {
         col.dataset.colIndex = colIndex;
 
         const isDataMode = this._sjInferenceBrowseTarget === 'data';
-        this._sjSelectedInferencePath = null;
+        // Don't reset selection when loading subfolder contents — the parent
+        // folder click already set the selection for model browsing.
+        // Only reset when starting a fresh browse (colIndex 0).
+        if (colIndex === 0) {
+            this._sjSelectedInferencePath = null;
+        }
 
         entries.forEach(entry => {
             const name = entry.name ?? entry.path.split('/').pop();
@@ -2595,11 +2600,15 @@ class SleapRTCDashboard {
                     this.apiFsList(this._sjRoomId, this._sjWorkerId, entry.path, reqId);
                     col.querySelectorAll('.sj-file-entry').forEach(r => r.classList.remove('selected'));
                     row.classList.add('selected');
-                    this._sjSelectedInferencePath = entry.path;
-                    this._sjUpdateInferenceSelectBtn();
+                    if (!isDataMode) {
+                        // Model browsing: folder IS the selectable item
+                        this._sjSelectedInferencePath = entry.path;
+                        this._sjUpdateInferenceSelectBtn();
+                    }
+                    // Data browsing: folder just navigates, no selection
                 };
             } else {
-                // File click — select it
+                // File click — only selectable in data mode for .slp files
                 if (isDataMode && (name.endsWith('.slp') || name.endsWith('.pkg.slp'))) {
                     row.onclick = () => {
                         col.querySelectorAll('.sj-file-entry').forEach(r => r.classList.remove('selected'));
