@@ -653,7 +653,27 @@ class MeshCoordinator:
                             "status": "running",
                             "message": line,
                         }
-                # Other unrecognised messages — skip to avoid flooding relay
+                elif message.startswith("CR::"):
+                    # tqdm/rich progress bar update — forward for live display
+                    line = message[4:].strip()
+                    if line:
+                        relay_msg = {
+                            **_base,
+                            "status": "running",
+                            "message": line,
+                        }
+                else:
+                    # Catch-all for unrecognised text lines (e.g., inference
+                    # stdout output). Forward as running status with message
+                    # so they appear in the dashboard worker logs.
+                    line = message.rstrip("\n").strip()
+                    if line and not line.startswith("PROGRESS_REPORT::"):
+                        relay_msg = {
+                            **_base,
+                            "status": "running",
+                            "message": line,
+                        }
+                # (end of message routing)
 
                 if relay_msg:
                     asyncio.run_coroutine_threadsafe(
