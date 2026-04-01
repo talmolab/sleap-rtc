@@ -644,7 +644,16 @@ class MeshCoordinator:
                             relay_msg = progress_data
                     except Exception:
                         pass  # Silently drop malformed progress reports
-                # Log lines and other messages — skip to avoid flooding relay
+                elif message.startswith("[stderr] "):
+                    # Forward stderr log lines (inference progress, warnings)
+                    line = message[len("[stderr] ") :].rstrip()
+                    if line:
+                        relay_msg = {
+                            **_base,
+                            "status": "running",
+                            "message": line,
+                        }
+                # Other unrecognised messages — skip to avoid flooding relay
 
                 if relay_msg:
                     asyncio.run_coroutine_threadsafe(

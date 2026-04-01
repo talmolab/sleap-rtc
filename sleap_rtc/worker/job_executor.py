@@ -1081,9 +1081,16 @@ class JobExecutor:
                                         channel.send(f"[stderr] {line}\n")
                                 else:
                                     # \n-terminated stderr lines come from Python
-                                    # logging and appear once per DDP rank — don't
-                                    # forward to avoid N duplicates on multi-GPU.
+                                    # logging and appear once per DDP rank.
+                                    # For track (inference) jobs, forward to channel
+                                    # since they're typically single-GPU and the
+                                    # dashboard needs to show inference progress.
                                     logging.warning(f"[JOB {job_id}] [stderr] {line}")
+                                    if (
+                                        job_type == "track"
+                                        and channel.readyState == "open"
+                                    ):
+                                        channel.send(f"[stderr] {line}\n")
                 except Exception as e:
                     logging.exception(f"[JOB {job_id}] Stderr stream error: {e}")
 

@@ -2587,8 +2587,17 @@ class SleapRTCDashboard {
     }
 
     _sjRenderInferenceBrowserColumn(entries, colIndex) {
-        const container = document.getElementById('sj-inference-file-browser');
-        if (!container) return;
+        const wrapper = document.getElementById('sj-inference-file-browser');
+        if (!wrapper) return;
+
+        // Get or create the columns container
+        let container = wrapper.querySelector('.sj-inf-columns');
+        if (!container) {
+            wrapper.innerHTML = '';
+            container = document.createElement('div');
+            container.className = 'sj-inf-columns sj-file-columns';
+            wrapper.appendChild(container);
+        }
 
         // Remove columns after this one
         while (container.children.length > colIndex) {
@@ -2600,6 +2609,7 @@ class SleapRTCDashboard {
         col.dataset.colIndex = colIndex;
 
         const isDataMode = this._sjInferenceBrowseTarget === 'data';
+        this._sjSelectedInferencePath = null;
 
         entries.forEach(entry => {
             const name = entry.name ?? entry.path.split('/').pop();
@@ -2615,39 +2625,17 @@ class SleapRTCDashboard {
                     this.apiFsList(this._sjRoomId, this._sjWorkerId, entry.path, reqId);
                     col.querySelectorAll('.sj-file-entry').forEach(r => r.classList.remove('selected'));
                     row.classList.add('selected');
-
-                    // For model browsing, selecting a directory is the action
-                    if (!isDataMode) {
-                        this._sjSelectedInferencePath = entry.path;
-                    }
+                    this._sjSelectedInferencePath = entry.path;
+                    this._sjUpdateInferenceSelectBtn();
                 };
-
-                // Double-click on directory in model mode: add it as a model
-                if (!isDataMode) {
-                    row.ondblclick = () => {
-                        if (!this._sjInferenceModelPaths.includes(entry.path)) {
-                            this._sjInferenceModelPaths.push(entry.path);
-                            this._sjRenderInferenceModels();
-                            this._sjUpdateInferenceSubmitBtn();
-                            console.log('[submitJob] inference model added: %s', entry.path);
-                        }
-                        // Hide file browser
-                        const fb = document.getElementById('sj-inference-file-browser');
-                        if (fb) fb.classList.add('hidden');
-                    };
-                }
             } else {
-                // File click
+                // File click — select it
                 if (isDataMode && (name.endsWith('.slp') || name.endsWith('.pkg.slp'))) {
                     row.onclick = () => {
-                        this._sjInferenceDataPath = entry.path;
-                        const input = document.getElementById('sj-inference-data-input');
-                        if (input) input.value = entry.path;
-                        this._sjUpdateInferenceSubmitBtn();
-                        console.log('[submitJob] inference data path set: %s', entry.path);
-                        // Hide file browser
-                        const fb = document.getElementById('sj-inference-file-browser');
-                        if (fb) fb.classList.add('hidden');
+                        col.querySelectorAll('.sj-file-entry').forEach(r => r.classList.remove('selected'));
+                        row.classList.add('selected');
+                        this._sjSelectedInferencePath = entry.path;
+                        this._sjUpdateInferenceSelectBtn();
                     };
                 }
             }
@@ -2657,6 +2645,47 @@ class SleapRTCDashboard {
 
         container.appendChild(col);
         container.scrollLeft = container.scrollWidth;
+
+        // Add or update the select button below the columns
+        this._sjUpdateInferenceSelectBtn();
+    }
+
+    _sjUpdateInferenceSelectBtn() {
+        const wrapper = document.getElementById('sj-inference-file-browser');
+        if (!wrapper) return;
+
+        // Remove old button
+        const oldBtn = wrapper.querySelector('.sj-inf-select-btn');
+        if (oldBtn) oldBtn.remove();
+
+        if (!this._sjSelectedInferencePath) return;
+
+        const isDataMode = this._sjInferenceBrowseTarget === 'data';
+        const btnLabel = isDataMode ? 'Select File' : 'Select Folder';
+        const btn = document.createElement('button');
+        btn.className = 'btn btn-primary btn-sm sj-inf-select-btn';
+        btn.style.marginTop = '8px';
+        btn.style.width = '100%';
+        btn.textContent = btnLabel;
+        btn.onclick = () => {
+            const path = this._sjSelectedInferencePath;
+            if (isDataMode) {
+                this._sjInferenceDataPath = path;
+                const input = document.getElementById('sj-inference-data-input');
+                if (input) input.value = path;
+                console.log('[submitJob] inference data path set: %s', path);
+            } else {
+                if (!this._sjInferenceModelPaths.includes(path)) {
+                    this._sjInferenceModelPaths.push(path);
+                    this._sjRenderInferenceModels();
+                    console.log('[submitJob] inference model added: %s', path);
+                }
+            }
+            this._sjUpdateInferenceSubmitBtn();
+            // Hide file browser
+            wrapper.classList.add('hidden');
+        };
+        wrapper.appendChild(btn);
     }
 
     _sjRenderInferenceModels() {
@@ -3914,6 +3943,10 @@ class SleapRTCDashboard {
                 if (stage === 'inference' || this._sjJobType === 'track') label.textContent = 'Running inference…';
                 else if (status === 'running') label.textContent = `Training ${modelLabel}…`;
                 else label.textContent = 'Submitted…';
+            }
+            // Append log message if present (stderr lines from inference)
+            if (data.message && status === 'running') {
+                this._sjAppendLog(data.message);
             }
         } else if (status === 'accepted') {
             if (label) label.textContent = 'Worker accepted! Starting training job…';
