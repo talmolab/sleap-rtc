@@ -3923,9 +3923,15 @@ class SleapRTCDashboard {
                 else if (status === 'running') label.textContent = `Training ${modelLabel}…`;
                 else label.textContent = 'Submitted…';
             }
-            // Append log message if present (stderr lines from inference)
+            // Append log message if present (stdout/stderr lines from inference)
             if (data.message && status === 'running') {
                 this._sjAppendLog(data.message);
+                // Save to activeJobs for replay in Job Summary
+                const job = this._currentJobId ? this.activeJobs.get(this._currentJobId) : null;
+                if (job) {
+                    job.logs.push({ text: data.message });
+                    this._persistActiveJobs();
+                }
             }
         } else if (status === 'accepted') {
             if (label) label.textContent = 'Worker accepted! Starting training job…';
