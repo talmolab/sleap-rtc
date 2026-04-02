@@ -669,23 +669,28 @@ class MeshCoordinator:
                     except Exception:
                         pass  # Silently drop malformed progress reports
                 elif message.startswith("[stderr] "):
-                    # Forward stderr log lines (inference progress, warnings)
-                    line = message[len("[stderr] ") :].rstrip()
-                    if line:
-                        relay_msg = {
-                            **_base,
-                            "status": "running",
-                            "message": line,
-                        }
+                    # Forward stderr log lines — only for inference/track jobs.
+                    # Training uses PROGRESS_REPORT:: for structured updates;
+                    # stderr during training is Lightning's tqdm bar which floods.
+                    if job_type == "track":
+                        line = message[len("[stderr] ") :].rstrip()
+                        if line:
+                            relay_msg = {
+                                **_base,
+                                "status": "running",
+                                "message": line,
+                            }
                 elif message.startswith("CR::"):
-                    # tqdm/rich progress bar update — forward for live display
-                    line = message[4:].strip()
-                    if line:
-                        relay_msg = {
-                            **_base,
-                            "status": "running",
-                            "message": line,
-                        }
+                    # tqdm/rich progress bar update — only for inference/track.
+                    # Training progress bars would flood the relay.
+                    if job_type == "track":
+                        line = message[4:].strip()
+                        if line:
+                            relay_msg = {
+                                **_base,
+                                "status": "running",
+                                "message": line,
+                            }
                 else:
                     # Catch-all for unrecognised text lines. Only forward for
                     # inference/track jobs where stdout is the primary output.
