@@ -2739,7 +2739,7 @@ class SleapRTCDashboard {
         // DEBUG: log activeJobs state so we can verify worker status derivation
         console.log('[DEBUG-workerStatus] _sjRenderWorkerList roomId=%s activeJobs:', this._sjRoomId,
             Array.from(this.activeJobs.entries()).map(([id, j]) =>
-                `${id.slice(0,8)} worker=${j.workerId} room=${j.roomId} status=${j.status}`));
+                `${(id || 'unknown').slice(0,8)} worker=${j?.workerId} room=${j?.roomId} status=${j?.status}`));
 
         const workers = this.roomWorkers[this._sjRoomId]?.workers ?? [];
         if (workers.length === 0) {
