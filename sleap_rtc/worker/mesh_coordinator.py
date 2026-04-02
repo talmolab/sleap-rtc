@@ -108,6 +108,11 @@ class MeshCoordinator:
         # Non-admin WebSocket handler task (for post-demotion signaling)
         self._non_admin_handler_task: Optional[asyncio.Task] = None
 
+        # E2E encryption sessions: {session_id: (aes_key, timestamp)}
+        self._e2e_sessions: Dict[str, tuple[bytes, float]] = {}
+        # Max age for session keys (seconds) before pruning
+        self._e2e_session_max_age: float = 86400  # 24 hours
+
     def _build_registration_msg(self, is_admin: bool) -> dict:
         """Build a registration message with full worker metadata.
 
@@ -326,6 +331,38 @@ class MeshCoordinator:
                     elif msg_type == "error":
                         logger.error(f"Admin received error: {data.get('reason')}")
 
+                    # ── E2E encryption ─────────────────────────────────
+                    elif msg_type == "key_exchange":
+                        await self._handle_key_exchange(data)
+
+                    elif msg_type == "encrypted_relay":
+                        decrypted, session_id = self._decrypt_if_encrypted(data)
+                        if decrypted is not None:
+                            # Re-dispatch the decrypted inner message
+                            inner_type = decrypted.get("type")
+                            if inner_type == "fs_list_req":
+                                await self._handle_fs_list_req(
+                                    decrypted, session_id=session_id
+                                )
+                            elif inner_type == "use_worker_path":
+                                await self._handle_use_worker_path(
+                                    decrypted, session_id=session_id
+                                )
+                            elif inner_type == "fs_check_videos":
+                                await self._handle_fs_check_videos(
+                                    decrypted, session_id=session_id
+                                )
+                            elif inner_type == "job_assigned":
+                                await self._handle_job_assigned(
+                                    decrypted, session_id=session_id
+                                )
+                            elif inner_type == "job_cancel":
+                                self._handle_job_cancel(decrypted)
+                            else:
+                                logger.debug(
+                                    f"[E2E] Unknown decrypted type: {inner_type}"
+                                )
+
                     # ── Relay-forwarded requests from dashboard ──────────
                     elif msg_type == "fs_list_req":
                         await self._handle_fs_list_req(data)
@@ -365,7 +402,9 @@ class MeshCoordinator:
 
     # ── Relay-forwarded request handlers ────────────────────────────────────
 
-    async def _handle_fs_list_req(self, data: Dict[str, Any]):
+    async def _handle_fs_list_req(
+        self, data: Dict[str, Any], session_id: str | None = None
+    ):
         """Handle fs_list_req forwarded from dashboard via signaling server.
 
         Translates to the worker's FS_LIST_DIR protocol, sends back fs_list_res
@@ -389,31 +428,27 @@ class MeshCoordinator:
         if response.startswith(f"{MSG_FS_LIST_RESPONSE}{MSG_SEPARATOR}"):
             json_str = response.split(MSG_SEPARATOR, 1)[1]
             result = json.loads(json_str)
-            await self.websocket.send(
-                json.dumps(
-                    {
-                        "type": "fs_list_res",
-                        "req_id": req_id,
-                        **result,
-                    }
-                )
+            await self._send_relay_response(
+                {"type": "fs_list_res", "req_id": req_id, **result},
+                session_id=session_id,
             )
             logger.info(f"[RELAY] Sent fs_list_res for path={path}")
         else:
             # Error response
-            await self.websocket.send(
-                json.dumps(
-                    {
-                        "type": "fs_list_res",
-                        "req_id": req_id,
-                        "error": response,
-                        "entries": [],
-                    }
-                )
+            await self._send_relay_response(
+                {
+                    "type": "fs_list_res",
+                    "req_id": req_id,
+                    "error": response,
+                    "entries": [],
+                },
+                session_id=session_id,
             )
             logger.warning(f"[RELAY] FS list error for path={path}: {response}")
 
-    async def _handle_use_worker_path(self, data: Dict[str, Any]):
+    async def _handle_use_worker_path(
+        self, data: Dict[str, Any], session_id: str | None = None
+    ):
         """Handle use_worker_path forwarded from dashboard via signaling server.
 
         Validates the path, then checks video accessibility if it's an SLP file.
@@ -433,13 +468,9 @@ class MeshCoordinator:
 
         if response.startswith(f"{MSG_WORKER_PATH_OK}{MSG_SEPARATOR}"):
             validated_path = response.split(MSG_SEPARATOR, 1)[1]
-            await self.websocket.send(
-                json.dumps(
-                    {
-                        "type": "worker_path_ok",
-                        "path": validated_path,
-                    }
-                )
+            await self._send_relay_response(
+                {"type": "worker_path_ok", "path": validated_path},
+                session_id=session_id,
             )
             logger.info(f"[RELAY] Sent worker_path_ok for {validated_path}")
 
@@ -448,13 +479,9 @@ class MeshCoordinator:
             if video_response:
                 json_str = video_response.split(MSG_SEPARATOR, 1)[1]
                 result = json.loads(json_str)
-                await self.websocket.send(
-                    json.dumps(
-                        {
-                            "type": "fs_check_videos_response",
-                            **result,
-                        }
-                    )
+                await self._send_relay_response(
+                    {"type": "fs_check_videos_response", **result},
+                    session_id=session_id,
                 )
                 logger.info(f"[RELAY] Sent fs_check_videos_response")
         else:
@@ -463,17 +490,15 @@ class MeshCoordinator:
                 if MSG_SEPARATOR in response
                 else response
             )
-            await self.websocket.send(
-                json.dumps(
-                    {
-                        "type": "worker_path_error",
-                        "error": error_msg,
-                    }
-                )
+            await self._send_relay_response(
+                {"type": "worker_path_error", "error": error_msg},
+                session_id=session_id,
             )
             logger.warning(f"[RELAY] Sent worker_path_error: {error_msg}")
 
-    async def _handle_fs_check_videos(self, data: Dict[str, Any]):
+    async def _handle_fs_check_videos(
+        self, data: Dict[str, Any], session_id: str | None = None
+    ):
         """Handle explicit fs_check_videos request from dashboard."""
         from sleap_rtc.protocol import MSG_FS_CHECK_VIDEOS_RESPONSE, MSG_SEPARATOR
 
@@ -481,28 +506,25 @@ class MeshCoordinator:
         if response:
             json_str = response.split(MSG_SEPARATOR, 1)[1]
             result = json.loads(json_str)
-            await self.websocket.send(
-                json.dumps(
-                    {
-                        "type": "fs_check_videos_response",
-                        **result,
-                    }
-                )
+            await self._send_relay_response(
+                {"type": "fs_check_videos_response", **result},
+                session_id=session_id,
             )
             logger.info(f"[RELAY] Sent fs_check_videos_response")
         else:
-            await self.websocket.send(
-                json.dumps(
-                    {
-                        "type": "fs_check_videos_response",
-                        "missing": [],
-                        "accessible": 0,
-                        "embedded": 0,
-                    }
-                )
+            await self._send_relay_response(
+                {
+                    "type": "fs_check_videos_response",
+                    "missing": [],
+                    "accessible": 0,
+                    "embedded": 0,
+                },
+                session_id=session_id,
             )
 
-    async def _handle_job_assigned(self, data: Dict[str, Any]):
+    async def _handle_job_assigned(
+        self, data: Dict[str, Any], session_id: str | None = None
+    ):
         """Handle job_assigned forwarded from dashboard via signaling server.
 
         Translates to the worker's existing handle_job_submit flow, using a
@@ -521,6 +543,7 @@ class MeshCoordinator:
         # WebSocket sends on the event loop.
         coordinator = self  # Reference to mesh coordinator for dynamic websocket access
         loop = asyncio.get_event_loop()
+        e2e_session_id = session_id  # Capture for RelayChannel closure
 
         class RelayChannel:
             """Shim that mimics RTCDataChannel.send() but routes through WebSocket."""
@@ -676,6 +699,25 @@ class MeshCoordinator:
                 # (end of message routing)
 
                 if relay_msg:
+                    # Encrypt if E2E session is active
+                    if e2e_session_id is not None:
+                        e2e_key = self._coordinator._get_e2e_key_for_session(
+                            e2e_session_id
+                        )
+                        if e2e_key is not None:
+                            from sleap_rtc.encryption.envelope import wrap as _wrap
+
+                            envelope = _wrap(
+                                e2e_key,
+                                e2e_session_id,
+                                relay_msg,
+                                job_id=self._job_id,
+                            )
+                            asyncio.run_coroutine_threadsafe(
+                                self._coordinator.websocket.send(_j.dumps(envelope)),
+                                loop,
+                            )
+                            return
                     asyncio.run_coroutine_threadsafe(
                         self._coordinator.websocket.send(_j.dumps(relay_msg)), loop
                     )
@@ -749,6 +791,131 @@ class MeshCoordinator:
             logger.info(
                 f"[RELAY] SIGTERM cancel sent for job {job_id} (no ZMQ reporter)"
             )
+
+    # ── E2E encryption for relay transport ───────────────────────────────
+
+    async def _handle_key_exchange(self, data: Dict[str, Any]):
+        """Handle key_exchange from a dashboard/relay client.
+
+        Generates an ephemeral P-256 keypair, derives the shared AES key via
+        ECDH + HKDF, stores it keyed by session_id, and sends the worker's
+        public key back via key_exchange_response.
+        """
+        from sleap_rtc.encryption import (
+            generate_keypair,
+            derive_shared_key,
+            public_key_from_b64,
+            public_key_to_b64,
+        )
+
+        session_id = data.get("session_id")
+        peer_pub_b64 = data.get("public_key")
+
+        if not session_id or not peer_pub_b64:
+            logger.warning("[E2E] key_exchange missing session_id or public_key")
+            return
+
+        try:
+            # Generate our ephemeral keypair
+            private_key, our_pub_bytes = generate_keypair()
+
+            # Derive shared AES-256 key
+            peer_pub_bytes = public_key_from_b64(peer_pub_b64)
+            shared_key = derive_shared_key(private_key, peer_pub_bytes)
+
+            # Prune old sessions before adding new one
+            self._prune_e2e_sessions()
+
+            # Store session key
+            self._e2e_sessions[session_id] = (shared_key, time.time())
+            logger.info(
+                f"[E2E] Key exchange complete for session {session_id[:8]}... "
+                f"({len(self._e2e_sessions)} active sessions)"
+            )
+
+            # Send our public key back
+            response = {
+                "type": "key_exchange_response",
+                "session_id": session_id,
+                "public_key": public_key_to_b64(our_pub_bytes),
+            }
+            await self.websocket.send(json.dumps(response))
+
+        except Exception as e:
+            logger.error(f"[E2E] Key exchange failed: {e}")
+
+    def _prune_e2e_sessions(self):
+        """Remove E2E sessions older than max age."""
+        now = time.time()
+        expired = [
+            sid
+            for sid, (_, ts) in self._e2e_sessions.items()
+            if now - ts > self._e2e_session_max_age
+        ]
+        for sid in expired:
+            del self._e2e_sessions[sid]
+            logger.debug(f"[E2E] Pruned expired session {sid[:8]}...")
+
+    def _decrypt_if_encrypted(self, data: Dict[str, Any]) -> tuple[Dict[str, Any], str | None]:
+        """If the message is an encrypted relay envelope, decrypt it.
+
+        Args:
+            data: Incoming message dict.
+
+        Returns:
+            Tuple of (decrypted_data, session_id). If not encrypted, returns
+            (data, None) unchanged. If decryption fails, returns (None, None).
+        """
+        from sleap_rtc.encryption.envelope import ENCRYPTED_RELAY_TYPE, unwrap
+
+        if data.get("type") != ENCRYPTED_RELAY_TYPE:
+            return data, None
+
+        session_id = data.get("session_id")
+        # Build key lookup from sessions dict (strip timestamps)
+        key_lookup = {sid: key for sid, (key, _) in self._e2e_sessions.items()}
+        decrypted = unwrap(data, key_lookup)
+
+        if decrypted is None:
+            logger.warning(
+                f"[E2E] Failed to decrypt message for session "
+                f"{session_id[:8] if session_id else 'unknown'}..."
+            )
+            return None, None
+
+        logger.debug(
+            f"[E2E] Decrypted {decrypted.get('type')} from session {session_id[:8]}..."
+        )
+        return decrypted, session_id
+
+    def _get_e2e_key_for_session(self, session_id: str | None) -> bytes | None:
+        """Get the AES key for a session, or None if not encrypted."""
+        if session_id is None:
+            return None
+        entry = self._e2e_sessions.get(session_id)
+        return entry[0] if entry else None
+
+    async def _send_relay_response(
+        self,
+        message: dict,
+        session_id: str | None = None,
+        job_id: str | None = None,
+    ):
+        """Send a relay response, encrypting if the request was encrypted.
+
+        Args:
+            message: The response message dict to send.
+            session_id: Session ID from the incoming request (None = plaintext).
+            job_id: Optional job_id for relay channel routing.
+        """
+        key = self._get_e2e_key_for_session(session_id)
+        if key is not None:
+            from sleap_rtc.encryption.envelope import wrap
+
+            envelope = wrap(key, session_id, message, job_id=job_id)
+            await self.websocket.send(json.dumps(envelope))
+        else:
+            await self.websocket.send(json.dumps(message))
 
     async def _handle_client_offer(self, data: Dict[str, Any]):
         """Handle client connection offer received on admin WebSocket.
@@ -1977,6 +2144,37 @@ class MeshCoordinator:
 
                     elif msg_type == "error":
                         logger.error(f"Non-admin received error: {data.get('reason')}")
+
+                    # ── E2E encryption ─────────────────────────────────
+                    elif msg_type == "key_exchange":
+                        await self._handle_key_exchange(data)
+
+                    elif msg_type == "encrypted_relay":
+                        decrypted, session_id = self._decrypt_if_encrypted(data)
+                        if decrypted is not None:
+                            inner_type = decrypted.get("type")
+                            if inner_type == "fs_list_req":
+                                await self._handle_fs_list_req(
+                                    decrypted, session_id=session_id
+                                )
+                            elif inner_type == "use_worker_path":
+                                await self._handle_use_worker_path(
+                                    decrypted, session_id=session_id
+                                )
+                            elif inner_type == "fs_check_videos":
+                                await self._handle_fs_check_videos(
+                                    decrypted, session_id=session_id
+                                )
+                            elif inner_type == "job_assigned":
+                                await self._handle_job_assigned(
+                                    decrypted, session_id=session_id
+                                )
+                            elif inner_type == "job_cancel":
+                                self._handle_job_cancel(decrypted)
+                            else:
+                                logger.debug(
+                                    f"[E2E] Unknown decrypted type: {inner_type}"
+                                )
 
                     # ── Relay-forwarded requests from dashboard ──────────
                     elif msg_type == "fs_list_req":
