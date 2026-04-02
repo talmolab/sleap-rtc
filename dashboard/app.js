@@ -145,6 +145,12 @@ class SleapRTCDashboard {
 
         // Active job tracking
         this.activeJobs = new Map(); // jobId → job state
+
+        // E2E encryption state (per-session, cleared on page refresh)
+        this._e2eSessionId = null;
+        this._e2ePrivateKey = null;  // CryptoKey (P-256 ECDH)
+        this._e2eSharedKey = null;   // CryptoKey (AES-256-GCM)
+        this._e2eReady = false;
         this._workerPollInterval = null;
 
         this.init();
@@ -662,10 +668,25 @@ class SleapRTCDashboard {
         const url = `${CONFIG.RELAY_SERVER}/stream/${encodeURIComponent(channel)}`;
         const es = new EventSource(url);
         const handlers = {};
+        const dashboard = this;
 
-        es.onmessage = (event) => {
+        es.onmessage = async (event) => {
             let data;
             try { data = JSON.parse(event.data); } catch { return; }
+
+            // Handle encrypted relay messages — decrypt and re-dispatch
+            if (data.type === 'encrypted_relay') {
+                if (!dashboard._e2eReady || !dashboard._e2eSharedKey) {
+                    return; // No key yet, discard
+                }
+                if (data.session_id !== dashboard._e2eSessionId) {
+                    return; // Stale session, discard
+                }
+                const decrypted = await dashboard._e2eDecrypt(data.nonce, data.ciphertext);
+                if (!decrypted) return; // Decryption failed, discard silently
+                data = decrypted;
+            }
+
             const type = data.type;
             if (type && handlers[type]) handlers[type](data);
             if (handlers['*']) handlers['*'](data);
@@ -682,13 +703,173 @@ class SleapRTCDashboard {
         };
     }
 
+    // =========================================================================
+    // E2E Encryption for Relay Transport
+    // =========================================================================
+
+    async _e2eGenerateKeypair() {
+        const keyPair = await crypto.subtle.generateKey(
+            { name: 'ECDH', namedCurve: 'P-256' },
+            false, ['deriveBits']
+        );
+        const publicKeyRaw = await crypto.subtle.exportKey('raw', keyPair.publicKey);
+        return { privateKey: keyPair.privateKey, publicKeyRaw };
+    }
+
+    async _e2eDeriveKey(privateKey, peerPublicKeyRaw) {
+        const peerPublicKey = await crypto.subtle.importKey(
+            'raw', peerPublicKeyRaw,
+            { name: 'ECDH', namedCurve: 'P-256' },
+            false, []
+        );
+        const sharedBits = await crypto.subtle.deriveBits(
+            { name: 'ECDH', public: peerPublicKey },
+            privateKey, 256
+        );
+        const hkdfKey = await crypto.subtle.importKey(
+            'raw', sharedBits, 'HKDF', false, ['deriveKey']
+        );
+        return crypto.subtle.deriveKey(
+            {
+                name: 'HKDF',
+                hash: 'SHA-256',
+                salt: new Uint8Array(0),
+                info: new TextEncoder().encode('sleap-rtc-relay-e2e-v1'),
+            },
+            hkdfKey,
+            { name: 'AES-GCM', length: 256 },
+            false, ['encrypt', 'decrypt']
+        );
+    }
+
+    async _e2eEncrypt(payload) {
+        const nonce = crypto.getRandomValues(new Uint8Array(12));
+        const plaintext = new TextEncoder().encode(JSON.stringify(payload));
+        const ciphertext = new Uint8Array(await crypto.subtle.encrypt(
+            { name: 'AES-GCM', iv: nonce },
+            this._e2eSharedKey, plaintext
+        ));
+        return {
+            nonce: btoa(String.fromCharCode(...nonce)),
+            ciphertext: btoa(String.fromCharCode(...ciphertext)),
+        };
+    }
+
+    async _e2eDecrypt(nonceB64, ciphertextB64) {
+        try {
+            const nonceBin = atob(nonceB64);
+            const nonce = new Uint8Array(nonceBin.length);
+            for (let i = 0; i < nonceBin.length; i++) nonce[i] = nonceBin.charCodeAt(i);
+            const ctBin = atob(ciphertextB64);
+            const ct = new Uint8Array(ctBin.length);
+            for (let i = 0; i < ctBin.length; i++) ct[i] = ctBin.charCodeAt(i);
+            const plaintext = await crypto.subtle.decrypt(
+                { name: 'AES-GCM', iv: nonce },
+                this._e2eSharedKey, ct
+            );
+            return JSON.parse(new TextDecoder().decode(plaintext));
+        } catch (e) {
+            console.warn('[E2E] Decryption failed:', e.message);
+            return null;
+        }
+    }
+
+    async _e2eInitKeyExchange(peerId) {
+        this._e2eReady = false;
+        this._e2eSharedKey = null;
+        this._e2eSessionId = crypto.randomUUID();
+
+        const { privateKey, publicKeyRaw } = await this._e2eGenerateKeypair();
+        this._e2ePrivateKey = privateKey;
+
+        const pubBytes = new Uint8Array(publicKeyRaw);
+        const pubB64 = btoa(String.fromCharCode(...pubBytes))
+            .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+
+        const attempt = async () => {
+            return new Promise((resolve, reject) => {
+                const timeout = setTimeout(() => {
+                    reject(new Error('Key exchange timeout'));
+                }, 5000);
+
+                const originalHandler = this._sjWorkerSSE?.raw?.onmessage;
+                const wrappedHandler = async (event) => {
+                    let data;
+                    try { data = JSON.parse(event.data); } catch { return; }
+
+                    if (data.type === 'key_exchange_response' &&
+                        data.session_id === this._e2eSessionId) {
+                        clearTimeout(timeout);
+
+                        let workerPubB64 = data.public_key
+                            .replace(/-/g, '+').replace(/_/g, '/');
+                        while (workerPubB64.length % 4) workerPubB64 += '=';
+                        const workerPubBin = atob(workerPubB64);
+                        const workerPubBytes = new Uint8Array(workerPubBin.length);
+                        for (let i = 0; i < workerPubBin.length; i++)
+                            workerPubBytes[i] = workerPubBin.charCodeAt(i);
+
+                        try {
+                            this._e2eSharedKey = await this._e2eDeriveKey(
+                                this._e2ePrivateKey, workerPubBytes.buffer
+                            );
+                            this._e2eReady = true;
+                            console.log(`[E2E] Key exchange complete (session ${this._e2eSessionId.slice(0, 8)}...)`);
+                            resolve(true);
+                        } catch (e) {
+                            reject(e);
+                        }
+                    }
+
+                    if (originalHandler) originalHandler(event);
+                };
+
+                if (this._sjWorkerSSE?.raw) {
+                    this._sjWorkerSSE.raw.onmessage = wrappedHandler;
+                }
+
+                this.apiWorkerMessage(this._sjRoomId, peerId, {
+                    type: 'key_exchange',
+                    session_id: this._e2eSessionId,
+                    public_key: pubB64,
+                }).catch(reject);
+            });
+        };
+
+        for (let i = 0; i < 2; i++) {
+            try {
+                await attempt();
+                return true;
+            } catch (e) {
+                console.warn(`[E2E] Key exchange attempt ${i + 1} failed: ${e.message}`);
+                if (i === 0) continue;
+            }
+        }
+
+        console.error('[E2E] Key exchange failed after 2 attempts');
+        return false;
+    }
+
     /**
      * Forward an arbitrary message to a worker via the signaling server.
+     * If E2E encryption is active, the message is encrypted before sending.
      */
     async apiWorkerMessage(roomId, peerId, message) {
+        let outMessage = message;
+
+        if (this._e2eReady && this._e2eSharedKey && message.type !== 'key_exchange') {
+            const { nonce, ciphertext } = await this._e2eEncrypt(message);
+            outMessage = {
+                type: 'encrypted_relay',
+                session_id: this._e2eSessionId,
+                nonce,
+                ciphertext,
+            };
+        }
+
         return this.apiRequest('/api/worker/message', {
             method: 'POST',
-            body: JSON.stringify({ room_id: roomId, peer_id: peerId, message }),
+            body: JSON.stringify({ room_id: roomId, peer_id: peerId, message: outMessage }),
         });
     }
 
@@ -2490,7 +2671,7 @@ class SleapRTCDashboard {
         }
     }
 
-    sjGoToInferenceStep() {
+    async sjGoToInferenceStep() {
         // Hide all views
         ['sj-step1', 'sj-step2', 'sj-step3', 'sj-status'].forEach(id => {
             document.getElementById(id)?.classList.add('hidden');
@@ -2524,6 +2705,17 @@ class SleapRTCDashboard {
             .on('fs_list_res', (data) => this._sjHandleFsListRes(data))
             .on('worker_path_ok', (data) => this._sjHandlePathOk(data))
             .on('worker_path_error', (data) => this._sjHandlePathError(data));
+
+        // E2E key exchange with worker
+        const inferenceError = document.getElementById('sj-inference-error');
+        const e2eOk = await this._e2eInitKeyExchange(this._sjWorkerId);
+        if (!e2eOk) {
+            if (inferenceError) {
+                inferenceError.textContent = 'Could not establish secure connection with worker. The worker may need to be updated.';
+                inferenceError.classList.remove('hidden');
+            }
+            return;
+        }
 
         // Init icons
         const inferenceView = document.getElementById('sj-step-inference');
@@ -3434,6 +3626,18 @@ class SleapRTCDashboard {
                 .on('worker_path_ok', (data) => this._sjHandlePathOk(data))
                 .on('worker_path_error', (data) => this._sjHandlePathError(data))
                 .on('fs_check_videos_response', (data) => this._sjHandleVideoCheck(data));
+
+            // E2E key exchange with worker
+            const e2eOk = await this._e2eInitKeyExchange(this._sjWorkerId);
+            if (!e2eOk) {
+                document.getElementById('sj-browser-spinner')?.classList.add('hidden');
+                const errEl = document.getElementById('sj-browser-error');
+                if (errEl) {
+                    errEl.textContent = 'Could not establish secure connection with worker. The worker may need to be updated.';
+                    errEl.classList.remove('hidden');
+                }
+                return;
+            }
 
             // Re-fetch worker data to get fresh metadata (mounts may change after reconnection)
             await this.loadRoomWorkers(this._sjRoomId);
