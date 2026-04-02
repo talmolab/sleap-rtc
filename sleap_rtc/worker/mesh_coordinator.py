@@ -857,7 +857,9 @@ class MeshCoordinator:
             del self._e2e_sessions[sid]
             logger.debug(f"[E2E] Pruned expired session {sid[:8]}...")
 
-    def _decrypt_if_encrypted(self, data: Dict[str, Any]) -> tuple[Dict[str, Any], str | None]:
+    def _decrypt_if_encrypted(
+        self, data: Dict[str, Any]
+    ) -> tuple[Dict[str, Any], str | None]:
         """If the message is an encrypted relay envelope, decrypt it.
 
         Returns:
