@@ -338,7 +338,6 @@ class MeshCoordinator:
                     elif msg_type == "encrypted_relay":
                         decrypted, session_id = self._decrypt_if_encrypted(data)
                         if decrypted is not None:
-                            # Re-dispatch the decrypted inner message
                             inner_type = decrypted.get("type")
                             if inner_type == "fs_list_req":
                                 await self._handle_fs_list_req(
@@ -816,24 +815,17 @@ class MeshCoordinator:
             return
 
         try:
-            # Generate our ephemeral keypair
             private_key, our_pub_bytes = generate_keypair()
-
-            # Derive shared AES-256 key
             peer_pub_bytes = public_key_from_b64(peer_pub_b64)
             shared_key = derive_shared_key(private_key, peer_pub_bytes)
 
-            # Prune old sessions before adding new one
             self._prune_e2e_sessions()
-
-            # Store session key
             self._e2e_sessions[session_id] = (shared_key, time.time())
             logger.info(
                 f"[E2E] Key exchange complete for session {session_id[:8]}... "
                 f"({len(self._e2e_sessions)} active sessions)"
             )
 
-            # Send our public key back
             response = {
                 "type": "key_exchange_response",
                 "session_id": session_id,
@@ -859,12 +851,9 @@ class MeshCoordinator:
     def _decrypt_if_encrypted(self, data: Dict[str, Any]) -> tuple[Dict[str, Any], str | None]:
         """If the message is an encrypted relay envelope, decrypt it.
 
-        Args:
-            data: Incoming message dict.
-
         Returns:
             Tuple of (decrypted_data, session_id). If not encrypted, returns
-            (data, None) unchanged. If decryption fails, returns (None, None).
+            (data, None). If decryption fails, returns (None, None).
         """
         from sleap_rtc.encryption.envelope import ENCRYPTED_RELAY_TYPE, unwrap
 
@@ -872,7 +861,6 @@ class MeshCoordinator:
             return data, None
 
         session_id = data.get("session_id")
-        # Build key lookup from sessions dict (strip timestamps)
         key_lookup = {sid: key for sid, (key, _) in self._e2e_sessions.items()}
         decrypted = unwrap(data, key_lookup)
 
@@ -901,13 +889,7 @@ class MeshCoordinator:
         session_id: str | None = None,
         job_id: str | None = None,
     ):
-        """Send a relay response, encrypting if the request was encrypted.
-
-        Args:
-            message: The response message dict to send.
-            session_id: Session ID from the incoming request (None = plaintext).
-            job_id: Optional job_id for relay channel routing.
-        """
+        """Send a relay response, encrypting if the request was encrypted."""
         key = self._get_e2e_key_for_session(session_id)
         if key is not None:
             from sleap_rtc.encryption.envelope import wrap
