@@ -544,6 +544,8 @@ class MeshCoordinator:
         loop = asyncio.get_event_loop()
         e2e_session_id = session_id  # Capture for RelayChannel closure
 
+        job_type = config.get("type", "train")  # "train" or "track"
+
         class RelayChannel:
             """Shim that mimics RTCDataChannel.send() but routes through WebSocket."""
 
@@ -685,16 +687,18 @@ class MeshCoordinator:
                             "message": line,
                         }
                 else:
-                    # Catch-all for unrecognised text lines (e.g., inference
-                    # stdout output). Forward as running status with message
-                    # so they appear in the dashboard worker logs.
-                    line = message.rstrip("\n").strip()
-                    if line and not line.startswith("PROGRESS_REPORT::"):
-                        relay_msg = {
-                            **_base,
-                            "status": "running",
-                            "message": line,
-                        }
+                    # Catch-all for unrecognised text lines. Only forward for
+                    # inference/track jobs where stdout is the primary output.
+                    # Training jobs use PROGRESS_REPORT:: for epoch-level updates
+                    # and would flood the relay with config dumps, model arch, etc.
+                    if job_type == "track":
+                        line = message.rstrip("\n").strip()
+                        if line and not line.startswith("PROGRESS_REPORT::"):
+                            relay_msg = {
+                                **_base,
+                                "status": "running",
+                                "message": line,
+                            }
                 # (end of message routing)
 
                 if relay_msg:
