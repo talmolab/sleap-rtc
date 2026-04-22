@@ -835,8 +835,28 @@ class JobExecutor:
             predictions_exist = Path(predictions_path).exists()
             if process.returncode == 0 and predictions_exist:
                 logging.info(
-                    f"[INFERENCE] Complete — predictions at {predictions_path}"
+                    f"[INFERENCE] Complete — predictions at {predictions_path}; "
+                    f"streaming to client"
                 )
+                # Stream predictions to the client before signaling completion
+                # so that browser / remote PyQt clients that do not share a
+                # filesystem with the worker can still consume the results.
+                # INFERENCE_COMPLETE is the "all bytes delivered, ready to
+                # merge" trigger on the client side.
+                try:
+                    await self.worker.file_manager.send_file(
+                        channel, str(predictions_path)
+                    )
+                except Exception as e:
+                    logging.exception(
+                        f"[INFERENCE] Failed to stream predictions: {e}"
+                    )
+                    if channel.readyState == "open":
+                        channel.send(
+                            f'INFERENCE_FAILED::{{"error": "failed to stream predictions: {e}"}}'
+                        )
+                    return
+
                 if channel.readyState == "open":
                     channel.send(
                         f'INFERENCE_COMPLETE::{{"predictions_path": "{predictions_path}"}}'
