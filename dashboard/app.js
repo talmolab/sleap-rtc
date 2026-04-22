@@ -851,25 +851,46 @@ class SleapRTCDashboard {
     }
 
     /**
-     * Forward an arbitrary message to a worker via the signaling server.
-     * If E2E encryption is active, the message is encrypted before sending.
+     * Forward a message to a worker via the signaling server.
+     * Dispatches to the category-specific endpoint based on message type:
+     *   - key_exchange     → /api/worker/key  (plaintext bootstrap)
+     *   - job_assigned/cancel/stop → /api/worker/job (encrypted envelope)
+     *   - everything else  → /api/worker/fs  (encrypted envelope)
      */
     async apiWorkerMessage(roomId, peerId, message) {
-        let outMessage = message;
+        const msgType = message.type;
 
-        if (this._e2eReady && this._e2eSharedKey && message.type !== 'key_exchange') {
-            const { nonce, ciphertext } = await this._e2eEncrypt(message);
-            outMessage = {
-                type: 'encrypted_relay',
-                session_id: this._e2eSessionId,
-                nonce,
-                ciphertext,
-            };
+        // Plaintext key-exchange bootstrap — dedicated endpoint, nested shape
+        if (msgType === 'key_exchange') {
+            return this.apiRequest('/api/worker/key', {
+                method: 'POST',
+                body: JSON.stringify({ room_id: roomId, peer_id: peerId, message }),
+            });
         }
 
-        return this.apiRequest('/api/worker/message', {
+        // All other messages must be encrypted
+        if (!this._e2eReady || !this._e2eSharedKey) {
+            console.warn(`[relay] Dropping ${msgType} — E2E not ready`);
+            return;
+        }
+
+        const { nonce, ciphertext } = await this._e2eEncrypt(message);
+        const body = {
+            room_id: roomId,
+            peer_id: peerId,
+            session_id: this._e2eSessionId,
+            nonce,
+            ciphertext,
+        };
+
+        const isJob = msgType === 'job_assigned'
+            || msgType === 'job_cancel'
+            || msgType === 'job_stop';
+        const endpoint = isJob ? '/api/worker/job' : '/api/worker/fs';
+
+        return this.apiRequest(endpoint, {
             method: 'POST',
-            body: JSON.stringify({ room_id: roomId, peer_id: peerId, message: outMessage }),
+            body: JSON.stringify(body),
         });
     }
 
