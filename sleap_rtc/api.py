@@ -106,6 +106,169 @@ class JobError(Exception):
 
 
 # =============================================================================
+# Streamed file reception (Task 2 — Gap 1)
+# =============================================================================
+#
+# The worker streams predictions.slp back to the client over the data
+# channel using the bidirectional file-transfer protocol:
+#
+#     FILE_META::<filename>:<size>:<hint>   (string)
+#     <binary chunk 1>                      (bytes)
+#     <binary chunk 2>                      (bytes)
+#     ...
+#     END_OF_FILE                           (string)
+#     INFERENCE_COMPLETE::{"predictions_path": "<worker path>"}  (string)
+#
+# The state machine below captures the FILE_META + chunks + END_OF_FILE
+# sub-sequence and writes the bytes to a local temp file, so that the
+# GUI-path message handler in _run_training_async can substitute the
+# local path for the worker-side path in the INFERENCE_COMPLETE payload.
+
+
+class _StreamedFileReceiver:
+    """State machine for receiving FILE_META + bytes + END_OF_FILE.
+
+    Only the ``predictions.slp`` filename is retained for the caller; any
+    other filename is drained to a tempfile and then immediately unlinked.
+
+    This class is deliberately minimal (no logging, no retries, no
+    concurrent transfers). The worker is expected to stream files one at a
+    time over the inference channel.
+    """
+
+    def __init__(self) -> None:
+        # Info about the currently-in-flight transfer, or None.
+        # Keys: fh (open file handle), local_path (str), filename (str),
+        #       expected_size (int).
+        self._pending: dict | None = None
+        # Path of the most recently completed predictions.slp transfer,
+        # awaiting retrieval via take_predictions_path().
+        self._received_predictions_local_path: str | None = None
+
+    def handle_string(self, message: str) -> bool:
+        """Process a string message.
+
+        Returns True if the message was consumed by the file-transfer state
+        machine (caller should not forward it further); False otherwise.
+        """
+        import tempfile
+
+        if message.startswith("FILE_META::"):
+            # Format: FILE_META::<filename>:<size>:<hint>
+            _, meta = message.split("FILE_META::", 1)
+            parts = meta.split(":")
+            filename = parts[0] if parts else ""
+            try:
+                expected_size = int(parts[1]) if len(parts) > 1 else 0
+            except ValueError:
+                expected_size = 0
+
+            # If a prior transfer is somehow still open, close it defensively
+            # so we don't leak a file descriptor.
+            self._abort_pending()
+
+            suffix = ""
+            if "." in filename:
+                suffix = "." + filename.rsplit(".", 1)[-1]
+            try:
+                fh = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
+            except OSError:
+                logger.exception("Failed to open tempfile for streamed transfer")
+                return True
+            self._pending = {
+                "fh": fh,
+                "local_path": fh.name,
+                "filename": filename,
+                "expected_size": expected_size,
+            }
+            return True
+
+        if message == "END_OF_FILE":
+            if self._pending is None:
+                # Stray terminator with no active transfer — ignore.
+                return True
+            pending = self._pending
+            self._pending = None
+            try:
+                pending["fh"].close()
+            except OSError:
+                logger.exception("Error closing streamed transfer tempfile")
+
+            if pending["filename"] == "predictions.slp":
+                # Retain for the caller to consume via take_predictions_path().
+                self._received_predictions_local_path = pending["local_path"]
+            else:
+                # v1 only expects predictions.slp over this channel.
+                # Any other filename is a worker misbehavior; don't leave it
+                # lingering in /tmp.
+                try:
+                    import os
+
+                    os.unlink(pending["local_path"])
+                except OSError:
+                    pass
+            return True
+
+        return False
+
+    def handle_bytes(self, message: bytes) -> None:
+        """Process a binary message (a file chunk).
+
+        If no FILE_META has been received, the bytes are silently dropped —
+        this preserves the pre-Task-2 behavior where binary messages were
+        discarded.
+        """
+        if self._pending is None:
+            return
+        try:
+            self._pending["fh"].write(message)
+        except OSError:
+            logger.exception("Error writing streamed transfer chunk")
+
+    def take_predictions_path(self) -> str | None:
+        """Return and clear the local path of the most-recently-received
+        predictions.slp, or None if no transfer has completed since the
+        last call."""
+        path = self._received_predictions_local_path
+        self._received_predictions_local_path = None
+        return path
+
+    def _abort_pending(self) -> None:
+        """Close and unlink any in-flight transfer. Defensive — normally the
+        worker streams one file at a time."""
+        if self._pending is None:
+            return
+        pending = self._pending
+        self._pending = None
+        try:
+            pending["fh"].close()
+        except OSError:
+            pass
+        try:
+            import os
+
+            os.unlink(pending["local_path"])
+        except OSError:
+            pass
+
+
+def _apply_received_predictions_to_inference_data(
+    receiver: _StreamedFileReceiver, data: dict
+) -> None:
+    """Rewrite ``data['predictions_path']`` in-place to the local tempfile
+    path if the receiver has captured a streamed predictions.slp.
+
+    The original (worker-side) path is preserved as
+    ``data['worker_predictions_path']`` for v2 dual-mode fallback.
+    """
+    local_path = receiver.take_predictions_path()
+    if local_path is None:
+        return
+    data["worker_predictions_path"] = data.get("predictions_path")
+    data["predictions_path"] = local_path
+
+
+# =============================================================================
 # Data Classes
 # =============================================================================
 
@@ -1637,13 +1800,30 @@ async def _run_training_async(
 
             channel_open = asyncio.Event()
 
+            # State machine for incoming FILE_META/bytes/END_OF_FILE
+            # transfers (currently only the post-inference predictions.slp
+            # stream from the worker).
+            file_receiver = _StreamedFileReceiver()
+
             @data_channel.on("open")
             def on_open():
                 channel_open.set()
 
             @data_channel.on("message")
             async def on_message(message):
+                if isinstance(message, bytes):
+                    # Binary message — treat as a file-transfer chunk.
+                    # If no FILE_META is active, the receiver silently
+                    # drops the bytes (backward-compatible).
+                    file_receiver.handle_bytes(message)
+                    return
+
                 if isinstance(message, str):
+                    # File-transfer control messages (FILE_META, END_OF_FILE)
+                    # are consumed by the receiver and not forwarded.
+                    if file_receiver.handle_string(message):
+                        return
+
                     if (
                         message.startswith("PROGRESS_REPORT::")
                         and on_raw_progress is not None
@@ -1887,6 +2067,13 @@ async def _run_training_async(
                             data = json.loads(response.split("::", 1)[1])
                         except json.JSONDecodeError:
                             data = {}
+                        # If the worker streamed predictions.slp to us
+                        # (Task 1), replace the worker-side path with our
+                        # local temp path. The worker path is preserved
+                        # as worker_predictions_path for v2 dual-mode.
+                        _apply_received_predictions_to_inference_data(
+                            file_receiver, data
+                        )
                         on_inference_message("INFERENCE_COMPLETE", data)
                     break  # Terminal inference message — close channel
 
