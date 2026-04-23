@@ -13,6 +13,7 @@ Example usage:
 
 from __future__ import annotations
 
+import atexit
 import logging
 import os
 import tempfile
@@ -127,6 +128,60 @@ class JobError(Exception):
 # local path for the worker-side path in the INFERENCE_COMPLETE payload.
 
 
+# -----------------------------------------------------------------------------
+# Atexit safety net for temp prediction files (Task 3).
+#
+# _StreamedFileReceiver writes predictions.slp to a NamedTemporaryFile with
+# delete=False so the caller (SLEAP GUI dialog.py) can load, merge, and then
+# unlink. If the process exits abnormally between receive and caller-side
+# unlink, the tempfile would leak in /tmp. We register each successfully
+# received path in a module-level set and install an atexit handler that
+# deletes any still-tracked paths on exit. Callers should call
+# untrack_temp_prediction() once they have consumed and unlinked the file.
+# -----------------------------------------------------------------------------
+
+_temp_prediction_paths: set[str] = set()
+
+
+def _cleanup_temp_prediction_files() -> None:
+    """Atexit handler: delete any tracked temp prediction files.
+
+    Called when the process exits. Silently ignores missing files
+    (they were cleaned up by the caller, which is the happy path).
+    """
+    for p in list(_temp_prediction_paths):
+        try:
+            if os.path.exists(p):
+                os.unlink(p)
+        except OSError:
+            pass  # best-effort cleanup; nothing we can do at exit time
+        _temp_prediction_paths.discard(p)
+
+
+atexit.register(_cleanup_temp_prediction_files)
+
+
+def track_temp_prediction(path: str) -> None:
+    """Register a temp prediction file for atexit cleanup.
+
+    Used by `_StreamedFileReceiver` on successful predictions.slp
+    reception, so that if the caller never consumes the path or
+    fails to unlink it, the file is still removed at process exit.
+    """
+    _temp_prediction_paths.add(path)
+
+
+def untrack_temp_prediction(path: str) -> None:
+    """Deregister a temp prediction file from atexit cleanup.
+
+    Callers should invoke this after they have successfully consumed
+    the prediction file (e.g. after merging and unlinking in the
+    SLEAP GUI). Removes the path from the atexit tracking set.
+    Idempotent — safe to call on a path that was never tracked.
+    """
+    _temp_prediction_paths.discard(path)
+
+
 class _StreamedFileReceiver:
     """State machine for receiving FILE_META + bytes + END_OF_FILE.
 
@@ -237,6 +292,11 @@ class _StreamedFileReceiver:
             if pending["filename"] == "predictions.slp":
                 # Retain for the caller to consume via take_predictions_path().
                 self._received_predictions_local_path = pending["local_path"]
+                # Register for atexit cleanup so the file doesn't leak in
+                # /tmp if the process dies before the caller consumes and
+                # unlinks it. The caller (SLEAP GUI) is expected to call
+                # untrack_temp_prediction() after a successful merge.
+                track_temp_prediction(pending["local_path"])
                 logger.info(
                     f"Received predictions stream: {pending['local_path']} "
                     f"({pending['bytes_written']} bytes)"

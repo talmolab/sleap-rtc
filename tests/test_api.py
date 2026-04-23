@@ -1350,3 +1350,222 @@ class TestInferenceCompletePathRewrite:
 
         assert data == {"predictions_path": "/worker/path.slp"}
         assert "worker_predictions_path" not in data
+
+
+class TestTempPredictionAtexitCleanup:
+    """Task 3 — atexit safety net for temp prediction files.
+
+    Tests the module-level tracking set, track/untrack helpers, and the
+    atexit handler that deletes any still-tracked files on process exit.
+    Tests also verify _StreamedFileReceiver registers successful
+    predictions.slp transfers in the tracking set and does not register
+    failed transfers.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _isolate_tracking_set(self):
+        """Snapshot and restore the module-level tracking set around each test.
+
+        The tracking set is process-global; without isolation, tests can
+        pollute each other's state.
+        """
+        from sleap_rtc import api as api_mod
+
+        snapshot = set(api_mod._temp_prediction_paths)
+        api_mod._temp_prediction_paths.clear()
+        try:
+            yield
+        finally:
+            api_mod._temp_prediction_paths.clear()
+            api_mod._temp_prediction_paths.update(snapshot)
+
+    def test_track_registers_path_for_cleanup(self, tmp_path):
+        """Paths passed to track_temp_prediction are added to the tracking set."""
+        from sleap_rtc import api as api_mod
+        from sleap_rtc.api import track_temp_prediction, untrack_temp_prediction
+
+        target = tmp_path / "some_predictions.slp"
+        target.write_bytes(b"dummy")
+        path_str = str(target)
+
+        assert path_str not in api_mod._temp_prediction_paths
+        track_temp_prediction(path_str)
+        assert path_str in api_mod._temp_prediction_paths
+
+        untrack_temp_prediction(path_str)
+        assert path_str not in api_mod._temp_prediction_paths
+
+    def test_untrack_is_idempotent(self):
+        """untrack_temp_prediction on an untracked path is a no-op."""
+        from sleap_rtc import api as api_mod
+        from sleap_rtc.api import untrack_temp_prediction
+
+        # Never tracked — must not raise.
+        untrack_temp_prediction("/nonexistent/never_tracked.slp")
+        assert "/nonexistent/never_tracked.slp" not in api_mod._temp_prediction_paths
+
+        # Double untrack also safe.
+        untrack_temp_prediction("/nonexistent/never_tracked.slp")
+
+    def test_cleanup_deletes_tracked_files_and_clears_set(self, tmp_path):
+        """_cleanup_temp_prediction_files removes files from disk and empties the set."""
+        from sleap_rtc import api as api_mod
+        from sleap_rtc.api import (
+            _cleanup_temp_prediction_files,
+            track_temp_prediction,
+        )
+
+        f1 = tmp_path / "a.slp"
+        f2 = tmp_path / "b.slp"
+        f1.write_bytes(b"one")
+        f2.write_bytes(b"two")
+
+        track_temp_prediction(str(f1))
+        track_temp_prediction(str(f2))
+        assert str(f1) in api_mod._temp_prediction_paths
+        assert str(f2) in api_mod._temp_prediction_paths
+
+        _cleanup_temp_prediction_files()
+
+        assert not f1.exists()
+        assert not f2.exists()
+        assert str(f1) not in api_mod._temp_prediction_paths
+        assert str(f2) not in api_mod._temp_prediction_paths
+
+    def test_cleanup_silently_ignores_missing_files(self, tmp_path):
+        """If a tracked file was already deleted (by the caller), cleanup doesn't raise."""
+        from sleap_rtc import api as api_mod
+        from sleap_rtc.api import (
+            _cleanup_temp_prediction_files,
+            track_temp_prediction,
+        )
+
+        f = tmp_path / "already_gone.slp"
+        f.write_bytes(b"x")
+        path_str = str(f)
+        track_temp_prediction(path_str)
+
+        # Caller already unlinked the file — happy path.
+        os.unlink(path_str)
+        assert not os.path.exists(path_str)
+
+        # Must not raise.
+        _cleanup_temp_prediction_files()
+
+        assert path_str not in api_mod._temp_prediction_paths
+
+    def test_cleanup_tolerates_os_error_on_unlink(self, tmp_path):
+        """If os.unlink raises OSError during cleanup, we swallow it and still
+        clear the set (best-effort at exit time)."""
+        from sleap_rtc import api as api_mod
+        from sleap_rtc.api import (
+            _cleanup_temp_prediction_files,
+            track_temp_prediction,
+        )
+
+        f = tmp_path / "c.slp"
+        f.write_bytes(b"z")
+        path_str = str(f)
+        track_temp_prediction(path_str)
+
+        with patch(
+            "sleap_rtc.api.os.unlink", side_effect=OSError("permission denied")
+        ):
+            # Must not raise.
+            _cleanup_temp_prediction_files()
+
+        assert path_str not in api_mod._temp_prediction_paths
+
+    def test_receiver_tracks_successful_predictions_path(self, tmp_path):
+        """_StreamedFileReceiver.handle_string tracks the path on successful END_OF_FILE."""
+        from sleap_rtc import api as api_mod
+        from sleap_rtc.api import _StreamedFileReceiver
+
+        receiver = _StreamedFileReceiver()
+        receiver.handle_string("FILE_META::predictions.slp:5:/worker/out")
+        receiver.handle_bytes(b"hello")
+        receiver.handle_string("END_OF_FILE")
+
+        # Path exposed to the caller should also be registered in the
+        # atexit tracking set — take_predictions_path does NOT untrack.
+        local_path = receiver._received_predictions_local_path
+        assert local_path is not None
+        assert local_path in api_mod._temp_prediction_paths
+
+        # take_predictions_path consumes the receiver's field but does
+        # NOT remove the path from the tracking set.
+        consumed = receiver.take_predictions_path()
+        assert consumed == local_path
+        assert local_path in api_mod._temp_prediction_paths
+
+        # Cleanup for the test.
+        os.unlink(local_path)
+
+    def test_receiver_does_not_track_non_predictions_filename(self, tmp_path):
+        """Files streamed under a non-predictions.slp filename are unlinked
+        immediately on END_OF_FILE and must NOT be added to the tracking set."""
+        from sleap_rtc import api as api_mod
+        from sleap_rtc.api import _StreamedFileReceiver
+
+        before = set(api_mod._temp_prediction_paths)
+        receiver = _StreamedFileReceiver()
+        receiver.handle_string("FILE_META::other.txt:4:/tmp")
+        receiver.handle_bytes(b"data")
+        receiver.handle_string("END_OF_FILE")
+
+        assert api_mod._temp_prediction_paths == before
+
+    def test_receiver_does_not_track_malformed_file_meta(self):
+        """Malformed FILE_META (no size) must not register anything."""
+        from sleap_rtc import api as api_mod
+        from sleap_rtc.api import _StreamedFileReceiver
+
+        before = set(api_mod._temp_prediction_paths)
+        receiver = _StreamedFileReceiver()
+        receiver.handle_string("FILE_META::predictions.slp")
+        receiver.handle_bytes(b"some bytes")
+        receiver.handle_string("END_OF_FILE")
+
+        assert api_mod._temp_prediction_paths == before
+
+    def test_receiver_does_not_track_close_failure(self):
+        """If close() raises OSError on END_OF_FILE, the partial file is
+        unlinked in the failure path and must NOT be added to tracking."""
+        from sleap_rtc import api as api_mod
+        from sleap_rtc.api import _StreamedFileReceiver
+
+        before = set(api_mod._temp_prediction_paths)
+        receiver = _StreamedFileReceiver()
+        receiver.handle_string("FILE_META::predictions.slp:5:/worker/out")
+        receiver.handle_bytes(b"partial")
+
+        pending = receiver._pending
+        assert pending is not None
+        local_path = pending["local_path"]
+        pending["fh"].flush()
+        fake_fh = MagicMock()
+        fake_fh.close.side_effect = OSError("close blew up")
+        pending["fh"] = fake_fh
+
+        receiver.handle_string("END_OF_FILE")
+
+        assert api_mod._temp_prediction_paths == before
+        assert local_path not in api_mod._temp_prediction_paths
+
+    def test_receiver_does_not_track_tempfile_open_failure(self):
+        """If tempfile.NamedTemporaryFile raises, no path is created and
+        nothing is added to the tracking set."""
+        from sleap_rtc import api as api_mod
+        from sleap_rtc.api import _StreamedFileReceiver
+
+        before = set(api_mod._temp_prediction_paths)
+        receiver = _StreamedFileReceiver()
+        with patch(
+            "sleap_rtc.api.tempfile.NamedTemporaryFile",
+            side_effect=OSError("disk full"),
+        ):
+            receiver.handle_string("FILE_META::predictions.slp:5:/worker/out")
+            receiver.handle_bytes(b"hello")
+            receiver.handle_string("END_OF_FILE")
+
+        assert api_mod._temp_prediction_paths == before
