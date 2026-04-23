@@ -14,6 +14,8 @@ Example usage:
 from __future__ import annotations
 
 import logging
+import os
+import tempfile
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -139,11 +141,19 @@ class _StreamedFileReceiver:
     def __init__(self) -> None:
         # Info about the currently-in-flight transfer, or None.
         # Keys: fh (open file handle), local_path (str), filename (str),
-        #       expected_size (int).
+        #       expected_size (int), bytes_written (int).
         self._pending: dict | None = None
         # Path of the most recently completed predictions.slp transfer,
         # awaiting retrieval via take_predictions_path().
         self._received_predictions_local_path: str | None = None
+        # Sticky failure flag for the most recent transfer attempt; consumed
+        # by take_transfer_error(). Set on tempfile-open failure, malformed
+        # FILE_META, or close() failure during END_OF_FILE. Cleared on a
+        # successful FILE_META → tempfile open.
+        self._transfer_failed_reason: str | None = None
+        # One-shot rate limit for "dropped bytes" warnings. Reset on every
+        # FILE_META so a later failed transfer can log once.
+        self._warned_on_dropped_bytes: bool = False
 
     def handle_string(self, message: str) -> bool:
         """Process a string message.
@@ -151,35 +161,54 @@ class _StreamedFileReceiver:
         Returns True if the message was consumed by the file-transfer state
         machine (caller should not forward it further); False otherwise.
         """
-        import tempfile
-
         if message.startswith("FILE_META::"):
             # Format: FILE_META::<filename>:<size>:<hint>
             _, meta = message.split("FILE_META::", 1)
             parts = meta.split(":")
             filename = parts[0] if parts else ""
-            try:
-                expected_size = int(parts[1]) if len(parts) > 1 else 0
-            except ValueError:
-                expected_size = 0
 
             # If a prior transfer is somehow still open, close it defensively
             # so we don't leak a file descriptor.
             self._abort_pending()
+            # New transfer — reset the one-shot dropped-bytes warning.
+            self._warned_on_dropped_bytes = False
 
-            suffix = ""
-            if "." in filename:
-                suffix = "." + filename.rsplit(".", 1)[-1]
+            # Malformed FILE_META (missing size subfield) is an explicit
+            # failure: we can't safely complete the transfer, so don't even
+            # open a tempfile. Any bytes that follow drop silently (with a
+            # rate-limited warning). END_OF_FILE will find _pending is None
+            # and do nothing.
+            if len(parts) < 2:
+                self._transfer_failed_reason = (
+                    f"malformed FILE_META for {filename!r}: missing size field"
+                )
+                return True
+            try:
+                expected_size = int(parts[1])
+            except ValueError:
+                self._transfer_failed_reason = (
+                    f"malformed FILE_META for {filename!r}: "
+                    f"non-integer size {parts[1]!r}"
+                )
+                return True
+
+            suffix = os.path.splitext(filename)[1]
             try:
                 fh = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
-            except OSError:
+            except OSError as exc:
                 logger.exception("Failed to open tempfile for streamed transfer")
+                self._transfer_failed_reason = (
+                    f"failed to open tempfile for {filename}: {exc}"
+                )
                 return True
+            # Successful open — clear any sticky failure from a prior attempt.
+            self._transfer_failed_reason = None
             self._pending = {
                 "fh": fh,
                 "local_path": fh.name,
                 "filename": filename,
                 "expected_size": expected_size,
+                "bytes_written": 0,
             }
             return True
 
@@ -191,19 +220,32 @@ class _StreamedFileReceiver:
             self._pending = None
             try:
                 pending["fh"].close()
-            except OSError:
-                logger.exception("Error closing streamed transfer tempfile")
+            except OSError as exc:
+                logger.warning(f"Error closing streamed transfer: {exc}")
+                self._transfer_failed_reason = (
+                    f"close failed for {pending['filename']}: {exc}"
+                )
+                # Attempt to remove the partial file; best-effort.
+                try:
+                    os.unlink(pending["local_path"])
+                except OSError:
+                    logger.exception(
+                        f"Could not remove partial tempfile {pending['local_path']}"
+                    )
+                return True
 
             if pending["filename"] == "predictions.slp":
                 # Retain for the caller to consume via take_predictions_path().
                 self._received_predictions_local_path = pending["local_path"]
+                logger.info(
+                    f"Received predictions stream: {pending['local_path']} "
+                    f"({pending['bytes_written']} bytes)"
+                )
             else:
                 # v1 only expects predictions.slp over this channel.
                 # Any other filename is a worker misbehavior; don't leave it
                 # lingering in /tmp.
                 try:
-                    import os
-
                     os.unlink(pending["local_path"])
                 except OSError:
                     pass
@@ -214,14 +256,23 @@ class _StreamedFileReceiver:
     def handle_bytes(self, message: bytes) -> None:
         """Process a binary message (a file chunk).
 
-        If no FILE_META has been received, the bytes are silently dropped —
-        this preserves the pre-Task-2 behavior where binary messages were
-        discarded.
+        If no FILE_META has been received (or the transfer failed to open),
+        the bytes are dropped. A single WARNING is logged per failed
+        transfer to avoid spamming logs with per-chunk messages.
         """
         if self._pending is None:
+            if (
+                self._transfer_failed_reason is not None
+                and not self._warned_on_dropped_bytes
+            ):
+                logger.warning(
+                    f"Dropping streamed bytes: {self._transfer_failed_reason}"
+                )
+                self._warned_on_dropped_bytes = True
             return
         try:
             self._pending["fh"].write(message)
+            self._pending["bytes_written"] += len(message)
         except OSError:
             logger.exception("Error writing streamed transfer chunk")
 
@@ -232,6 +283,14 @@ class _StreamedFileReceiver:
         path = self._received_predictions_local_path
         self._received_predictions_local_path = None
         return path
+
+    def take_transfer_error(self) -> str | None:
+        """Return and clear the most recent transfer failure reason, or
+        None if the last transfer attempt succeeded (or no transfer has
+        been attempted). Consumed-once, like take_predictions_path()."""
+        reason = self._transfer_failed_reason
+        self._transfer_failed_reason = None
+        return reason
 
     def _abort_pending(self) -> None:
         """Close and unlink any in-flight transfer. Defensive — normally the
@@ -245,8 +304,6 @@ class _StreamedFileReceiver:
         except OSError:
             pass
         try:
-            import os
-
             os.unlink(pending["local_path"])
         except OSError:
             pass
@@ -260,9 +317,21 @@ def _apply_received_predictions_to_inference_data(
 
     The original (worker-side) path is preserved as
     ``data['worker_predictions_path']`` for v2 dual-mode fallback.
+
+    If the local stream failed (tempfile open failed, close failed, or
+    malformed FILE_META), we log a warning and leave ``predictions_path``
+    as the worker-side path so downstream code can fall back to it.
     """
     local_path = receiver.take_predictions_path()
     if local_path is None:
+        # Surface any latched transfer failure so callers know the local
+        # stream was attempted but did not complete.
+        error = receiver.take_transfer_error()
+        if error is not None:
+            logger.warning(
+                f"Predictions stream was not received locally: {error}; "
+                f"falling back to worker-side path"
+            )
         return
     data["worker_predictions_path"] = data.get("predictions_path")
     data["predictions_path"] = local_path

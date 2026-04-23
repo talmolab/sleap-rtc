@@ -1170,19 +1170,35 @@ class TestStreamedFileReceiver:
         receiver.handle_string("END_OF_FILE")
         assert receiver.take_predictions_path() is None
 
-    def test_malformed_file_meta_does_not_crash(self):
-        """FILE_META with missing size field should not crash; receiver
-        should either open a tempfile with zero expected size or skip."""
+    def test_malformed_file_meta_exposes_transfer_error_and_no_predictions_path(
+        self,
+    ):
+        """FILE_META missing the size field is an explicit failure.
+
+        The receiver must:
+         - not open a tempfile or set _pending
+         - expose a non-empty `take_transfer_error()` string
+         - drop subsequent bytes silently (no crash)
+         - leave `take_predictions_path()` returning None
+        A subsequent well-formed transfer must still work and the error
+        flag must have been consumed by the `take_transfer_error()` call.
+        """
         from sleap_rtc.api import _StreamedFileReceiver
 
         receiver = _StreamedFileReceiver()
-        # Malformed — only filename, no size.
+        # Malformed — only filename, no size subfield.
         receiver.handle_string("FILE_META::predictions.slp")
         # Any bytes that follow should not cause AttributeError or similar.
         receiver.handle_bytes(b"some bytes")
+        # END_OF_FILE arrives with no active _pending — must not crash.
         receiver.handle_string("END_OF_FILE")
-        # The behavior here is implementation-defined; the key contract is
-        # "doesn't crash, doesn't corrupt future transfers."
+
+        assert receiver.take_predictions_path() is None
+        error = receiver.take_transfer_error()
+        assert error is not None and error != ""
+        # take_transfer_error consumes the flag.
+        assert receiver.take_transfer_error() is None
+
         # A subsequent well-formed transfer must still work:
         receiver.handle_string("FILE_META::predictions.slp:3:/tmp")
         receiver.handle_bytes(b"abc")
@@ -1192,7 +1208,92 @@ class TestStreamedFileReceiver:
         assert os.path.exists(local_path)
         with open(local_path, "rb") as f:
             assert f.read() == b"abc"
+        # No error on the successful transfer.
+        assert receiver.take_transfer_error() is None
         os.unlink(local_path)
+
+    def test_tempfile_open_failure_sets_transfer_error_and_falls_back_to_worker_path(
+        self,
+    ):
+        """If tempfile.NamedTemporaryFile raises OSError (e.g., disk full),
+        the receiver must:
+         - not retain a predictions path (take_predictions_path() → None)
+         - expose a non-empty `take_transfer_error()` string
+        And `_apply_received_predictions_to_inference_data` must NOT
+        substitute `data['predictions_path']` with a local path in that
+        case — the worker-side path is kept as the fallback.
+        """
+        from sleap_rtc.api import (
+            _StreamedFileReceiver,
+            _apply_received_predictions_to_inference_data,
+        )
+
+        receiver = _StreamedFileReceiver()
+
+        with patch(
+            "sleap_rtc.api.tempfile.NamedTemporaryFile",
+            side_effect=OSError("disk full"),
+        ):
+            receiver.handle_string("FILE_META::predictions.slp:5:/worker/out")
+            # Subsequent bytes must drop silently (no crash, no retained data).
+            receiver.handle_bytes(b"hello")
+            receiver.handle_string("END_OF_FILE")
+
+        assert receiver.take_predictions_path() is None
+        error = receiver.take_transfer_error()
+        assert error is not None and error != ""
+        # take_transfer_error consumes.
+        assert receiver.take_transfer_error() is None
+
+        # But re-run with a receiver that has a latched failure to verify
+        # that _apply_received_predictions_to_inference_data leaves the
+        # worker-side path alone when the stream failed to open.
+        receiver2 = _StreamedFileReceiver()
+        with patch(
+            "sleap_rtc.api.tempfile.NamedTemporaryFile",
+            side_effect=OSError("disk full"),
+        ):
+            receiver2.handle_string("FILE_META::predictions.slp:5:/worker/out")
+
+        data = {"predictions_path": "/worker/path.slp"}
+        _apply_received_predictions_to_inference_data(receiver2, data)
+
+        # Worker-side path preserved; no substitution.
+        assert data["predictions_path"] == "/worker/path.slp"
+        assert "worker_predictions_path" not in data
+
+    def test_close_failure_on_end_of_file_aborts_retention(self, tmp_path):
+        """If the file handle's close() raises OSError during END_OF_FILE
+        handling, the receiver must:
+         - NOT retain `_received_predictions_local_path` (partial file!)
+         - expose a non-empty `take_transfer_error()` string
+         - attempt to unlink the partial tempfile
+        """
+        from sleap_rtc.api import _StreamedFileReceiver
+
+        receiver = _StreamedFileReceiver()
+        receiver.handle_string("FILE_META::predictions.slp:5:/worker/out")
+        receiver.handle_bytes(b"partial")
+
+        # Monkey-patch the open file handle's close() to raise OSError.
+        pending = receiver._pending
+        assert pending is not None
+        local_path = pending["local_path"]
+        # Close the real fh first so the tempfile object is flushed, then
+        # swap in a fake that raises on close.
+        pending["fh"].flush()
+        fake_fh = MagicMock()
+        fake_fh.close.side_effect = OSError("close blew up")
+        pending["fh"] = fake_fh
+
+        receiver.handle_string("END_OF_FILE")
+
+        assert receiver.take_predictions_path() is None
+        error = receiver.take_transfer_error()
+        assert error is not None and error != ""
+
+        # Partial file should have been unlinked.
+        assert not os.path.exists(local_path)
 
 
 class TestInferenceCompletePathRewrite:
