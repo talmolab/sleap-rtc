@@ -7,6 +7,7 @@ file to the client over the RTC data channel before signalling
 """
 
 import json
+import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -100,9 +101,9 @@ async def test_run_inference_streams_predictions_before_complete(tmp_path):
         for entry in call_order
         if entry.startswith("channel.send:INFERENCE_COMPLETE::")
     ]
-    assert len(inf_complete_msgs) == 1, (
-        f"Exactly one INFERENCE_COMPLETE expected; call_order={call_order!r}"
-    )
+    assert (
+        len(inf_complete_msgs) == 1
+    ), f"Exactly one INFERENCE_COMPLETE expected; call_order={call_order!r}"
 
     # 3. send_file was awaited BEFORE INFERENCE_COMPLETE was sent.
     send_file_idx = call_order.index("send_file")
@@ -197,9 +198,9 @@ async def test_inference_failed_with_quote_in_error_is_valid_json(tmp_path):
         if isinstance(call.args[0], str)
         and call.args[0].startswith("INFERENCE_FAILED::")
     ]
-    assert len(failed_calls) == 1, (
-        f"Expected exactly one INFERENCE_FAILED; got {failed_calls!r}"
-    )
+    assert (
+        len(failed_calls) == 1
+    ), f"Expected exactly one INFERENCE_FAILED; got {failed_calls!r}"
 
     payload_str = failed_calls[0].split("::", 1)[1]
     # MUST be parseable as JSON — this assertion is the whole point of the test.
@@ -209,6 +210,16 @@ async def test_inference_failed_with_quote_in_error_is_valid_json(tmp_path):
     assert "with quote" in payload["error"]
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason=(
+        "Windows reserves '\"' as an invalid filename character "
+        '(NTFS / FAT disallow < > : " | ? * in filenames), so we cannot '
+        "create a real file at this path on Windows. The fix being verified "
+        "(json.dumps safety) is platform-independent and is exercised by the "
+        "macOS and Linux runs."
+    ),
+)
 @pytest.mark.asyncio
 async def test_inference_complete_with_quote_in_path_is_valid_json(tmp_path):
     """Same property for INFERENCE_COMPLETE — the predictions_path field
