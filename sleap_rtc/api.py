@@ -13,7 +13,10 @@ Example usage:
 
 from __future__ import annotations
 
+import atexit
 import logging
+import os
+import tempfile
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -103,6 +106,324 @@ class JobError(Exception):
         super().__init__(message)
         self.job_id = job_id
         self.exit_code = exit_code
+
+
+# =============================================================================
+# Streamed file reception (Task 2 — Gap 1)
+# =============================================================================
+#
+# The worker streams predictions.slp back to the client over the data
+# channel using the bidirectional file-transfer protocol:
+#
+#     FILE_META::<filename>:<size>:<hint>   (string)
+#     <binary chunk 1>                      (bytes)
+#     <binary chunk 2>                      (bytes)
+#     ...
+#     END_OF_FILE                           (string)
+#     INFERENCE_COMPLETE::{"predictions_path": "<worker path>"}  (string)
+#
+# The state machine below captures the FILE_META + chunks + END_OF_FILE
+# sub-sequence and writes the bytes to a local temp file, so that the
+# GUI-path message handler in _run_training_async can substitute the
+# local path for the worker-side path in the INFERENCE_COMPLETE payload.
+
+
+# -----------------------------------------------------------------------------
+# Atexit safety net for temp prediction files (Task 3).
+#
+# _StreamedFileReceiver writes predictions.slp to a NamedTemporaryFile with
+# delete=False so the caller (SLEAP GUI dialog.py) can load, merge, and then
+# unlink. If the process exits abnormally between receive and caller-side
+# unlink, the tempfile would leak in /tmp. We register each successfully
+# received path in a module-level set and install an atexit handler that
+# deletes any still-tracked paths on exit. Callers should call
+# untrack_temp_prediction() once they have consumed and unlinked the file.
+# -----------------------------------------------------------------------------
+
+_temp_prediction_paths: set[str] = set()
+
+
+def _cleanup_temp_prediction_files() -> None:
+    """Atexit handler: delete any tracked temp prediction files.
+
+    Called when the process exits. Silently ignores missing files
+    (they were cleaned up by the caller, which is the happy path).
+    """
+    for p in list(_temp_prediction_paths):
+        try:
+            if os.path.exists(p):
+                os.unlink(p)
+        except OSError:
+            pass  # best-effort cleanup; nothing we can do at exit time
+        _temp_prediction_paths.discard(p)
+
+
+atexit.register(_cleanup_temp_prediction_files)
+
+
+def track_temp_prediction(path: str) -> None:
+    """Register a temp prediction file for atexit cleanup.
+
+    Used by `_StreamedFileReceiver` on successful predictions.slp
+    reception, so that if the caller never consumes the path or
+    fails to unlink it, the file is still removed at process exit.
+    """
+    _temp_prediction_paths.add(path)
+
+
+def untrack_temp_prediction(path: str) -> None:
+    """Deregister a temp prediction file from atexit cleanup.
+
+    Callers should invoke this after they have successfully consumed
+    the prediction file (e.g. after merging and unlinking in the
+    SLEAP GUI). Removes the path from the atexit tracking set.
+    Idempotent — safe to call on a path that was never tracked.
+    """
+    _temp_prediction_paths.discard(path)
+
+
+class _StreamedFileReceiver:
+    """State machine for receiving FILE_META + bytes + END_OF_FILE.
+
+    Only the ``predictions.slp`` filename is retained for the caller; any
+    other filename is drained to a tempfile and then immediately unlinked.
+
+    This class is deliberately minimal (no logging, no retries, no
+    concurrent transfers). The worker is expected to stream files one at a
+    time over the inference channel.
+    """
+
+    def __init__(self) -> None:
+        # Info about the currently-in-flight transfer, or None.
+        # Keys: fh (open file handle), local_path (str), filename (str),
+        #       expected_size (int), bytes_written (int).
+        self._pending: dict | None = None
+        # Path of the most recently completed predictions.slp transfer,
+        # awaiting retrieval via take_predictions_path().
+        self._received_predictions_local_path: str | None = None
+        # Sticky failure flag for the most recent transfer attempt; consumed
+        # by take_transfer_error(). Set on tempfile-open failure, malformed
+        # FILE_META, or close() failure during END_OF_FILE. Cleared on a
+        # successful FILE_META → tempfile open.
+        self._transfer_failed_reason: str | None = None
+        # One-shot rate limit for "dropped bytes" warnings. Reset on every
+        # FILE_META so a later failed transfer can log once.
+        self._warned_on_dropped_bytes: bool = False
+
+    def handle_string(self, message: str) -> bool:
+        """Process a string message.
+
+        Returns True if the message was consumed by the file-transfer state
+        machine (caller should not forward it further); False otherwise.
+        """
+        if message.startswith("FILE_META::"):
+            # Format: FILE_META::<filename>:<size>:<hint>
+            _, meta = message.split("FILE_META::", 1)
+            parts = meta.split(":")
+            filename = parts[0] if parts else ""
+
+            # If a prior transfer is somehow still open, close it defensively
+            # so we don't leak a file descriptor.
+            self._abort_pending()
+            # New transfer — reset the one-shot dropped-bytes warning.
+            self._warned_on_dropped_bytes = False
+
+            # Malformed FILE_META (missing size subfield) is an explicit
+            # failure: we can't safely complete the transfer, so don't even
+            # open a tempfile. Any bytes that follow drop silently (with a
+            # rate-limited warning). END_OF_FILE will find _pending is None
+            # and do nothing.
+            if len(parts) < 2:
+                self._transfer_failed_reason = (
+                    f"malformed FILE_META for {filename!r}: missing size field"
+                )
+                return True
+            try:
+                expected_size = int(parts[1])
+            except ValueError:
+                self._transfer_failed_reason = (
+                    f"malformed FILE_META for {filename!r}: "
+                    f"non-integer size {parts[1]!r}"
+                )
+                return True
+
+            suffix = os.path.splitext(filename)[1]
+            try:
+                fh = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
+            except OSError as exc:
+                logger.exception("Failed to open tempfile for streamed transfer")
+                self._transfer_failed_reason = (
+                    f"failed to open tempfile for {filename}: {exc}"
+                )
+                return True
+            # Successful open — clear any sticky failure from a prior attempt.
+            self._transfer_failed_reason = None
+            self._pending = {
+                "fh": fh,
+                "local_path": fh.name,
+                "filename": filename,
+                "expected_size": expected_size,
+                "bytes_written": 0,
+            }
+            return True
+
+        if message == "END_OF_FILE":
+            if self._pending is None:
+                # Stray terminator with no active transfer — ignore.
+                return True
+            pending = self._pending
+            self._pending = None
+            try:
+                pending["fh"].close()
+            except OSError as exc:
+                logger.warning(f"Error closing streamed transfer: {exc}")
+                self._transfer_failed_reason = (
+                    f"close failed for {pending['filename']}: {exc}"
+                )
+                # Attempt to remove the partial file; best-effort.
+                try:
+                    os.unlink(pending["local_path"])
+                except OSError:
+                    logger.exception(
+                        f"Could not remove partial tempfile {pending['local_path']}"
+                    )
+                return True
+
+            if pending["filename"].endswith("predictions.slp"):
+                # Retain for the caller to consume via take_predictions_path().
+                # Worker constructs the output filename as
+                # ``<input_data_path>.predictions.slp`` (job_executor builds
+                # this), so the basename is e.g.
+                # ``resolved_20260427_labels.v003.predictions.slp``, NOT the
+                # bare string ``predictions.slp``. Match by suffix (without a
+                # leading dot, so the bare ``predictions.slp`` literal also
+                # matches) rather than equality.
+                self._received_predictions_local_path = pending["local_path"]
+                # Register for atexit cleanup so the file doesn't leak in
+                # /tmp if the process dies before the caller consumes and
+                # unlinks it. The caller (SLEAP GUI) is expected to call
+                # untrack_temp_prediction() after a successful merge.
+                track_temp_prediction(pending["local_path"])
+                logger.info(
+                    f"Received predictions stream: {pending['local_path']} "
+                    f"({pending['bytes_written']} bytes)"
+                )
+            else:
+                # v1 only expects ``[*.]predictions.slp`` over this channel.
+                # Any other filename is a worker misbehavior; don't leave it
+                # lingering in /tmp.
+                try:
+                    os.unlink(pending["local_path"])
+                except OSError:
+                    pass
+            return True
+
+        return False
+
+    def handle_bytes(self, message: bytes) -> None:
+        """Process a binary message (a file chunk).
+
+        If no FILE_META has been received (or the transfer failed to open),
+        the bytes are dropped. A single WARNING is logged per failed
+        transfer to avoid spamming logs with per-chunk messages.
+        """
+        if self._pending is None:
+            if (
+                self._transfer_failed_reason is not None
+                and not self._warned_on_dropped_bytes
+            ):
+                logger.warning(
+                    f"Dropping streamed bytes: {self._transfer_failed_reason}"
+                )
+                self._warned_on_dropped_bytes = True
+            return
+        try:
+            self._pending["fh"].write(message)
+            self._pending["bytes_written"] += len(message)
+        except OSError as exc:
+            pending = self._pending
+            self._pending = None
+            logger.warning(
+                f"Error writing streamed transfer chunk for "
+                f"{pending['filename']}: {exc}"
+            )
+            self._transfer_failed_reason = (
+                f"write failed for {pending['filename']}: {exc}"
+            )
+            # Close + unlink the partial tempfile; best-effort.
+            try:
+                pending["fh"].close()
+            except OSError:
+                pass
+            try:
+                os.unlink(pending["local_path"])
+            except OSError:
+                logger.exception(
+                    f"Could not remove partial tempfile {pending['local_path']}"
+                )
+
+    def take_predictions_path(self) -> str | None:
+        """Return and clear the local path of the most-recently-received
+        predictions.slp, or None if no transfer has completed since the
+        last call.
+        """
+        path = self._received_predictions_local_path
+        self._received_predictions_local_path = None
+        return path
+
+    def take_transfer_error(self) -> str | None:
+        """Return and clear the most recent transfer failure reason, or
+        None if the last transfer attempt succeeded (or no transfer has
+        been attempted). Consumed-once, like take_predictions_path().
+        """
+        reason = self._transfer_failed_reason
+        self._transfer_failed_reason = None
+        return reason
+
+    def _abort_pending(self) -> None:
+        """Close and unlink any in-flight transfer. Defensive — normally the
+        worker streams one file at a time.
+        """
+        if self._pending is None:
+            return
+        pending = self._pending
+        self._pending = None
+        try:
+            pending["fh"].close()
+        except OSError:
+            pass
+        try:
+            os.unlink(pending["local_path"])
+        except OSError:
+            pass
+
+
+def _apply_received_predictions_to_inference_data(
+    receiver: _StreamedFileReceiver, data: dict
+) -> None:
+    """Rewrite ``data['predictions_path']`` in-place to the local tempfile
+    path if the receiver has captured a streamed predictions.slp.
+
+    The original (worker-side) path is preserved as
+    ``data['worker_predictions_path']`` for v2 dual-mode fallback.
+
+    If the local stream failed (tempfile open failed, close failed, or
+    malformed FILE_META), we log a warning and leave ``predictions_path``
+    as the worker-side path so downstream code can fall back to it.
+    """
+    local_path = receiver.take_predictions_path()
+    if local_path is None:
+        # Surface any latched transfer failure so callers know the local
+        # stream was attempted but did not complete.
+        error = receiver.take_transfer_error()
+        if error is not None:
+            logger.warning(
+                f"Predictions stream was not received locally: {error}; "
+                f"falling back to worker-side path"
+            )
+        return
+    data["worker_predictions_path"] = data.get("predictions_path")
+    data["predictions_path"] = local_path
 
 
 # =============================================================================
@@ -1637,13 +1958,38 @@ async def _run_training_async(
 
             channel_open = asyncio.Event()
 
+            # State machine for incoming FILE_META/bytes/END_OF_FILE
+            # transfers (currently only the post-inference predictions.slp
+            # stream from the worker).
+            file_receiver = _StreamedFileReceiver()
+
             @data_channel.on("open")
             def on_open():
                 channel_open.set()
 
             @data_channel.on("message")
             async def on_message(message):
+                # Filter out the worker's KEEP_ALIVE heartbeat (10-byte
+                # binary) BEFORE any other handling. If we let it fall
+                # through to file_receiver.handle_bytes(), an in-flight
+                # transfer would have those 10 bytes appended to its
+                # tempfile, corrupting the predictions.slp by 10 bytes.
+                if isinstance(message, bytes) and message == b"KEEP_ALIVE":
+                    return
+
+                if isinstance(message, bytes):
+                    # Binary message — treat as a file-transfer chunk.
+                    # If no FILE_META is active, the receiver silently
+                    # drops the bytes (backward-compatible).
+                    file_receiver.handle_bytes(message)
+                    return
+
                 if isinstance(message, str):
+                    # File-transfer control messages (FILE_META, END_OF_FILE)
+                    # are consumed by the receiver and not forwarded.
+                    if file_receiver.handle_string(message):
+                        return
+
                     if (
                         message.startswith("PROGRESS_REPORT::")
                         and on_raw_progress is not None
@@ -1887,6 +2233,13 @@ async def _run_training_async(
                             data = json.loads(response.split("::", 1)[1])
                         except json.JSONDecodeError:
                             data = {}
+                        # If the worker streamed predictions.slp to us
+                        # (Task 1), replace the worker-side path with our
+                        # local temp path. The worker path is preserved
+                        # as worker_predictions_path for v2 dual-mode.
+                        _apply_received_predictions_to_inference_data(
+                            file_receiver, data
+                        )
                         on_inference_message("INFERENCE_COMPLETE", data)
                     break  # Terminal inference message — close channel
 

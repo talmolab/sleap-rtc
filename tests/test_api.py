@@ -1,5 +1,6 @@
 """Tests for sleap_rtc.api module."""
 
+import os
 import pytest
 from unittest.mock import patch, MagicMock
 import json
@@ -1076,3 +1077,571 @@ class TestRunInference:
             result = run_inference("/data.slp", ["/model1"], "room-1")
             assert result.success is True
             assert result.predictions_path == "/data/predictions.slp"
+
+
+# =============================================================================
+# Streamed prediction file reception (Task 2 — Gap 1)
+# =============================================================================
+#
+# When the worker streams predictions.slp via the sequence:
+#   FILE_META::predictions.slp:<size>:<hint>
+#   <binary chunk 1>
+#   <binary chunk 2>
+#   ...
+#   END_OF_FILE
+#   INFERENCE_COMPLETE::{"predictions_path": "<worker-side path>"}
+#
+# the GUI-path message handler must:
+#   - write the chunks to a local tempfile
+#   - on INFERENCE_COMPLETE, substitute the local tempfile path for
+#     data["predictions_path"] (preserving the worker path in
+#     data["worker_predictions_path"] for v2 dual-mode fallback).
+
+
+class TestStreamedFileReceiver:
+    """Tests for the _StreamedFileReceiver state machine in sleap_rtc.api."""
+
+    def test_predictions_file_written_and_local_path_exposed(self, tmp_path):
+        """Given the ordered sequence
+            FILE_META::predictions.slp:<size>:<hint>
+            <chunk1>
+            <chunk2>
+            END_OF_FILE
+        the receiver must:
+         - create a local temp file
+         - write the concatenated chunk bytes to it
+         - expose the local path via `take_predictions_path()`
+        """
+        from sleap_rtc.api import _StreamedFileReceiver
+
+        receiver = _StreamedFileReceiver()
+        chunk1 = b"the rain in spain"
+        chunk2 = b" falls mainly on the plain"
+        size = len(chunk1) + len(chunk2)
+
+        receiver.handle_string(f"FILE_META::predictions.slp:{size}:/worker/out")
+        receiver.handle_bytes(chunk1)
+        receiver.handle_bytes(chunk2)
+        receiver.handle_string("END_OF_FILE")
+
+        local_path = receiver.take_predictions_path()
+        assert local_path is not None
+        assert os.path.exists(local_path)
+        with open(local_path, "rb") as f:
+            assert f.read() == chunk1 + chunk2
+
+        # take_predictions_path consumes the path — second call returns None.
+        assert receiver.take_predictions_path() is None
+
+        # Cleanup temp file so the test doesn't leave files in /tmp.
+        os.unlink(local_path)
+
+    def test_non_predictions_file_is_cleaned_up(self):
+        """If the worker streams a filename other than predictions.slp, the
+        receiver must still drain the bytes but must not retain the path as
+        'predictions'. The temp file should be unlinked on END_OF_FILE to
+        avoid leaking."""
+        from sleap_rtc.api import _StreamedFileReceiver
+
+        receiver = _StreamedFileReceiver()
+        receiver.handle_string("FILE_META::other.txt:4:/tmp")
+        receiver.handle_bytes(b"data")
+        receiver.handle_string("END_OF_FILE")
+
+        # No predictions path should be exposed.
+        assert receiver.take_predictions_path() is None
+
+    def test_prefixed_predictions_filename_is_retained(self):
+        """The worker constructs predictions output filenames as
+        ``<input_data_path>.predictions.slp``, so the basename is e.g.
+        ``resolved_20260427_labels.v003.predictions.slp`` — NOT the bare
+        ``predictions.slp``. The receiver must accept any filename ending
+        in ``predictions.slp`` and retain its path for the caller."""
+        from sleap_rtc.api import _StreamedFileReceiver
+
+        receiver = _StreamedFileReceiver()
+        prefixed = "resolved_20260427_labels.v003.predictions.slp"
+        receiver.handle_string(f"FILE_META::{prefixed}:5:/worker/out")
+        receiver.handle_bytes(b"hello")
+        receiver.handle_string("END_OF_FILE")
+
+        local_path = receiver.take_predictions_path()
+        assert local_path is not None, (
+            "Receiver dropped a prefixed predictions filename — this is the "
+            "exact bug observed in E2E logs (filename mismatch in END_OF_FILE)"
+        )
+        assert os.path.exists(local_path)
+        try:
+            with open(local_path, "rb") as f:
+                assert f.read() == b"hello"
+        finally:
+            os.unlink(local_path)
+
+    def test_unexpected_binary_without_file_meta_is_dropped(self):
+        """Binary chunks with no active FILE_META must be silently dropped
+        (backward-compatible with the pre-Task-2 behavior)."""
+        from sleap_rtc.api import _StreamedFileReceiver
+
+        receiver = _StreamedFileReceiver()
+        # Must not raise
+        receiver.handle_bytes(b"stray bytes")
+        assert receiver.take_predictions_path() is None
+
+    def test_end_of_file_without_file_meta_is_ignored(self):
+        """A stray END_OF_FILE with no active FILE_META must not crash."""
+        from sleap_rtc.api import _StreamedFileReceiver
+
+        receiver = _StreamedFileReceiver()
+        # Must not raise
+        receiver.handle_string("END_OF_FILE")
+        assert receiver.take_predictions_path() is None
+
+    def test_malformed_file_meta_exposes_transfer_error_and_no_predictions_path(
+        self,
+    ):
+        """FILE_META missing the size field is an explicit failure.
+
+        The receiver must:
+         - not open a tempfile or set _pending
+         - expose a non-empty `take_transfer_error()` string
+         - drop subsequent bytes silently (no crash)
+         - leave `take_predictions_path()` returning None
+        A subsequent well-formed transfer must still work and the error
+        flag must have been consumed by the `take_transfer_error()` call.
+        """
+        from sleap_rtc.api import _StreamedFileReceiver
+
+        receiver = _StreamedFileReceiver()
+        # Malformed — only filename, no size subfield.
+        receiver.handle_string("FILE_META::predictions.slp")
+        # Any bytes that follow should not cause AttributeError or similar.
+        receiver.handle_bytes(b"some bytes")
+        # END_OF_FILE arrives with no active _pending — must not crash.
+        receiver.handle_string("END_OF_FILE")
+
+        assert receiver.take_predictions_path() is None
+        error = receiver.take_transfer_error()
+        assert error is not None and error != ""
+        # take_transfer_error consumes the flag.
+        assert receiver.take_transfer_error() is None
+
+        # A subsequent well-formed transfer must still work:
+        receiver.handle_string("FILE_META::predictions.slp:3:/tmp")
+        receiver.handle_bytes(b"abc")
+        receiver.handle_string("END_OF_FILE")
+        local_path = receiver.take_predictions_path()
+        assert local_path is not None
+        assert os.path.exists(local_path)
+        with open(local_path, "rb") as f:
+            assert f.read() == b"abc"
+        # No error on the successful transfer.
+        assert receiver.take_transfer_error() is None
+        os.unlink(local_path)
+
+    def test_tempfile_open_failure_sets_transfer_error_and_falls_back_to_worker_path(
+        self,
+    ):
+        """If tempfile.NamedTemporaryFile raises OSError (e.g., disk full),
+        the receiver must:
+         - not retain a predictions path (take_predictions_path() → None)
+         - expose a non-empty `take_transfer_error()` string
+        And `_apply_received_predictions_to_inference_data` must NOT
+        substitute `data['predictions_path']` with a local path in that
+        case — the worker-side path is kept as the fallback.
+        """
+        from sleap_rtc.api import (
+            _StreamedFileReceiver,
+            _apply_received_predictions_to_inference_data,
+        )
+
+        receiver = _StreamedFileReceiver()
+
+        with patch(
+            "sleap_rtc.api.tempfile.NamedTemporaryFile",
+            side_effect=OSError("disk full"),
+        ):
+            receiver.handle_string("FILE_META::predictions.slp:5:/worker/out")
+            # Subsequent bytes must drop silently (no crash, no retained data).
+            receiver.handle_bytes(b"hello")
+            receiver.handle_string("END_OF_FILE")
+
+        assert receiver.take_predictions_path() is None
+        error = receiver.take_transfer_error()
+        assert error is not None and error != ""
+        # take_transfer_error consumes.
+        assert receiver.take_transfer_error() is None
+
+        # But re-run with a receiver that has a latched failure to verify
+        # that _apply_received_predictions_to_inference_data leaves the
+        # worker-side path alone when the stream failed to open.
+        receiver2 = _StreamedFileReceiver()
+        with patch(
+            "sleap_rtc.api.tempfile.NamedTemporaryFile",
+            side_effect=OSError("disk full"),
+        ):
+            receiver2.handle_string("FILE_META::predictions.slp:5:/worker/out")
+
+        data = {"predictions_path": "/worker/path.slp"}
+        _apply_received_predictions_to_inference_data(receiver2, data)
+
+        # Worker-side path preserved; no substitution.
+        assert data["predictions_path"] == "/worker/path.slp"
+        assert "worker_predictions_path" not in data
+
+    def test_close_failure_on_end_of_file_aborts_retention(self, tmp_path):
+        """If the file handle's close() raises OSError during END_OF_FILE
+        handling, the receiver must:
+         - NOT retain `_received_predictions_local_path` (partial file!)
+         - expose a non-empty `take_transfer_error()` string
+         - attempt to unlink the partial tempfile
+        """
+        from sleap_rtc.api import _StreamedFileReceiver
+
+        receiver = _StreamedFileReceiver()
+        receiver.handle_string("FILE_META::predictions.slp:5:/worker/out")
+        receiver.handle_bytes(b"partial")
+
+        # Monkey-patch the open file handle's close() to raise OSError.
+        pending = receiver._pending
+        assert pending is not None
+        local_path = pending["local_path"]
+        # Close the real fh first so the tempfile object is flushed, then
+        # swap in a fake that raises on close.
+        pending["fh"].flush()
+        fake_fh = MagicMock()
+        fake_fh.close.side_effect = OSError("close blew up")
+        pending["fh"] = fake_fh
+
+        receiver.handle_string("END_OF_FILE")
+
+        assert receiver.take_predictions_path() is None
+        error = receiver.take_transfer_error()
+        assert error is not None and error != ""
+
+        # Partial file should have been unlinked.
+        assert not os.path.exists(local_path)
+
+    def test_write_failure_during_handle_bytes_aborts_retention(self, tmp_path):
+        """If fh.write() raises OSError mid-transfer (disk full, fs quota, etc.),
+        the receiver must:
+          1. Set _transfer_failed_reason so the substitution helper sees a failure
+          2. Abort the pending transfer (so subsequent bytes aren't written)
+          3. Unlink the partial tempfile
+          4. NOT retain the path on a later END_OF_FILE — even if filename
+             matches predictions.slp
+
+        Mirrors the existing close()-failure handling at the END_OF_FILE branch."""
+        import os
+        from unittest.mock import MagicMock
+        from sleap_rtc.api import _StreamedFileReceiver
+
+        receiver = _StreamedFileReceiver()
+
+        # Successful FILE_META — opens a real tempfile.
+        receiver.handle_string("FILE_META::predictions.slp:100:/tmp")
+        assert receiver._pending is not None
+        real_path = receiver._pending["local_path"]
+        real_fh = receiver._pending["fh"]
+
+        # Replace the file handle with a mock that raises on write().
+        bad_fh = MagicMock()
+        bad_fh.write.side_effect = OSError("disk full")
+        real_fh.close()  # Close the real file so we don't leak the FD.
+        receiver._pending["fh"] = bad_fh
+
+        # Trigger the write-failure path.
+        receiver.handle_bytes(b"first chunk")
+
+        # 1. Sticky error flag set.
+        error = receiver.take_transfer_error()
+        assert error is not None
+        assert "predictions.slp" in error
+        assert "write" in error.lower() or "disk full" in error
+
+        # 2. Pending was aborted — subsequent bytes drop silently.
+        receiver.handle_bytes(b"second chunk")
+        assert receiver._pending is None
+
+        # 3. Partial tempfile was unlinked.
+        assert not os.path.exists(real_path), (
+            f"Partial tempfile {real_path} should have been unlinked on write failure"
+        )
+
+        # 4. END_OF_FILE arriving later finds no pending and does not retain.
+        receiver.handle_string("END_OF_FILE")
+        assert receiver.take_predictions_path() is None
+
+
+class TestInferenceCompletePathRewrite:
+    """Tests that the INFERENCE_COMPLETE dispatch in _run_training_async
+    substitutes the locally-received tempfile path for data['predictions_path']
+    when a stream was received."""
+
+    def test_inference_complete_payload_rewritten_to_local_path(self):
+        """Simulate end-to-end dispatch logic:
+            1. Receiver receives predictions.slp stream.
+            2. INFERENCE_COMPLETE::{"predictions_path": "/worker/path.slp"}
+               is parsed.
+            3. The INFERENCE_COMPLETE callback is invoked with data where
+               predictions_path == local temp path and
+               worker_predictions_path == original worker path.
+        """
+        from sleap_rtc.api import (
+            _StreamedFileReceiver,
+            _apply_received_predictions_to_inference_data,
+        )
+
+        receiver = _StreamedFileReceiver()
+        receiver.handle_string("FILE_META::predictions.slp:5:/worker/out")
+        receiver.handle_bytes(b"hello")
+        receiver.handle_string("END_OF_FILE")
+
+        # Parsed INFERENCE_COMPLETE payload (as api.py does via json.loads).
+        data = {"predictions_path": "/worker/path.slp"}
+        _apply_received_predictions_to_inference_data(receiver, data)
+
+        assert data["worker_predictions_path"] == "/worker/path.slp"
+        assert data["predictions_path"] != "/worker/path.slp"
+        assert os.path.exists(data["predictions_path"])
+        with open(data["predictions_path"], "rb") as f:
+            assert f.read() == b"hello"
+
+        # After consumption, receiver has no pending path.
+        assert receiver.take_predictions_path() is None
+
+        os.unlink(data["predictions_path"])
+
+    def test_inference_complete_untouched_when_no_stream_received(self):
+        """If no predictions stream arrived (pre-Task-1 worker, or training
+        only with no inference), the INFERENCE_COMPLETE payload passes
+        through unchanged."""
+        from sleap_rtc.api import (
+            _StreamedFileReceiver,
+            _apply_received_predictions_to_inference_data,
+        )
+
+        receiver = _StreamedFileReceiver()
+        data = {"predictions_path": "/worker/path.slp"}
+        _apply_received_predictions_to_inference_data(receiver, data)
+
+        assert data == {"predictions_path": "/worker/path.slp"}
+        assert "worker_predictions_path" not in data
+
+
+class TestTempPredictionAtexitCleanup:
+    """Task 3 — atexit safety net for temp prediction files.
+
+    Tests the module-level tracking set, track/untrack helpers, and the
+    atexit handler that deletes any still-tracked files on process exit.
+    Tests also verify _StreamedFileReceiver registers successful
+    predictions.slp transfers in the tracking set and does not register
+    failed transfers.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _isolate_tracking_set(self):
+        """Snapshot and restore the module-level tracking set around each test.
+
+        The tracking set is process-global; without isolation, tests can
+        pollute each other's state.
+        """
+        from sleap_rtc import api as api_mod
+
+        snapshot = set(api_mod._temp_prediction_paths)
+        api_mod._temp_prediction_paths.clear()
+        try:
+            yield
+        finally:
+            api_mod._temp_prediction_paths.clear()
+            api_mod._temp_prediction_paths.update(snapshot)
+
+    def test_track_registers_path_for_cleanup(self, tmp_path):
+        """Paths passed to track_temp_prediction are added to the tracking set."""
+        from sleap_rtc import api as api_mod
+        from sleap_rtc.api import track_temp_prediction, untrack_temp_prediction
+
+        target = tmp_path / "some_predictions.slp"
+        target.write_bytes(b"dummy")
+        path_str = str(target)
+
+        assert path_str not in api_mod._temp_prediction_paths
+        track_temp_prediction(path_str)
+        assert path_str in api_mod._temp_prediction_paths
+
+        untrack_temp_prediction(path_str)
+        assert path_str not in api_mod._temp_prediction_paths
+
+    def test_untrack_is_idempotent(self):
+        """untrack_temp_prediction on an untracked path is a no-op."""
+        from sleap_rtc import api as api_mod
+        from sleap_rtc.api import untrack_temp_prediction
+
+        # Never tracked — must not raise.
+        untrack_temp_prediction("/nonexistent/never_tracked.slp")
+        assert "/nonexistent/never_tracked.slp" not in api_mod._temp_prediction_paths
+
+        # Double untrack also safe.
+        untrack_temp_prediction("/nonexistent/never_tracked.slp")
+
+    def test_cleanup_deletes_tracked_files_and_clears_set(self, tmp_path):
+        """_cleanup_temp_prediction_files removes files from disk and empties the set."""
+        from sleap_rtc import api as api_mod
+        from sleap_rtc.api import (
+            _cleanup_temp_prediction_files,
+            track_temp_prediction,
+        )
+
+        f1 = tmp_path / "a.slp"
+        f2 = tmp_path / "b.slp"
+        f1.write_bytes(b"one")
+        f2.write_bytes(b"two")
+
+        track_temp_prediction(str(f1))
+        track_temp_prediction(str(f2))
+        assert str(f1) in api_mod._temp_prediction_paths
+        assert str(f2) in api_mod._temp_prediction_paths
+
+        _cleanup_temp_prediction_files()
+
+        assert not f1.exists()
+        assert not f2.exists()
+        assert str(f1) not in api_mod._temp_prediction_paths
+        assert str(f2) not in api_mod._temp_prediction_paths
+
+    def test_cleanup_silently_ignores_missing_files(self, tmp_path):
+        """If a tracked file was already deleted (by the caller), cleanup doesn't raise."""
+        from sleap_rtc import api as api_mod
+        from sleap_rtc.api import (
+            _cleanup_temp_prediction_files,
+            track_temp_prediction,
+        )
+
+        f = tmp_path / "already_gone.slp"
+        f.write_bytes(b"x")
+        path_str = str(f)
+        track_temp_prediction(path_str)
+
+        # Caller already unlinked the file — happy path.
+        os.unlink(path_str)
+        assert not os.path.exists(path_str)
+
+        # Must not raise.
+        _cleanup_temp_prediction_files()
+
+        assert path_str not in api_mod._temp_prediction_paths
+
+    def test_cleanup_tolerates_os_error_on_unlink(self, tmp_path):
+        """If os.unlink raises OSError during cleanup, we swallow it and still
+        clear the set (best-effort at exit time)."""
+        from sleap_rtc import api as api_mod
+        from sleap_rtc.api import (
+            _cleanup_temp_prediction_files,
+            track_temp_prediction,
+        )
+
+        f = tmp_path / "c.slp"
+        f.write_bytes(b"z")
+        path_str = str(f)
+        track_temp_prediction(path_str)
+
+        with patch(
+            "sleap_rtc.api.os.unlink", side_effect=OSError("permission denied")
+        ):
+            # Must not raise.
+            _cleanup_temp_prediction_files()
+
+        assert path_str not in api_mod._temp_prediction_paths
+
+    def test_receiver_tracks_successful_predictions_path(self, tmp_path):
+        """_StreamedFileReceiver.handle_string tracks the path on successful END_OF_FILE."""
+        from sleap_rtc import api as api_mod
+        from sleap_rtc.api import _StreamedFileReceiver
+
+        receiver = _StreamedFileReceiver()
+        receiver.handle_string("FILE_META::predictions.slp:5:/worker/out")
+        receiver.handle_bytes(b"hello")
+        receiver.handle_string("END_OF_FILE")
+
+        # Path exposed to the caller should also be registered in the
+        # atexit tracking set — take_predictions_path does NOT untrack.
+        local_path = receiver._received_predictions_local_path
+        assert local_path is not None
+        assert local_path in api_mod._temp_prediction_paths
+
+        # take_predictions_path consumes the receiver's field but does
+        # NOT remove the path from the tracking set.
+        consumed = receiver.take_predictions_path()
+        assert consumed == local_path
+        assert local_path in api_mod._temp_prediction_paths
+
+        # Cleanup for the test.
+        os.unlink(local_path)
+
+    def test_receiver_does_not_track_non_predictions_filename(self, tmp_path):
+        """Files streamed under a non-predictions.slp filename are unlinked
+        immediately on END_OF_FILE and must NOT be added to the tracking set."""
+        from sleap_rtc import api as api_mod
+        from sleap_rtc.api import _StreamedFileReceiver
+
+        before = set(api_mod._temp_prediction_paths)
+        receiver = _StreamedFileReceiver()
+        receiver.handle_string("FILE_META::other.txt:4:/tmp")
+        receiver.handle_bytes(b"data")
+        receiver.handle_string("END_OF_FILE")
+
+        assert api_mod._temp_prediction_paths == before
+
+    def test_receiver_does_not_track_malformed_file_meta(self):
+        """Malformed FILE_META (no size) must not register anything."""
+        from sleap_rtc import api as api_mod
+        from sleap_rtc.api import _StreamedFileReceiver
+
+        before = set(api_mod._temp_prediction_paths)
+        receiver = _StreamedFileReceiver()
+        receiver.handle_string("FILE_META::predictions.slp")
+        receiver.handle_bytes(b"some bytes")
+        receiver.handle_string("END_OF_FILE")
+
+        assert api_mod._temp_prediction_paths == before
+
+    def test_receiver_does_not_track_close_failure(self):
+        """If close() raises OSError on END_OF_FILE, the partial file is
+        unlinked in the failure path and must NOT be added to tracking."""
+        from sleap_rtc import api as api_mod
+        from sleap_rtc.api import _StreamedFileReceiver
+
+        before = set(api_mod._temp_prediction_paths)
+        receiver = _StreamedFileReceiver()
+        receiver.handle_string("FILE_META::predictions.slp:5:/worker/out")
+        receiver.handle_bytes(b"partial")
+
+        pending = receiver._pending
+        assert pending is not None
+        local_path = pending["local_path"]
+        pending["fh"].flush()
+        fake_fh = MagicMock()
+        fake_fh.close.side_effect = OSError("close blew up")
+        pending["fh"] = fake_fh
+
+        receiver.handle_string("END_OF_FILE")
+
+        assert api_mod._temp_prediction_paths == before
+        assert local_path not in api_mod._temp_prediction_paths
+
+    def test_receiver_does_not_track_tempfile_open_failure(self):
+        """If tempfile.NamedTemporaryFile raises, no path is created and
+        nothing is added to the tracking set."""
+        from sleap_rtc import api as api_mod
+        from sleap_rtc.api import _StreamedFileReceiver
+
+        before = set(api_mod._temp_prediction_paths)
+        receiver = _StreamedFileReceiver()
+        with patch(
+            "sleap_rtc.api.tempfile.NamedTemporaryFile",
+            side_effect=OSError("disk full"),
+        ):
+            receiver.handle_string("FILE_META::predictions.slp:5:/worker/out")
+            receiver.handle_bytes(b"hello")
+            receiver.handle_string("END_OF_FILE")
+
+        assert api_mod._temp_prediction_paths == before
