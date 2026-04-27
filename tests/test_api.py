@@ -1151,6 +1151,32 @@ class TestStreamedFileReceiver:
         # No predictions path should be exposed.
         assert receiver.take_predictions_path() is None
 
+    def test_prefixed_predictions_filename_is_retained(self):
+        """The worker constructs predictions output filenames as
+        ``<input_data_path>.predictions.slp``, so the basename is e.g.
+        ``resolved_20260427_labels.v003.predictions.slp`` — NOT the bare
+        ``predictions.slp``. The receiver must accept any filename ending
+        in ``predictions.slp`` and retain its path for the caller."""
+        from sleap_rtc.api import _StreamedFileReceiver
+
+        receiver = _StreamedFileReceiver()
+        prefixed = "resolved_20260427_labels.v003.predictions.slp"
+        receiver.handle_string(f"FILE_META::{prefixed}:5:/worker/out")
+        receiver.handle_bytes(b"hello")
+        receiver.handle_string("END_OF_FILE")
+
+        local_path = receiver.take_predictions_path()
+        assert local_path is not None, (
+            "Receiver dropped a prefixed predictions filename — this is the "
+            "exact bug observed in E2E logs (filename mismatch in END_OF_FILE)"
+        )
+        assert os.path.exists(local_path)
+        try:
+            with open(local_path, "rb") as f:
+                assert f.read() == b"hello"
+        finally:
+            os.unlink(local_path)
+
     def test_unexpected_binary_without_file_meta_is_dropped(self):
         """Binary chunks with no active FILE_META must be silently dropped
         (backward-compatible with the pre-Task-2 behavior)."""

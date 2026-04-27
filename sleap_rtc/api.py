@@ -293,8 +293,15 @@ class _StreamedFileReceiver:
                     )
                 return True
 
-            if pending["filename"] == "predictions.slp":
+            if pending["filename"].endswith("predictions.slp"):
                 # Retain for the caller to consume via take_predictions_path().
+                # Worker constructs the output filename as
+                # ``<input_data_path>.predictions.slp`` (job_executor builds
+                # this), so the basename is e.g.
+                # ``resolved_20260427_labels.v003.predictions.slp``, NOT the
+                # bare string ``predictions.slp``. Match by suffix (without a
+                # leading dot, so the bare ``predictions.slp`` literal also
+                # matches) rather than equality.
                 self._received_predictions_local_path = pending["local_path"]
                 # Register for atexit cleanup so the file doesn't leak in
                 # /tmp if the process dies before the caller consumes and
@@ -306,7 +313,7 @@ class _StreamedFileReceiver:
                     f"({pending['bytes_written']} bytes)"
                 )
             else:
-                # v1 only expects predictions.slp over this channel.
+                # v1 only expects ``[*.]predictions.slp`` over this channel.
                 # Any other filename is a worker misbehavior; don't leave it
                 # lingering in /tmp.
                 try:
@@ -1962,6 +1969,14 @@ async def _run_training_async(
 
             @data_channel.on("message")
             async def on_message(message):
+                # Filter out the worker's KEEP_ALIVE heartbeat (10-byte
+                # binary) BEFORE any other handling. If we let it fall
+                # through to file_receiver.handle_bytes(), an in-flight
+                # transfer would have those 10 bytes appended to its
+                # tempfile, corrupting the predictions.slp by 10 bytes.
+                if isinstance(message, bytes) and message == b"KEEP_ALIVE":
+                    return
+
                 # Diagnostic: log incoming message types so we can verify the
                 # stream-receiver code path is actually being exercised.
                 # PROGRESS_REPORT lines are filtered out to keep signal high.
