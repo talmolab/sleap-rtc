@@ -365,7 +365,8 @@ class _StreamedFileReceiver:
     def take_predictions_path(self) -> str | None:
         """Return and clear the local path of the most-recently-received
         predictions.slp, or None if no transfer has completed since the
-        last call."""
+        last call.
+        """
         path = self._received_predictions_local_path
         self._received_predictions_local_path = None
         return path
@@ -373,14 +374,16 @@ class _StreamedFileReceiver:
     def take_transfer_error(self) -> str | None:
         """Return and clear the most recent transfer failure reason, or
         None if the last transfer attempt succeeded (or no transfer has
-        been attempted). Consumed-once, like take_predictions_path()."""
+        been attempted). Consumed-once, like take_predictions_path().
+        """
         reason = self._transfer_failed_reason
         self._transfer_failed_reason = None
         return reason
 
     def _abort_pending(self) -> None:
         """Close and unlink any in-flight transfer. Defensive — normally the
-        worker streams one file at a time."""
+        worker streams one file at a time.
+        """
         if self._pending is None:
             return
         pending = self._pending
