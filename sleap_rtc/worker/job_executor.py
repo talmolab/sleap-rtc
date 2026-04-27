@@ -853,7 +853,10 @@ class JobExecutor:
                     )
                     if channel.readyState == "open":
                         channel.send(
-                            f'INFERENCE_FAILED::{{"error": "failed to stream predictions: {e}"}}'
+                            "INFERENCE_FAILED::"
+                            + json.dumps(
+                                {"error": f"failed to stream predictions: {e}"}
+                            )
                         )
                     return
 
@@ -871,7 +874,8 @@ class JobExecutor:
 
                 if channel.readyState == "open":
                     channel.send(
-                        f'INFERENCE_COMPLETE::{{"predictions_path": "{predictions_path}"}}'
+                        "INFERENCE_COMPLETE::"
+                        + json.dumps({"predictions_path": str(predictions_path)})
                     )
             elif not predictions_exist:
                 logging.error(
@@ -886,14 +890,19 @@ class JobExecutor:
                 )
                 if channel.readyState == "open":
                     channel.send(
-                        f'INFERENCE_FAILED::{{"error": "exit code {process.returncode}"}}'
+                        "INFERENCE_FAILED::"
+                        + json.dumps(
+                            {"error": f"exit code {process.returncode}"}
+                        )
                     )
 
         except Exception as e:
             logging.exception(f"[INFERENCE] Unexpected error: {e}")
             self._running_process = None
             if channel.readyState == "open":
-                channel.send(f'INFERENCE_FAILED::{{"error": "{e}"}}')
+                channel.send(
+                    "INFERENCE_FAILED::" + json.dumps({"error": str(e)})
+                )
 
     async def _send_peer_message(self, to_peer_id: str, payload: dict):
         """Send peer message via worker's websocket.

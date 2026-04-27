@@ -6,6 +6,7 @@ file to the client over the RTC data channel before signalling
 ``2026-04-22-prediction-streaming-v1-design.md``).
 """
 
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -154,3 +155,95 @@ async def test_run_inference_emits_failed_when_streaming_raises(tmp_path):
     assert not any(
         isinstance(s, str) and s.startswith("INFERENCE_COMPLETE::") for s in sent
     ), f"INFERENCE_COMPLETE must not be sent after streaming failure; got {sent!r}"
+
+
+@pytest.mark.asyncio
+async def test_inference_failed_with_quote_in_error_is_valid_json(tmp_path):
+    """When the worker emits INFERENCE_FAILED, the wire payload after the
+    ``INFERENCE_FAILED::`` prefix must be valid JSON regardless of what
+    characters appear in the interpolated error string. Real Python
+    exception messages routinely contain ``"`` and ``\\``.
+    """
+    predictions_path = tmp_path / "predictions.slp"
+    predictions_path.write_bytes(b"x")
+
+    channel = MagicMock()
+    channel.readyState = "open"
+    channel.send = MagicMock()
+
+    file_manager = MagicMock()
+    # Force send_file to raise an exception whose str() contains a `"`.
+    file_manager.send_file = AsyncMock(
+        side_effect=RuntimeError('boom: file "/tmp/with quote".slp missing')
+    )
+
+    worker = MagicMock()
+    worker.file_manager = file_manager
+    executor = JobExecutor(worker=worker, capabilities=MagicMock())
+
+    with patch(
+        "asyncio.create_subprocess_exec",
+        new=AsyncMock(return_value=_make_process(returncode=0)),
+    ):
+        await executor.run_inference(
+            channel,
+            cmd=["true"],
+            predictions_path=str(predictions_path),
+        )
+
+    failed_calls = [
+        call.args[0]
+        for call in channel.send.call_args_list
+        if isinstance(call.args[0], str)
+        and call.args[0].startswith("INFERENCE_FAILED::")
+    ]
+    assert len(failed_calls) == 1, (
+        f"Expected exactly one INFERENCE_FAILED; got {failed_calls!r}"
+    )
+
+    payload_str = failed_calls[0].split("::", 1)[1]
+    # MUST be parseable as JSON — this assertion is the whole point of the test.
+    payload = json.loads(payload_str)
+    assert "error" in payload
+    assert "boom" in payload["error"]
+    assert "with quote" in payload["error"]
+
+
+@pytest.mark.asyncio
+async def test_inference_complete_with_quote_in_path_is_valid_json(tmp_path):
+    """Same property for INFERENCE_COMPLETE — the predictions_path field
+    must round-trip through JSON even if the path contains ``"`` or ``\\``.
+    """
+    weird_path = tmp_path / 'has"quote.slp'
+    weird_path.write_bytes(b"x")
+
+    channel = MagicMock()
+    channel.readyState = "open"
+    channel.send = MagicMock()
+
+    file_manager = MagicMock()
+    file_manager.send_file = AsyncMock()
+
+    worker = MagicMock()
+    worker.file_manager = file_manager
+    executor = JobExecutor(worker=worker, capabilities=MagicMock())
+
+    with patch(
+        "asyncio.create_subprocess_exec",
+        new=AsyncMock(return_value=_make_process(returncode=0)),
+    ):
+        await executor.run_inference(
+            channel,
+            cmd=["true"],
+            predictions_path=str(weird_path),
+        )
+
+    complete_calls = [
+        call.args[0]
+        for call in channel.send.call_args_list
+        if isinstance(call.args[0], str)
+        and call.args[0].startswith("INFERENCE_COMPLETE::")
+    ]
+    assert len(complete_calls) == 1
+    payload = json.loads(complete_calls[0].split("::", 1)[1])
+    assert payload["predictions_path"] == str(weird_path)
