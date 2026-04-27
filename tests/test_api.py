@@ -1321,6 +1321,56 @@ class TestStreamedFileReceiver:
         # Partial file should have been unlinked.
         assert not os.path.exists(local_path)
 
+    def test_write_failure_during_handle_bytes_aborts_retention(self, tmp_path):
+        """If fh.write() raises OSError mid-transfer (disk full, fs quota, etc.),
+        the receiver must:
+          1. Set _transfer_failed_reason so the substitution helper sees a failure
+          2. Abort the pending transfer (so subsequent bytes aren't written)
+          3. Unlink the partial tempfile
+          4. NOT retain the path on a later END_OF_FILE — even if filename
+             matches predictions.slp
+
+        Mirrors the existing close()-failure handling at the END_OF_FILE branch."""
+        import os
+        from unittest.mock import MagicMock
+        from sleap_rtc.api import _StreamedFileReceiver
+
+        receiver = _StreamedFileReceiver()
+
+        # Successful FILE_META — opens a real tempfile.
+        receiver.handle_string("FILE_META::predictions.slp:100:/tmp")
+        assert receiver._pending is not None
+        real_path = receiver._pending["local_path"]
+        real_fh = receiver._pending["fh"]
+
+        # Replace the file handle with a mock that raises on write().
+        bad_fh = MagicMock()
+        bad_fh.write.side_effect = OSError("disk full")
+        real_fh.close()  # Close the real file so we don't leak the FD.
+        receiver._pending["fh"] = bad_fh
+
+        # Trigger the write-failure path.
+        receiver.handle_bytes(b"first chunk")
+
+        # 1. Sticky error flag set.
+        error = receiver.take_transfer_error()
+        assert error is not None
+        assert "predictions.slp" in error
+        assert "write" in error.lower() or "disk full" in error
+
+        # 2. Pending was aborted — subsequent bytes drop silently.
+        receiver.handle_bytes(b"second chunk")
+        assert receiver._pending is None
+
+        # 3. Partial tempfile was unlinked.
+        assert not os.path.exists(real_path), (
+            f"Partial tempfile {real_path} should have been unlinked on write failure"
+        )
+
+        # 4. END_OF_FILE arriving later finds no pending and does not retain.
+        receiver.handle_string("END_OF_FILE")
+        assert receiver.take_predictions_path() is None
+
 
 class TestInferenceCompletePathRewrite:
     """Tests that the INFERENCE_COMPLETE dispatch in _run_training_async

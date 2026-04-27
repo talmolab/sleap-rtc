@@ -349,8 +349,27 @@ class _StreamedFileReceiver:
         try:
             self._pending["fh"].write(message)
             self._pending["bytes_written"] += len(message)
-        except OSError:
-            logger.exception("Error writing streamed transfer chunk")
+        except OSError as exc:
+            pending = self._pending
+            self._pending = None
+            logger.warning(
+                f"Error writing streamed transfer chunk for "
+                f"{pending['filename']}: {exc}"
+            )
+            self._transfer_failed_reason = (
+                f"write failed for {pending['filename']}: {exc}"
+            )
+            # Close + unlink the partial tempfile; best-effort.
+            try:
+                pending["fh"].close()
+            except OSError:
+                pass
+            try:
+                os.unlink(pending["local_path"])
+            except OSError:
+                logger.exception(
+                    f"Could not remove partial tempfile {pending['local_path']}"
+                )
 
     def take_predictions_path(self) -> str | None:
         """Return and clear the local path of the most-recently-received
