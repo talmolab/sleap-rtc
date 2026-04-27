@@ -857,6 +857,18 @@ class JobExecutor:
                         )
                     return
 
+                # Diagnostic: confirm we reached the INFERENCE_COMPLETE send
+                # after the stream returned. If the client's on_message never
+                # logs receiving FILE_META/bytes/END_OF_FILE, the send_file
+                # bytes weren't delivered (channel-level issue), not a
+                # receiver wiring issue.
+                logging.info(
+                    f"[STREAM_DEBUG] Worker streamed predictions OK; "
+                    f"channel.readyState={channel.readyState}, "
+                    f"bufferedAmount={getattr(channel, 'bufferedAmount', '?')}; "
+                    f"about to send INFERENCE_COMPLETE"
+                )
+
                 if channel.readyState == "open":
                     channel.send(
                         f'INFERENCE_COMPLETE::{{"predictions_path": "{predictions_path}"}}'

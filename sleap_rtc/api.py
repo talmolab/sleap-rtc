@@ -265,6 +265,10 @@ class _StreamedFileReceiver:
                 "expected_size": expected_size,
                 "bytes_written": 0,
             }
+            logger.info(
+                f"[STREAM_DEBUG] FILE_META received: filename={filename!r}, "
+                f"expected_size={expected_size}, tempfile={fh.name}"
+            )
             return True
 
         if message == "END_OF_FILE":
@@ -330,6 +334,11 @@ class _StreamedFileReceiver:
                 )
                 self._warned_on_dropped_bytes = True
             return
+        if self._pending["bytes_written"] == 0:
+            logger.info(
+                f"[STREAM_DEBUG] First chunk for "
+                f"{self._pending['filename']!r}: {len(message)} bytes"
+            )
         try:
             self._pending["fh"].write(message)
             self._pending["bytes_written"] += len(message)
@@ -382,6 +391,10 @@ def _apply_received_predictions_to_inference_data(
     malformed FILE_META), we log a warning and leave ``predictions_path``
     as the worker-side path so downstream code can fall back to it.
     """
+    logger.info(
+        f"[STREAM_DEBUG] _apply_received_predictions_to_inference_data called; "
+        f"data['predictions_path']={data.get('predictions_path')!r}"
+    )
     local_path = receiver.take_predictions_path()
     if local_path is None:
         # Surface any latched transfer failure so callers know the local
@@ -392,9 +405,18 @@ def _apply_received_predictions_to_inference_data(
                 f"Predictions stream was not received locally: {error}; "
                 f"falling back to worker-side path"
             )
+        else:
+            logger.warning(
+                "[STREAM_DEBUG] No local predictions path captured "
+                "(receiver.take_predictions_path() returned None); "
+                "falling back to worker-side path"
+            )
         return
     data["worker_predictions_path"] = data.get("predictions_path")
     data["predictions_path"] = local_path
+    logger.info(
+        f"[STREAM_DEBUG] Substituted predictions_path → {local_path}"
+    )
 
 
 # =============================================================================
@@ -1940,6 +1962,20 @@ async def _run_training_async(
 
             @data_channel.on("message")
             async def on_message(message):
+                # Diagnostic: log incoming message types so we can verify the
+                # stream-receiver code path is actually being exercised.
+                # PROGRESS_REPORT lines are filtered out to keep signal high.
+                if isinstance(message, bytes):
+                    logger.info(
+                        f"[STREAM_DEBUG] on_message: <bytes len={len(message)}>"
+                    )
+                elif isinstance(message, str) and not message.startswith(
+                    "PROGRESS_REPORT::"
+                ):
+                    logger.info(
+                        f"[STREAM_DEBUG] on_message: str={message[:120]!r}"
+                    )
+
                 if isinstance(message, bytes):
                     # Binary message — treat as a file-transfer chunk.
                     # If no FILE_META is active, the receiver silently
