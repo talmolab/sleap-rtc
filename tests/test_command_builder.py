@@ -334,6 +334,99 @@ class TestBuildTrackCommand:
         assert "--frames" in cmd
 
 
+class TestBuildTrackCommandFrameFilter:
+    """Tests for frame_filter and video_index -> CLI flag translation."""
+
+    def _spec(self, **overrides):
+        defaults = dict(
+            data_path="data.slp",
+            model_paths=["m1"],
+            output_path="out.slp",
+        )
+        defaults.update(overrides)
+        return TrackJobSpec(**defaults)
+
+    def test_frame_filter_suggested_emits_flag(self):
+        builder = CommandBuilder()
+        cmd = builder.build_track_command(self._spec(frame_filter="suggested"))
+        assert "--only_suggested_frames" in cmd
+
+    def test_frame_filter_user_emits_labeled_flag(self):
+        builder = CommandBuilder()
+        cmd = builder.build_track_command(self._spec(frame_filter="user"))
+        assert "--only_labeled_frames" in cmd
+
+    def test_frame_filter_predicted_emits_predicted_flag(self):
+        builder = CommandBuilder()
+        cmd = builder.build_track_command(self._spec(frame_filter="predicted"))
+        assert "--only_predicted_frames" in cmd
+
+    def test_frame_filter_random_raises_not_implemented(self):
+        """sleap-nn track does not currently expose a 'random frames' flag.
+
+        Document the gap by raising NotImplementedError when frame_filter='random'
+        is requested. If/when sleap-nn adds support, swap to flag emission.
+        """
+        builder = CommandBuilder()
+        with pytest.raises(NotImplementedError, match="random"):
+            builder.build_track_command(self._spec(frame_filter="random"))
+
+    def test_video_index_emits_flag_with_value(self):
+        builder = CommandBuilder()
+        cmd = builder.build_track_command(self._spec(video_index=3))
+        assert "--video_index" in cmd
+        idx = cmd.index("--video_index")
+        assert cmd[idx + 1] == "3"
+
+    def test_video_index_zero_emits_flag(self):
+        """Regression: video_index=0 is a valid index and must still emit."""
+        builder = CommandBuilder()
+        cmd = builder.build_track_command(self._spec(video_index=0))
+        assert "--video_index" in cmd
+        idx = cmd.index("--video_index")
+        assert cmd[idx + 1] == "0"
+
+    def test_no_flags_when_fields_are_default(self):
+        builder = CommandBuilder()
+        cmd = builder.build_track_command(self._spec())
+        # No frame-filter flags should be present
+        assert "--only_suggested_frames" not in cmd
+        assert "--only_labeled_frames" not in cmd
+        assert "--only_predicted_frames" not in cmd
+        assert "--video_index" not in cmd
+
+    def test_only_suggested_frames_true_does_not_double_emit(self):
+        """Task 1's __post_init__ migration sets frame_filter='suggested'
+        when only_suggested_frames=True. The builder must emit the suggested
+        flag exactly once, not twice."""
+        builder = CommandBuilder()
+        cmd = builder.build_track_command(self._spec(only_suggested_frames=True))
+        suggested_flag_count = sum(
+            1 for f in cmd if f == "--only_suggested_frames"
+        )
+        assert suggested_flag_count == 1, (
+            f"Expected exactly 1 'suggested' flag; got {suggested_flag_count} in {cmd!r}"
+        )
+
+    def test_explicit_frame_filter_overrides_only_suggested_frames(self):
+        """When both fields are set, frame_filter wins (per __post_init__ docs)."""
+        builder = CommandBuilder()
+        cmd = builder.build_track_command(
+            self._spec(only_suggested_frames=True, frame_filter="user")
+        )
+        # frame_filter='user' was explicit, so it wins; suggested flag must NOT appear
+        assert "--only_labeled_frames" in cmd
+        assert "--only_suggested_frames" not in cmd
+
+    def test_existing_frames_list_still_works(self):
+        """Regression: explicit frames range still emits."""
+        builder = CommandBuilder()
+        cmd = builder.build_track_command(self._spec(frames="1-5"))
+        assert "--frames" in cmd
+        idx = cmd.index("--frames")
+        assert cmd[idx + 1] == "1-5"
+
+
 class TestBuildCommandGeneric:
     """Tests for generic build_command method."""
 

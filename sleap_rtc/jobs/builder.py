@@ -15,6 +15,17 @@ DEFAULT_ZMQ_PORTS = {
     "publish": 9001,
 }
 
+# Map TrackJobSpec.frame_filter values to actual sleap-nn track CLI flags.
+# Verified against `sleap-nn track --help`. sleap-nn uses underscored names
+# (e.g. --only_suggested_frames, not --frames-only-suggested). There is
+# currently no "random frames" flag in sleap-nn, so frame_filter="random"
+# is rejected at command-build time with NotImplementedError.
+_FRAME_FILTER_FLAGS = {
+    "suggested": "--only_suggested_frames",
+    "user": "--only_labeled_frames",
+    "predicted": "--only_predicted_frames",
+}
+
 
 class CommandBuilder:
     """Builds sleap-nn commands from validated job specifications.
@@ -162,8 +173,25 @@ class CommandBuilder:
         if spec.peak_threshold is not None:
             cmd.extend(["--peak_threshold", str(spec.peak_threshold)])
 
-        if spec.only_suggested_frames:
-            cmd.append("--only_suggested_frames")
+        # Frame-filter selection: read exclusively from spec.frame_filter.
+        # TrackJobSpec.__post_init__ migrates legacy only_suggested_frames=True
+        # to frame_filter="suggested", so checking only frame_filter avoids
+        # double-emitting --only_suggested_frames when both fields are set.
+        if spec.frame_filter is not None:
+            if spec.frame_filter == "random":
+                # sleap-nn does not currently expose a CLI flag for random
+                # frame sampling. Surface this clearly rather than silently
+                # producing a command that runs on all frames.
+                raise NotImplementedError(
+                    "frame_filter='random' is not yet supported by sleap-nn "
+                    "track; no corresponding CLI flag exists."
+                )
+            flag = _FRAME_FILTER_FLAGS.get(spec.frame_filter)
+            if flag is not None:
+                cmd.append(flag)
+
+        if spec.video_index is not None:
+            cmd.extend(["--video_index", str(spec.video_index)])
 
         if spec.frames:
             cmd.extend(["--frames", spec.frames])
