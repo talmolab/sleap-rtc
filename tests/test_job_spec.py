@@ -459,6 +459,54 @@ class TestTrackJobSpec:
         assert spec.model_paths == ["/vast/models/model"]
 
 
+class TestTrackJobSpecFrameFilter:
+    """Tests for the new frame_filter and video_index fields."""
+
+    def _base_spec_kwargs(self):
+        return dict(
+            data_path="/path/to/data.slp",
+            model_paths=["/path/to/model"],
+            output_path="/path/to/out.predictions.slp",
+        )
+
+    def test_frame_filter_defaults_to_none(self):
+        spec = TrackJobSpec(**self._base_spec_kwargs())
+        assert spec.frame_filter is None
+
+    def test_video_index_defaults_to_none(self):
+        spec = TrackJobSpec(**self._base_spec_kwargs())
+        assert spec.video_index is None
+
+    @pytest.mark.parametrize(
+        "value", ["suggested", "user", "predicted", "random", None]
+    )
+    def test_frame_filter_accepts_valid_values(self, value):
+        spec = TrackJobSpec(**self._base_spec_kwargs(), frame_filter=value)
+        assert spec.frame_filter == value
+
+    def test_frame_filter_rejects_invalid_value(self):
+        with pytest.raises(ValueError, match="frame_filter"):
+            TrackJobSpec(**self._base_spec_kwargs(), frame_filter="not-a-real-filter")
+
+    def test_only_suggested_frames_true_migrates_to_frame_filter(self):
+        """Backward compat: only_suggested_frames=True (deprecated) maps to frame_filter='suggested'."""
+        spec = TrackJobSpec(**self._base_spec_kwargs(), only_suggested_frames=True)
+        assert spec.frame_filter == "suggested"
+
+    def test_only_suggested_frames_does_not_overwrite_explicit_frame_filter(self):
+        """If both set, explicit frame_filter wins (forward-compatible)."""
+        spec = TrackJobSpec(
+            **self._base_spec_kwargs(),
+            only_suggested_frames=True,
+            frame_filter="user",
+        )
+        assert spec.frame_filter == "user"
+
+    def test_video_index_accepts_int(self):
+        spec = TrackJobSpec(**self._base_spec_kwargs(), video_index=2)
+        assert spec.video_index == 2
+
+
 class TestParseJobSpec:
     """Tests for parse_job_spec utility function."""
 
