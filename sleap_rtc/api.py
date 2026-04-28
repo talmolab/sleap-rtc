@@ -2580,6 +2580,13 @@ async def _run_inference_async(
                     result_json = parts[1] if len(parts) > 1 else "{}"
                     try:
                         result_data = json.loads(result_json)
+                        # If the worker streamed predictions.slp to us
+                        # (Tasks 6–7), replace the worker-side path with
+                        # our local temp path. The worker path is
+                        # preserved as worker_output_path for v2 dual-mode.
+                        _apply_received_predictions(
+                            file_receiver, result_data, "output_path"
+                        )
                         result = InferenceResult(
                             job_id=server_job_id or job_id,
                             success=True,

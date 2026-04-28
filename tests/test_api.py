@@ -1756,6 +1756,91 @@ class TestInferenceCompletePathRewrite:
         assert "worker_predictions_path" not in data
 
 
+class TestMsgJobCompletePathRewrite:
+    """Tests that the MSG_JOB_COMPLETE dispatch in _run_inference_async
+    substitutes the locally-received tempfile path for result_data['output_path']
+    when a stream was received.
+
+    Mirrors the helper-level test pattern of TestInferenceCompletePathRewrite —
+    we exercise the helper directly with a dict shaped like what
+    json.loads(MSG_JOB_COMPLETE payload) would yield, rather than spinning up a
+    fake aiortc data channel.
+    """
+
+    def test_msg_job_complete_payload_rewritten_to_local_path(self):
+        """Simulate the MSG_JOB_COMPLETE dispatch logic.
+
+        1. Receiver receives predictions.slp stream.
+        2. MSG_JOB_COMPLETE::{"output_path": "/worker/...", "duration_seconds": 1.2}
+           is parsed.
+        3. _apply_received_predictions(receiver, data, "output_path") is invoked.
+        4. data["output_path"] becomes the local tempfile, the worker path
+           is preserved, and unrelated fields like duration_seconds pass through.
+        """
+        from sleap_rtc.api import (
+            _StreamedFileReceiver,
+            _apply_received_predictions,
+        )
+
+        receiver = _StreamedFileReceiver()
+        receiver.handle_string("FILE_META::predictions.slp:5:/worker/out")
+        receiver.handle_bytes(b"hello")
+        receiver.handle_string("END_OF_FILE")
+
+        # Parsed MSG_JOB_COMPLETE payload (as api.py does via json.loads).
+        data = {
+            "output_path": "/worker/path.slp",
+            "duration_seconds": 1.2,
+        }
+        _apply_received_predictions(receiver, data, "output_path")
+
+        assert data["worker_output_path"] == "/worker/path.slp"
+        assert data["output_path"] != "/worker/path.slp"
+        assert os.path.exists(data["output_path"])
+        with open(data["output_path"], "rb") as f:
+            assert f.read() == b"hello"
+        # Unrelated fields pass through untouched.
+        assert data["duration_seconds"] == 1.2
+
+        # After consumption, receiver has no pending path.
+        assert receiver.take_predictions_path() is None
+
+        os.unlink(data["output_path"])
+
+    def test_msg_job_complete_untouched_when_no_stream_received(self):
+        """If no predictions stream arrived (pre-Task-7 worker, or worker did
+        not stream output for a non-track job), the MSG_JOB_COMPLETE payload
+        passes through unchanged.
+        """
+        from sleap_rtc.api import (
+            _StreamedFileReceiver,
+            _apply_received_predictions,
+        )
+
+        receiver = _StreamedFileReceiver()
+        data = {"output_path": "/worker/path.slp", "duration_seconds": 1.2}
+        _apply_received_predictions(receiver, data, "output_path")
+
+        assert data == {"output_path": "/worker/path.slp", "duration_seconds": 1.2}
+        assert "worker_output_path" not in data
+
+    def test_run_inference_async_calls_apply_received_predictions_for_output_path(self):
+        """Source-grep regression: the MSG_JOB_COMPLETE dispatch in
+        _run_inference_async must invoke _apply_received_predictions with
+        the 'output_path' field name.
+        """
+        import inspect
+        from sleap_rtc.api import _run_inference_async
+
+        src = inspect.getsource(_run_inference_async)
+        assert "_apply_received_predictions(" in src, (
+            "Task 5 wiring missing: helper not invoked in _run_inference_async"
+        )
+        assert '"output_path"' in src, (
+            "Task 5 wiring missing: 'output_path' field name not present"
+        )
+
+
 class TestApplyReceivedPredictionsGeneralized:
     """Tests for the generalized _apply_received_predictions helper.
 
