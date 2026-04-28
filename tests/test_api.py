@@ -1080,6 +1080,334 @@ class TestRunInference:
 
 
 # =============================================================================
+# Inference data-channel message handling (Task 4)
+# =============================================================================
+#
+# When the worker streams predictions.slp via the sequence:
+#   FILE_META::<filename>:<size>:<hint>
+#   <binary chunk 1>
+#   ...
+#   END_OF_FILE
+#   MSG_JOB_COMPLETE::{"output_path": "<worker-side path>", ...}
+#
+# the on_message handler inside _run_inference_async must:
+#   1. Drop b"KEEP_ALIVE" heartbeat bytes BEFORE any other routing
+#      (otherwise they'd be appended to the in-flight tempfile and
+#      corrupt predictions.slp).
+#   2. Route binary messages to file_receiver.handle_bytes().
+#   3. Route file-transfer control strings (FILE_META / END_OF_FILE)
+#      to file_receiver.handle_string() and NOT forward them to the
+#      response_queue.
+#   4. Forward all other strings (MSG_JOB_PROGRESS, MSG_JOB_COMPLETE,
+#      etc.) to the response_queue unchanged.
+#
+# This mirrors the training-side wiring landed in PR #79.
+
+
+class _CapturedOnMessage(Exception):
+    """Sentinel raised by the mock RTCPeerConnection after _run_inference_async
+    has registered its on_message handler, to abort the rest of the function.
+
+    The captured handler is attached to this exception via the .handler attr
+    on the mock data channel — see _make_inference_async_mocks().
+    """
+
+
+def _make_inference_async_mocks():
+    """Build the mock infrastructure needed to drive _run_inference_async far
+    enough to register on_message, then abort.
+
+    Returns a tuple of (patches_to_apply, fake_data_channel) where
+    patches_to_apply is a list of context managers and fake_data_channel
+    exposes the captured on_message via fake_data_channel._handlers["message"].
+    """
+    import asyncio as _asyncio
+
+    class _FakeDataChannel:
+        def __init__(self):
+            self._handlers: dict[str, object] = {}
+
+        def on(self, event):
+            def decorator(fn):
+                self._handlers[event] = fn
+                return fn
+
+            return decorator
+
+        def send(self, *_args, **_kwargs):
+            pass
+
+    fake_data_channel = _FakeDataChannel()
+
+    class _FakePC:
+        def __init__(self):
+            self.localDescription = MagicMock(type="offer", sdp="fake-sdp")
+
+        def createDataChannel(self, _name):
+            return fake_data_channel
+
+        async def createOffer(self):
+            # on_message has been registered by this point — abort the
+            # rest of _run_inference_async by raising the sentinel.
+            raise _CapturedOnMessage()
+
+        async def setLocalDescription(self, _desc):
+            pass
+
+        async def setRemoteDescription(self, _desc):
+            pass
+
+        async def addIceCandidate(self, _cand):
+            pass
+
+        async def close(self):
+            pass
+
+    class _FakeWS:
+        """Minimal async websocket that yields a 'registered_auth' on first
+        recv and would yield a peer_list on the next, satisfying the
+        register + discover_peers loops in _run_inference_async.
+        """
+
+        def __init__(self):
+            self._sent: list = []
+            self._recv_queue = _asyncio.Queue()
+            self._recv_queue.put_nowait(json.dumps({"type": "registered_auth"}))
+            self._recv_queue.put_nowait(
+                json.dumps(
+                    {
+                        "type": "peer_list",
+                        "peers": [{"peer_id": "fake-worker-1"}],
+                    }
+                )
+            )
+
+        async def send(self, msg):
+            self._sent.append(msg)
+
+        async def recv(self):
+            return await self._recv_queue.get()
+
+    fake_ws = _FakeWS()
+
+    class _FakeWSConnect:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return fake_ws
+
+        async def __aexit__(self, *_args):
+            return False
+
+    return fake_data_channel, _FakePC, _FakeWSConnect
+
+
+def _capture_on_message(monkeypatch_jwt: str = "fake-jwt"):
+    """Run _run_inference_async far enough to register on_message, capture
+    it, and return (on_message, file_receiver, response_queue).
+
+    The on_message closure is the actual production closure, with the
+    file_receiver and response_queue extracted from its closure cell so
+    tests can assert state changes.
+    """
+    import asyncio as _asyncio
+
+    fake_data_channel, FakePC, FakeWSConnect = _make_inference_async_mocks()
+
+    from sleap_rtc import api as api_mod
+
+    async def _drive():
+        try:
+            await api_mod._run_inference_async(
+                data_path="/data.slp",
+                model_paths=["/model1"],
+                room_id="room-1",
+                worker_id=None,
+                output_path=None,
+                batch_size=None,
+                peak_threshold=None,
+                only_suggested_frames=False,
+                frames=None,
+                progress_callback=None,
+                timeout=10.0,
+            )
+        except _CapturedOnMessage:
+            pass
+
+    mock_cfg = MagicMock()
+    mock_cfg.signaling_websocket = "ws://fake"
+
+    with (
+        patch("sleap_rtc.auth.credentials.get_valid_jwt", return_value=monkeypatch_jwt),
+        patch("sleap_rtc.config.get_config", return_value=mock_cfg),
+        patch("websockets.connect", FakeWSConnect),
+        patch("aiortc.RTCPeerConnection", FakePC),
+    ):
+        _asyncio.run(_drive())
+
+    on_message = fake_data_channel._handlers.get("message")
+    assert on_message is not None, (
+        "on_message was not registered — the mock chain aborted too early "
+        "or _run_inference_async was refactored without updating the test"
+    )
+
+    # Extract file_receiver and response_queue from the closure cells.
+    cells = {
+        name: cell.cell_contents
+        for name, cell in zip(on_message.__code__.co_freevars, on_message.__closure__)
+    }
+    file_receiver = cells.get("file_receiver")
+    response_queue = cells.get("response_queue")
+    assert file_receiver is not None, (
+        "on_message closure does not capture a 'file_receiver' — Task 4 "
+        "wiring is missing"
+    )
+    assert (
+        response_queue is not None
+    ), "on_message closure does not capture a 'response_queue'"
+    return on_message, file_receiver, response_queue
+
+
+class TestRunInferenceAsyncMessageHandling:
+    """Tests that _run_inference_async's on_message handler routes messages
+    to _StreamedFileReceiver and response_queue per the Task 4 wiring spec.
+
+    These tests drive _run_inference_async with mocked websockets/aiortc
+    far enough to register the on_message closure, then invoke that
+    closure directly with synthesized messages. This mirrors the
+    training-side wiring landed in PR #79.
+    """
+
+    def test_keep_alive_heartbeat_is_dropped_before_receiver(self):
+        """b'KEEP_ALIVE' must be filtered out BEFORE any file_receiver routing.
+
+        Regression: if KEEP_ALIVE bytes fall through to handle_bytes during
+        an in-flight transfer, they'd be appended to the tempfile and
+        corrupt predictions.slp by 10 bytes.
+        """
+        import asyncio as _asyncio
+
+        on_message, file_receiver, response_queue = _capture_on_message()
+
+        # Start an in-flight transfer so handle_bytes WOULD write if called.
+        file_receiver.handle_string("FILE_META::predictions.slp:5:/worker/out")
+        assert file_receiver._pending is not None
+        bytes_before = file_receiver._pending["bytes_written"]
+
+        async def _go():
+            await on_message(b"KEEP_ALIVE")
+
+        _asyncio.run(_go())
+
+        # KEEP_ALIVE must NOT be appended to the in-flight tempfile.
+        assert file_receiver._pending is not None
+        assert file_receiver._pending["bytes_written"] == bytes_before
+        # KEEP_ALIVE must NOT reach response_queue.
+        assert response_queue.qsize() == 0
+
+        # Cleanup: abort the pending transfer so the tempfile is unlinked.
+        file_receiver._abort_pending()
+
+    def test_file_meta_string_is_consumed_by_receiver_not_forwarded(self):
+        """FILE_META::... must be consumed by file_receiver.handle_string and
+        NOT placed on response_queue.
+        """
+        import asyncio as _asyncio
+
+        on_message, file_receiver, response_queue = _capture_on_message()
+
+        async def _go():
+            await on_message("FILE_META::predictions.slp:5:/worker/out")
+
+        _asyncio.run(_go())
+
+        # Receiver opened a pending transfer.
+        assert file_receiver._pending is not None
+        assert file_receiver._pending["filename"] == "predictions.slp"
+        # NOT forwarded to response_queue.
+        assert response_queue.qsize() == 0
+
+        # Cleanup.
+        file_receiver._abort_pending()
+
+    def test_binary_chunk_after_file_meta_is_consumed_by_receiver(self):
+        """A bytes message (after FILE_META has opened a transfer) is
+        written to the receiver's tempfile, NOT placed on response_queue.
+        """
+        import asyncio as _asyncio
+
+        on_message, file_receiver, response_queue = _capture_on_message()
+
+        # Open a pending transfer.
+        file_receiver.handle_string("FILE_META::predictions.slp:11:/worker/out")
+        assert file_receiver._pending is not None
+
+        async def _go():
+            await on_message(b"hello world")
+
+        _asyncio.run(_go())
+
+        # Bytes were written to the tempfile.
+        assert file_receiver._pending["bytes_written"] == len(b"hello world")
+        # NOT forwarded to response_queue.
+        assert response_queue.qsize() == 0
+
+        # Cleanup.
+        file_receiver._abort_pending()
+
+    def test_end_of_file_completes_transfer_and_is_not_forwarded(self):
+        """END_OF_FILE after chunks must be consumed by the receiver,
+        retain the predictions path, and NOT be forwarded to response_queue.
+        """
+        import asyncio as _asyncio
+
+        on_message, file_receiver, response_queue = _capture_on_message()
+
+        async def _go():
+            await on_message("FILE_META::predictions.slp:5:/worker/out")
+            await on_message(b"hello")
+            await on_message("END_OF_FILE")
+
+        _asyncio.run(_go())
+
+        # Receiver completed the transfer and retained the local path.
+        local_path = file_receiver.take_predictions_path()
+        assert local_path is not None
+        assert os.path.exists(local_path)
+        with open(local_path, "rb") as f:
+            assert f.read() == b"hello"
+        # END_OF_FILE was NOT forwarded.
+        assert response_queue.qsize() == 0
+
+        # Cleanup.
+        os.unlink(local_path)
+
+    def test_regular_string_is_forwarded_to_response_queue(self):
+        """A non-file-transfer string like MSG_JOB_PROGRESS::... must be
+        forwarded to response_queue unchanged (regression — preserves the
+        pre-Task-4 behavior for all non-transfer messages).
+        """
+        import asyncio as _asyncio
+
+        on_message, file_receiver, response_queue = _capture_on_message()
+
+        async def _go():
+            await on_message('MSG_JOB_PROGRESS::{"epoch": 1}')
+            await on_message('MSG_JOB_COMPLETE::{"output_path": "/x.slp"}')
+
+        _asyncio.run(_go())
+
+        assert response_queue.qsize() == 2
+        first = response_queue.get_nowait()
+        second = response_queue.get_nowait()
+        assert first == 'MSG_JOB_PROGRESS::{"epoch": 1}'
+        assert second == 'MSG_JOB_COMPLETE::{"output_path": "/x.slp"}'
+        # Receiver state untouched (no FILE_META was sent).
+        assert file_receiver._pending is None
+
+
+# =============================================================================
 # Streamed prediction file reception (Task 2 — Gap 1)
 # =============================================================================
 #

@@ -2461,13 +2461,38 @@ async def _run_inference_async(
 
             channel_open = asyncio.Event()
 
+            # State machine for incoming FILE_META/bytes/END_OF_FILE
+            # transfers (the post-track predictions.slp stream from the
+            # worker — mirrors the training-side wiring landed in PR #79).
+            file_receiver = _StreamedFileReceiver()
+
             @data_channel.on("open")
             def on_open():
                 channel_open.set()
 
             @data_channel.on("message")
             async def on_message(message):
+                # Filter out the worker's KEEP_ALIVE heartbeat (10-byte
+                # binary) BEFORE any other handling. If we let it fall
+                # through to file_receiver.handle_bytes(), an in-flight
+                # transfer would have those 10 bytes appended to its
+                # tempfile, corrupting the predictions.slp by 10 bytes.
+                if isinstance(message, bytes) and message == b"KEEP_ALIVE":
+                    return
+
+                if isinstance(message, bytes):
+                    # Binary message — treat as a file-transfer chunk.
+                    # If no FILE_META is active, the receiver silently
+                    # drops the bytes (backward-compatible).
+                    file_receiver.handle_bytes(message)
+                    return
+
                 if isinstance(message, str):
+                    # File-transfer control messages (FILE_META, END_OF_FILE)
+                    # are consumed by the receiver and not forwarded.
+                    if file_receiver.handle_string(message):
+                        return
+
                     await response_queue.put(message)
 
             # Send offer
