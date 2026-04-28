@@ -1387,6 +1387,51 @@ class JobExecutor:
                     "success": True,
                     "stopped_early": stopped_early,
                 }
+
+                # For track jobs, stream the output file to the client BEFORE
+                # signaling completion so MSG_JOB_COMPLETE is the "all bytes
+                # delivered, ready to merge" trigger. Only stream on a clean
+                # success — if the subprocess was stopped early, predictions
+                # are partial / undefined. Mirrors PR #79's run_inference.
+                if (
+                    job_type == "track"
+                    and spec is not None
+                    and not stopped_early
+                    and process.returncode == 0
+                ):
+                    output_path = Path(spec.output_path)
+                    if output_path.exists():
+                        try:
+                            await self.worker.file_manager.send_file(
+                                channel, str(output_path)
+                            )
+                        except Exception as e:
+                            logging.exception(
+                                f"[JOB {job_id}] Failed to stream output: {e}"
+                            )
+                            error_data = {
+                                "job_id": job_id,
+                                "job_type": job_type,
+                                "duration_seconds": duration_seconds,
+                                "exit_code": process.returncode,
+                                "message": f"failed to stream output: {e}",
+                            }
+                            if channel.readyState == "open":
+                                channel.send(
+                                    f"{MSG_JOB_FAILED}{MSG_SEPARATOR}"
+                                    f"{json.dumps(error_data)}"
+                                )
+                            return {
+                                "success": False,
+                                "stopped_early": False,
+                                "cancelled": False,
+                            }
+                        # Include the worker-side output path in the payload
+                        # so the client's _apply_received_predictions(...)
+                        # helper (Task 5) can substitute it with the local
+                        # tempfile path.
+                        result_data["output_path"] = str(spec.output_path)
+
                 if channel.readyState == "open":
                     channel.send(
                         f"{MSG_JOB_COMPLETE}{MSG_SEPARATOR}{json.dumps(result_data)}"

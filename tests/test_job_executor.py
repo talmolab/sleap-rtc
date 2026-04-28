@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from sleap_rtc.jobs.spec import TrackJobSpec
 from sleap_rtc.worker.job_executor import JobExecutor
 
 
@@ -292,3 +293,241 @@ class TestExecuteFromSpecAcceptsSpec:
         # are required.  ``spec`` must NOT be in this list.
         assert "spec" not in required
         assert set(required) == {"channel", "cmd", "job_id"}
+
+
+class TestExecuteFromSpecTrackStreaming:
+    """Task 7: ``execute_from_spec`` must stream the output predictions file
+    back to the client BEFORE emitting ``MSG_JOB_COMPLETE`` for track jobs,
+    mirroring PR #79's ``run_inference`` streaming pattern.
+    """
+
+    @pytest.mark.asyncio
+    async def test_track_success_streams_output_before_complete(self, tmp_path):
+        """Worker must stream the output file via ``send_file`` before
+        ``MSG_JOB_COMPLETE``, and the payload must include ``output_path``.
+        """
+        output_path = tmp_path / "predictions.slp"
+        output_path.write_bytes(b"fake slp content for test")
+
+        spec = TrackJobSpec(
+            data_path=str(tmp_path / "video.mp4"),
+            model_paths=[str(tmp_path / "model")],
+            output_path=str(output_path),
+        )
+
+        channel = MagicMock()
+        channel.readyState = "open"
+
+        file_manager = MagicMock()
+        file_manager.send_file = AsyncMock()
+
+        worker = MagicMock()
+        worker.file_manager = file_manager
+
+        # Record call ordering across both send_file (async) and channel.send
+        # (sync) using a shared list.
+        call_order: list[str] = []
+
+        async def _record_send_file(*args, **kwargs):
+            call_order.append("send_file")
+
+        file_manager.send_file.side_effect = _record_send_file
+
+        def _record_channel_send(msg):
+            call_order.append(f"channel.send:{msg}")
+
+        channel.send = MagicMock(side_effect=_record_channel_send)
+
+        executor = JobExecutor(worker=worker, capabilities=MagicMock())
+
+        with patch(
+            "asyncio.create_subprocess_exec",
+            new=AsyncMock(return_value=_make_process(returncode=0)),
+        ):
+            result = await executor.execute_from_spec(
+                channel,
+                cmd=["true"],
+                job_id="job-track-success",
+                job_type="track",
+                spec=spec,
+            )
+
+        # 1. send_file was awaited exactly once with (channel, output_path).
+        file_manager.send_file.assert_awaited_once()
+        send_file_args = file_manager.send_file.call_args
+        assert send_file_args.args[0] is channel, (
+            f"send_file must be called with the RTC channel as first arg; got "
+            f"{send_file_args.args[0]!r}"
+        )
+        assert send_file_args.args[1] == str(output_path), (
+            f"send_file must be called with the spec.output_path; got "
+            f"{send_file_args.args[1]!r}"
+        )
+
+        # 2. MSG_JOB_COMPLETE was sent exactly once.
+        complete_msgs = [
+            entry
+            for entry in call_order
+            if entry.startswith("channel.send:JOB_COMPLETE::")
+        ]
+        assert (
+            len(complete_msgs) == 1
+        ), f"Exactly one MSG_JOB_COMPLETE expected; call_order={call_order!r}"
+
+        # 3. send_file was awaited BEFORE MSG_JOB_COMPLETE was sent.
+        send_file_idx = call_order.index("send_file")
+        complete_idx = call_order.index(complete_msgs[0])
+        assert send_file_idx < complete_idx, (
+            f"send_file must be awaited BEFORE MSG_JOB_COMPLETE is sent; "
+            f"call_order={call_order!r}"
+        )
+
+        # 4. MSG_JOB_FAILED must NOT be sent on the happy path.
+        assert not any(
+            entry.startswith("channel.send:JOB_FAILED::") for entry in call_order
+        ), f"MSG_JOB_FAILED must not be emitted on success; call_order={call_order!r}"
+
+        # 5. Payload contains output_path == str(spec.output_path).
+        payload_str = complete_msgs[0].split("::", 1)[1].removeprefix("channel.send:")
+        # Defensive — the prefix `channel.send:JOB_COMPLETE::` was already
+        # split off above; payload_str should now be just JSON.
+        payload = json.loads(payload_str)
+        assert payload.get("output_path") == str(spec.output_path), (
+            f"MSG_JOB_COMPLETE payload must include output_path == "
+            f"{str(spec.output_path)!r}; got {payload!r}"
+        )
+
+        # 6. The success result dict.
+        assert result["success"] is True
+
+    @pytest.mark.asyncio
+    async def test_track_streaming_failure_emits_msg_job_failed(self, tmp_path):
+        """If ``send_file`` raises during a track job, the worker must emit
+        ``MSG_JOB_FAILED`` and must NOT emit ``MSG_JOB_COMPLETE``.
+        """
+        output_path = tmp_path / "predictions.slp"
+        output_path.write_bytes(b"fake slp content for test")
+
+        spec = TrackJobSpec(
+            data_path=str(tmp_path / "video.mp4"),
+            model_paths=[str(tmp_path / "model")],
+            output_path=str(output_path),
+        )
+
+        channel = MagicMock()
+        channel.readyState = "open"
+        channel.send = MagicMock()
+
+        file_manager = MagicMock()
+        file_manager.send_file = AsyncMock(side_effect=RuntimeError("boom"))
+
+        worker = MagicMock()
+        worker.file_manager = file_manager
+
+        executor = JobExecutor(worker=worker, capabilities=MagicMock())
+
+        with patch(
+            "asyncio.create_subprocess_exec",
+            new=AsyncMock(return_value=_make_process(returncode=0)),
+        ):
+            result = await executor.execute_from_spec(
+                channel,
+                cmd=["true"],
+                job_id="job-track-fail",
+                job_type="track",
+                spec=spec,
+            )
+
+        sent = [c.args[0] for c in channel.send.call_args_list if c.args]
+        assert any(
+            isinstance(s, str) and s.startswith("JOB_FAILED::") for s in sent
+        ), f"Expected MSG_JOB_FAILED after streaming failure; got {sent!r}"
+        assert not any(
+            isinstance(s, str) and s.startswith("JOB_COMPLETE::") for s in sent
+        ), f"MSG_JOB_COMPLETE must not be sent after streaming failure; got {sent!r}"
+
+        assert result["success"] is False
+
+    @pytest.mark.asyncio
+    async def test_train_branch_does_not_stream(self, tmp_path):
+        """Training jobs must not trigger streaming and must not include
+        ``output_path`` in the MSG_JOB_COMPLETE payload.
+        """
+        channel = MagicMock()
+        channel.readyState = "open"
+        channel.send = MagicMock()
+
+        file_manager = MagicMock()
+        file_manager.send_file = AsyncMock()
+
+        worker = MagicMock()
+        worker.file_manager = file_manager
+
+        executor = JobExecutor(worker=worker, capabilities=MagicMock())
+
+        with patch(
+            "asyncio.create_subprocess_exec",
+            new=AsyncMock(return_value=_make_process(returncode=0)),
+        ):
+            await executor.execute_from_spec(
+                channel,
+                cmd=["true"],
+                job_id="job-train",
+                job_type="train",
+            )
+
+        # send_file must not be called for train jobs.
+        file_manager.send_file.assert_not_awaited()
+
+        sent = [c.args[0] for c in channel.send.call_args_list if c.args]
+        complete_msgs = [
+            s for s in sent if isinstance(s, str) and s.startswith("JOB_COMPLETE::")
+        ]
+        assert (
+            len(complete_msgs) == 1
+        ), f"Expected exactly one MSG_JOB_COMPLETE for train job; got {sent!r}"
+
+        payload = json.loads(complete_msgs[0].split("::", 1)[1])
+        assert "output_path" not in payload, (
+            f"MSG_JOB_COMPLETE payload for train jobs must NOT contain "
+            f"output_path; got {payload!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_track_with_no_spec_does_not_stream(self, tmp_path):
+        """Compatibility: a track job invoked WITHOUT a spec (pre-Task-7 caller
+        path) must not stream and must not add ``output_path`` to the payload.
+        """
+        channel = MagicMock()
+        channel.readyState = "open"
+        channel.send = MagicMock()
+
+        file_manager = MagicMock()
+        file_manager.send_file = AsyncMock()
+
+        worker = MagicMock()
+        worker.file_manager = file_manager
+
+        executor = JobExecutor(worker=worker, capabilities=MagicMock())
+
+        with patch(
+            "asyncio.create_subprocess_exec",
+            new=AsyncMock(return_value=_make_process(returncode=0)),
+        ):
+            await executor.execute_from_spec(
+                channel,
+                cmd=["true"],
+                job_id="job-track-no-spec",
+                job_type="track",
+                spec=None,
+            )
+
+        file_manager.send_file.assert_not_awaited()
+
+        sent = [c.args[0] for c in channel.send.call_args_list if c.args]
+        complete_msgs = [
+            s for s in sent if isinstance(s, str) and s.startswith("JOB_COMPLETE::")
+        ]
+        assert len(complete_msgs) == 1
+        payload = json.loads(complete_msgs[0].split("::", 1)[1])
+        assert "output_path" not in payload
