@@ -905,6 +905,7 @@ class JobExecutor:
         working_dir: str = None,
         zmq_ports: dict | None = None,
         progress_reporter=None,
+        spec: "TrackJobSpec | TrainJobSpec | None" = None,
     ):
         """Execute a job from a pre-built command list (structured job submission).
 
@@ -925,6 +926,9 @@ class JobExecutor:
                 the duration of this job. When provided, this call does not create
                 a new reporter and does not call async_cleanup on it — the caller
                 is responsible for the reporter's lifecycle.
+            spec: Optional pre-validated TrackJobSpec or TrainJobSpec used by the
+                track branch to access output_path for streaming predictions back
+                to the client (Task 7). When None, no streaming is performed.
         """
         from sleap_rtc.protocol import (
             MSG_JOB_PROGRESS,

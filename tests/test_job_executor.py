@@ -6,6 +6,7 @@ file to the client over the RTC data channel before signalling
 ``2026-04-22-prediction-streaming-v1-design.md``).
 """
 
+import inspect
 import json
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -258,3 +259,36 @@ async def test_inference_complete_with_quote_in_path_is_valid_json(tmp_path):
     assert len(complete_calls) == 1
     payload = json.loads(complete_calls[0].split("::", 1)[1])
     assert payload["predictions_path"] == str(weird_path)
+
+
+class TestExecuteFromSpecAcceptsSpec:
+    """Task 6 plumbing: ``execute_from_spec`` accepts an optional ``spec``
+    parameter that Task 7 will use to stream predictions back to the client.
+
+    Pure-signature test — no behavior change in this commit.
+    """
+
+    def test_signature_includes_spec_parameter(self):
+        sig = inspect.signature(JobExecutor.execute_from_spec)
+        assert "spec" in sig.parameters
+        assert sig.parameters["spec"].default is None
+        assert sig.parameters["spec"].kind in (
+            inspect.Parameter.KEYWORD_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        )
+
+    def test_spec_is_optional_so_existing_callers_still_work(self):
+        """The new parameter must be optional — pre-Task-6 callers that omit
+        ``spec=`` must still match the signature.
+        """
+        sig = inspect.signature(JobExecutor.execute_from_spec)
+        # All required parameters (no default) must be the same as before.
+        required = [
+            name
+            for name, p in sig.parameters.items()
+            if p.default is inspect.Parameter.empty and name != "self"
+        ]
+        # Per the pre-Task-6 signature, only ``channel``, ``cmd``, ``job_id``
+        # are required.  ``spec`` must NOT be in this list.
+        assert "spec" not in required
+        assert set(required) == {"channel", "cmd", "job_id"}

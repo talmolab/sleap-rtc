@@ -2540,6 +2540,7 @@ class RTCWorkerClient:
                                 job_type="train",
                                 zmq_ports=DEFAULT_ZMQ_PORTS,
                                 progress_reporter=pipeline_reporter,
+                                spec=spec,
                             )
                             model_outcomes.append(
                                 (per_model_run_names[i], result or {})
@@ -2618,7 +2619,7 @@ class RTCWorkerClient:
                 elif isinstance(spec, TrackJobSpec):
                     cmd = builder.build_track_command(spec)
                     await self.job_executor.execute_from_spec(
-                        channel, cmd, job_id, job_type="track"
+                        channel, cmd, job_id, job_type="track", spec=spec
                     )
             finally:
                 # Clean up temp config files
