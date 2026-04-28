@@ -398,17 +398,20 @@ class _StreamedFileReceiver:
             pass
 
 
-def _apply_received_predictions_to_inference_data(
-    receiver: _StreamedFileReceiver, data: dict
+def _apply_received_predictions(
+    receiver: _StreamedFileReceiver, data: dict, field_name: str
 ) -> None:
-    """Rewrite ``data['predictions_path']`` in-place to the local tempfile
-    path if the receiver has captured a streamed predictions.slp.
+    """Rewrite ``data[field_name]`` in-place to the local tempfile path if
+    the receiver has captured a streamed predictions.slp.
 
-    The original (worker-side) path is preserved as
-    ``data['worker_predictions_path']`` for v2 dual-mode fallback.
+    Used to rewrite worker-side path references in protocol messages
+    (``INFERENCE_COMPLETE.predictions_path``, ``MSG_JOB_COMPLETE.output_path``)
+    to the local tempfile the receiver wrote during streaming. The original
+    (worker-side) path is preserved as ``data['worker_<field_name>']`` for
+    v2 dual-mode fallback.
 
     If the local stream failed (tempfile open failed, close failed, or
-    malformed FILE_META), we log a warning and leave ``predictions_path``
+    malformed FILE_META), we log a warning and leave ``data[field_name]``
     as the worker-side path so downstream code can fall back to it.
     """
     local_path = receiver.take_predictions_path()
@@ -422,8 +425,8 @@ def _apply_received_predictions_to_inference_data(
                 f"falling back to worker-side path"
             )
         return
-    data["worker_predictions_path"] = data.get("predictions_path")
-    data["predictions_path"] = local_path
+    data[f"worker_{field_name}"] = data.get(field_name)
+    data[field_name] = local_path
 
 
 # =============================================================================
@@ -2237,8 +2240,8 @@ async def _run_training_async(
                         # (Task 1), replace the worker-side path with our
                         # local temp path. The worker path is preserved
                         # as worker_predictions_path for v2 dual-mode.
-                        _apply_received_predictions_to_inference_data(
-                            file_receiver, data
+                        _apply_received_predictions(
+                            file_receiver, data, "predictions_path"
                         )
                         on_inference_message("INFERENCE_COMPLETE", data)
                     break  # Terminal inference message — close channel

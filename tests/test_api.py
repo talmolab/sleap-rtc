@@ -1245,13 +1245,13 @@ class TestStreamedFileReceiver:
         the receiver must:
          - not retain a predictions path (take_predictions_path() → None)
          - expose a non-empty `take_transfer_error()` string
-        And `_apply_received_predictions_to_inference_data` must NOT
+        And `_apply_received_predictions` must NOT
         substitute `data['predictions_path']` with a local path in that
         case — the worker-side path is kept as the fallback.
         """
         from sleap_rtc.api import (
             _StreamedFileReceiver,
-            _apply_received_predictions_to_inference_data,
+            _apply_received_predictions,
         )
 
         receiver = _StreamedFileReceiver()
@@ -1272,7 +1272,7 @@ class TestStreamedFileReceiver:
         assert receiver.take_transfer_error() is None
 
         # But re-run with a receiver that has a latched failure to verify
-        # that _apply_received_predictions_to_inference_data leaves the
+        # that _apply_received_predictions leaves the
         # worker-side path alone when the stream failed to open.
         receiver2 = _StreamedFileReceiver()
         with patch(
@@ -1282,7 +1282,7 @@ class TestStreamedFileReceiver:
             receiver2.handle_string("FILE_META::predictions.slp:5:/worker/out")
 
         data = {"predictions_path": "/worker/path.slp"}
-        _apply_received_predictions_to_inference_data(receiver2, data)
+        _apply_received_predictions(receiver2, data, "predictions_path")
 
         # Worker-side path preserved; no substitution.
         assert data["predictions_path"] == "/worker/path.slp"
@@ -1388,7 +1388,7 @@ class TestInferenceCompletePathRewrite:
         """
         from sleap_rtc.api import (
             _StreamedFileReceiver,
-            _apply_received_predictions_to_inference_data,
+            _apply_received_predictions,
         )
 
         receiver = _StreamedFileReceiver()
@@ -1398,7 +1398,7 @@ class TestInferenceCompletePathRewrite:
 
         # Parsed INFERENCE_COMPLETE payload (as api.py does via json.loads).
         data = {"predictions_path": "/worker/path.slp"}
-        _apply_received_predictions_to_inference_data(receiver, data)
+        _apply_received_predictions(receiver, data, "predictions_path")
 
         assert data["worker_predictions_path"] == "/worker/path.slp"
         assert data["predictions_path"] != "/worker/path.slp"
@@ -1417,15 +1417,68 @@ class TestInferenceCompletePathRewrite:
         through unchanged."""
         from sleap_rtc.api import (
             _StreamedFileReceiver,
-            _apply_received_predictions_to_inference_data,
+            _apply_received_predictions,
         )
 
         receiver = _StreamedFileReceiver()
         data = {"predictions_path": "/worker/path.slp"}
-        _apply_received_predictions_to_inference_data(receiver, data)
+        _apply_received_predictions(receiver, data, "predictions_path")
 
         assert data == {"predictions_path": "/worker/path.slp"}
         assert "worker_predictions_path" not in data
+
+
+class TestApplyReceivedPredictionsGeneralized:
+    """Tests for the generalized _apply_received_predictions helper.
+
+    Verifies the helper substitutes the configured field name (not just
+    'predictions_path'). Sets up the path for Task 5 (MSG_JOB_COMPLETE
+    using 'output_path' as the field).
+    """
+
+    def test_substitutes_output_path_when_field_name_is_output_path(self, tmp_path):
+        from sleap_rtc.api import _StreamedFileReceiver, _apply_received_predictions
+
+        receiver = _StreamedFileReceiver()
+        receiver.handle_string("FILE_META::predictions.slp:5:/worker/out")
+        receiver.handle_bytes(b"hello")
+        receiver.handle_string("END_OF_FILE")
+
+        data = {"output_path": "/root/vast/predictions.slp"}
+        _apply_received_predictions(receiver, data, "output_path")
+
+        assert data["output_path"] != "/root/vast/predictions.slp"
+        assert data["output_path"].endswith(".slp")
+        assert data["worker_output_path"] == "/root/vast/predictions.slp"
+
+    def test_substitutes_predictions_path_with_explicit_field_name(self, tmp_path):
+        """Regression: existing INFERENCE_COMPLETE call site (with 'predictions_path')
+        still works after the rename."""
+        from sleap_rtc.api import _StreamedFileReceiver, _apply_received_predictions
+
+        receiver = _StreamedFileReceiver()
+        receiver.handle_string("FILE_META::predictions.slp:5:/worker/out")
+        receiver.handle_bytes(b"world")
+        receiver.handle_string("END_OF_FILE")
+
+        data = {"predictions_path": "/root/vast/p.slp"}
+        _apply_received_predictions(receiver, data, "predictions_path")
+
+        assert data["predictions_path"] != "/root/vast/p.slp"
+        assert data["worker_predictions_path"] == "/root/vast/p.slp"
+
+    def test_no_substitution_when_no_predictions_received(self, tmp_path):
+        """If receiver has no captured local path, the data field is left unchanged
+        regardless of which field_name is requested."""
+        from sleap_rtc.api import _StreamedFileReceiver, _apply_received_predictions
+
+        receiver = _StreamedFileReceiver()  # nothing was streamed
+
+        data = {"output_path": "/worker/path.slp"}
+        _apply_received_predictions(receiver, data, "output_path")
+
+        assert data["output_path"] == "/worker/path.slp"
+        assert "worker_output_path" not in data
 
 
 class TestTempPredictionAtexitCleanup:
