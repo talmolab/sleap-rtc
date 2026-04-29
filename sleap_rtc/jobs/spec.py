@@ -154,9 +154,7 @@ class TrackJobSpec:
             self.frame_filter = "suggested"
         # Validate frame_filter (after migration so the migrated value is checked).
         if self.frame_filter not in self._VALID_FRAME_FILTERS:
-            valid = sorted(
-                v for v in self._VALID_FRAME_FILTERS if v is not None
-            )
+            valid = sorted(v for v in self._VALID_FRAME_FILTERS if v is not None)
             raise ValueError(
                 f"frame_filter must be one of {valid} or None; "
                 f"got {self.frame_filter!r}"

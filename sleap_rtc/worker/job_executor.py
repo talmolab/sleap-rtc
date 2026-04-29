@@ -1272,10 +1272,9 @@ class JobExecutor:
                                 job_type == "track"
                                 and "Predictions output path:" in text
                             ):
-                                _captured_output_path = (
-                                    text.split("Predictions output path:", 1)[1]
-                                    .strip()
-                                )
+                                _captured_output_path = text.split(
+                                    "Predictions output path:", 1
+                                )[1].strip()
                                 logging.info(
                                     f"[JOB {job_id}] Captured output path: "
                                     f"{_captured_output_path}"
@@ -1468,9 +1467,7 @@ class JobExecutor:
                         output_path = Path(_captured_output_path)
                     else:
                         base = Path(spec.data_path)
-                        output_path = base.with_suffix(
-                            ".predictions" + base.suffix
-                        )
+                        output_path = base.with_suffix(".predictions" + base.suffix)
                     if output_path.exists():
                         try:
                             await self.worker.file_manager.send_file(
