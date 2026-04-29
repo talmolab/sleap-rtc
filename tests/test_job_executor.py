@@ -544,3 +544,74 @@ class TestCancelGraceConstant:
             "If you change this, update the brainstorm doc and the design "
             "doc together."
         )
+
+
+class TestCancelDuringTrack:
+    """Task 8: ``cancel_running_job`` must produce a SIGTERM-style
+    return code (-signal.SIGTERM) so ``execute_from_spec`` classifies the
+    job as ``cancelled`` and emits ``MSG_JOB_FAILED`` (not COMPLETE).
+    """
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX-only signal semantics")
+    @pytest.mark.asyncio
+    async def test_cancel_during_track_emits_msg_job_failed(self, tmp_path):
+        import signal as _signal
+
+        from sleap_rtc.jobs.spec import TrackJobSpec
+        from sleap_rtc.worker.job_executor import JobExecutor
+
+        spec = TrackJobSpec(
+            data_path=str(tmp_path / "video.mp4"),
+            model_paths=[str(tmp_path / "model")],
+            output_path=str(tmp_path / "predictions.slp"),
+        )
+
+        channel = MagicMock()
+        channel.readyState = "open"
+        channel.send = MagicMock()
+
+        worker = MagicMock()
+        worker.file_manager = MagicMock()
+        worker.file_manager.send_file = AsyncMock()
+
+        # _make_process(returncode=-signal.SIGTERM) simulates the kernel
+        # reporting "killed by SIGTERM" to asyncio.subprocess.
+        proc = _make_process(returncode=-_signal.SIGTERM)
+
+        executor = JobExecutor(worker=worker, capabilities=MagicMock())
+
+        with patch(
+            "asyncio.create_subprocess_exec",
+            new=AsyncMock(return_value=proc),
+        ):
+            result = await executor.execute_from_spec(
+                channel,
+                cmd=["true"],
+                job_id="job-track-cancel",
+                job_type="track",
+                spec=spec,
+            )
+
+        sent = [c.args[0] for c in channel.send.call_args_list if c.args]
+        assert any(
+            isinstance(s, str) and s.startswith("JOB_FAILED::")
+            for s in sent
+        ), f"Cancelled track job must emit MSG_JOB_FAILED; got {sent!r}"
+        assert not any(
+            isinstance(s, str) and s.startswith("JOB_COMPLETE::")
+            for s in sent
+        ), f"Cancelled track job must NOT emit MSG_JOB_COMPLETE; got {sent!r}"
+        # The "cancelled by user" wording is a contract: the GUI uses it
+        # to distinguish user-cancelled from worker-side error.
+        failed_msgs = [s for s in sent if s.startswith("JOB_FAILED::")]
+        payload = json.loads(failed_msgs[0].split("::", 1)[1])
+        assert "cancel" in payload.get("message", "").lower()
+        assert result["cancelled"] is True
+
+    def test_cancel_running_job_no_op_when_no_process(self):
+        """``cancel_running_job`` must be a safe no-op when no process is running."""
+        from sleap_rtc.worker.job_executor import JobExecutor
+
+        executor = JobExecutor(worker=MagicMock(), capabilities=MagicMock())
+        assert executor._running_process is None
+        executor.cancel_running_job()  # must not raise

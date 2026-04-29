@@ -197,6 +197,60 @@ class TestRemoteProgressBridge:
         bridge.on_raw_zmq_message('{"event": "batch_end"}')
 
 
+class TestRemoteProgressBridgeCancelForwarding:
+    """Regression: the existing LossViewer-cancel → MSG_JOB_CANCEL path
+    must keep working after Task 8's refactor.
+
+    The path is:
+        LossViewer cancel cmd → bridge SUB socket
+        → bridge._poll_commands sees `command == "cancel"`
+        → calls `self._send_fn(MSG_JOB_CANCEL)`
+        → that send_fn was registered via on_channel_ready
+
+    We verify by stubbing the SUB socket to yield one `cancel` jsonpickle
+    payload, registering a recording send_fn, starting the bridge,
+    waiting briefly for the poll thread to consume the message, and
+    asserting the recording captured `MSG_JOB_CANCEL`.
+    """
+
+    def test_loss_viewer_cancel_forwards_msg_job_cancel(self, mock_zmq):
+        import time
+        import jsonpickle
+        from sleap_rtc.gui.runners import RemoteProgressBridge
+        from sleap_rtc.protocol import MSG_JOB_CANCEL
+
+        sent: list[str] = []
+
+        def _record(msg: str) -> None:
+            sent.append(msg)
+
+        # Configure the SUB socket to yield ONE cancel command, then 0s.
+        mock_context = mock_zmq.Context.return_value
+        sub_socket = MagicMock()
+        cancel_payload = jsonpickle.encode({"command": "cancel"})
+        sub_socket.poll.side_effect = [1] + [0] * 100
+        sub_socket.recv_string.return_value = cancel_payload
+
+        pub_socket = MagicMock()
+
+        def _make_socket(socket_type):
+            return pub_socket if socket_type == mock_zmq.PUB else sub_socket
+
+        mock_context.socket.side_effect = _make_socket
+
+        bridge = RemoteProgressBridge()
+        bridge.set_send_fn(_record)
+        bridge.start()
+        # The poll thread sleeps 100 ms per iteration; give it a few cycles.
+        time.sleep(0.5)
+        bridge.stop()
+
+        assert MSG_JOB_CANCEL in sent, (
+            f"Expected bridge to forward MSG_JOB_CANCEL after LossViewer "
+            f"cancel command; got {sent!r}"
+        )
+
+
 # =============================================================================
 # LossViewer Message Format Tests
 # =============================================================================

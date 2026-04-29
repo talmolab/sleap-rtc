@@ -2111,3 +2111,45 @@ class TestTempPredictionAtexitCleanup:
             receiver.handle_string("END_OF_FILE")
 
         assert api_mod._temp_prediction_paths == before
+
+
+class TestRunInferenceAsyncSignature:
+    """Task 8: ``_run_inference_async`` and the public ``run_inference``
+    wrapper must accept ``on_channel_ready`` (thread-safe send hook),
+    ``on_log`` (raw log line callback), and ``on_job_message`` (typed
+    JOB_* dispatch callback) so a GUI can wire its Cancel button and
+    progress dialog to the standalone-track flow.
+    """
+
+    def test_run_inference_async_has_on_channel_ready(self):
+        import inspect
+        from sleap_rtc.api import _run_inference_async
+
+        sig = inspect.signature(_run_inference_async)
+        assert "on_channel_ready" in sig.parameters
+        assert sig.parameters["on_channel_ready"].default is None
+
+    def test_run_inference_async_has_on_log(self):
+        import inspect
+        from sleap_rtc.api import _run_inference_async
+
+        sig = inspect.signature(_run_inference_async)
+        assert "on_log" in sig.parameters
+        assert sig.parameters["on_log"].default is None
+
+    def test_run_inference_async_has_on_job_message(self):
+        import inspect
+        from sleap_rtc.api import _run_inference_async
+
+        sig = inspect.signature(_run_inference_async)
+        assert "on_job_message" in sig.parameters
+        assert sig.parameters["on_job_message"].default is None
+
+    def test_run_inference_wrapper_plumbs_through(self):
+        import inspect
+        from sleap_rtc.api import run_inference
+
+        sig = inspect.signature(run_inference)
+        for name in ("on_channel_ready", "on_log", "on_job_message"):
+            assert name in sig.parameters, f"run_inference missing {name}"
+            assert sig.parameters[name].default is None

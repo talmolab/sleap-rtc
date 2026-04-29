@@ -2303,6 +2303,9 @@ def run_inference(
     frames: str | None = None,
     progress_callback: "Callable[[ProgressEvent], None] | None" = None,
     timeout: float = 3600.0,  # 1 hour default
+    on_channel_ready: "Callable[[Callable[[str], None]], None] | None" = None,
+    on_log: "Callable[[str], None] | None" = None,
+    on_job_message: "Callable[[str, dict], None] | None" = None,
 ) -> InferenceResult:
     """Run inference remotely on a worker.
 
@@ -2321,6 +2324,16 @@ def run_inference(
         frames: Frame range string (e.g., "0-100,200-300").
         progress_callback: Function called with progress updates.
         timeout: Maximum time to wait for job completion in seconds.
+        on_channel_ready: Optional callback invoked once with a thread-safe
+            ``send_fn(str)`` after the data channel is authenticated. The
+            GUI's Cancel button uses this to send ``MSG_JOB_CANCEL`` from
+            the Qt thread without touching the asyncio loop directly.
+        on_log: Optional callback invoked with raw log lines from the
+            worker (Task 9 wiring; accepted in Task 8 for forward
+            compatibility).
+        on_job_message: Optional callback invoked with ``(msg_type, payload)``
+            for typed ``JOB_*`` dispatches (Task 9 wiring; accepted in
+            Task 8 for forward compatibility).
 
     Returns:
         InferenceResult with job outcome and predictions path.
@@ -2346,6 +2359,9 @@ def run_inference(
             frames=frames,
             progress_callback=progress_callback,
             timeout=timeout,
+            on_channel_ready=on_channel_ready,
+            on_log=on_log,
+            on_job_message=on_job_message,
         )
     )
 
@@ -2362,6 +2378,9 @@ async def _run_inference_async(
     frames: str | None,
     progress_callback: "Callable[[ProgressEvent], None] | None",
     timeout: float,
+    on_channel_ready: "Callable[[Callable[[str], None]], None] | None" = None,
+    on_log: "Callable[[str], None] | None" = None,
+    on_job_message: "Callable[[str, dict], None] | None" = None,
 ) -> InferenceResult:
     """Async implementation of run_inference."""
     import json
@@ -2529,6 +2548,18 @@ async def _run_inference_async(
 
             # Authenticate with worker via PSK
             await _authenticate_channel(data_channel, response_queue)
+
+            # Expose thread-safe send function for bidirectional communication.
+            # Mirrors the training-side wire surface in _run_training_async so the
+            # SLEAP GUI can hand the same `send_fn` to its InferenceProgressDialog
+            # Cancel button.
+            if on_channel_ready:
+                loop = asyncio.get_running_loop()
+
+                def _thread_safe_send(msg: str) -> None:
+                    loop.call_soon_threadsafe(data_channel.send, msg)
+
+                on_channel_ready(_thread_safe_send)
 
             # Submit job
             spec_json = spec.to_json()
