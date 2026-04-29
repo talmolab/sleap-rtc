@@ -2909,8 +2909,13 @@ class RemoteTrainingWidget(QGroupBox):
     room_changed = Signal(str)  # room_id
     worker_changed = Signal(str)  # worker_id or empty for auto
 
-    def __init__(self, parent: QWidget | None = None):
-        super().__init__("Remote Training (Experimental)", parent)
+    def __init__(self, parent: QWidget | None = None, mode: str = "training"):
+        title = (
+            "Remote Training (Experimental)"
+            if mode == "training"
+            else "Remote Inference (Experimental)"
+        )
+        super().__init__(title, parent)
 
         # State
         self._rooms: list[Room] = []
