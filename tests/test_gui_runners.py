@@ -1217,3 +1217,112 @@ class TestHandleInferenceMessage:
         label = bridge._inference_dialog._status_label.text()
         assert "35" in label
         bridge._inference_dialog.close()
+
+
+class TestHandleJobMessage:
+    """Task 9: ``RemoteProgressBridge.handle_job_message`` mirrors
+    ``handle_inference_message`` for the standalone-track flow's JOB_*
+    wire prefix.  Uses a patched ``InferenceProgressDialog`` so the tests
+    run without a Qt event loop.
+    """
+
+    def test_job_log_creates_dialog_and_appends(self):
+        bridge = RemoteProgressBridge()
+        with patch("sleap_rtc.gui.widgets.InferenceProgressDialog") as MockDialog:
+            instance = MagicMock()
+            MockDialog.return_value = instance
+            bridge._dispatch_job_msg(
+                "JOB_LOG",
+                {"text": "Predicting... 50% 17/35 ETA: 0:00:01 47.8 FPS"},
+            )
+            MockDialog.assert_called_once()
+            instance.show.assert_called_once()
+            instance.append_log.assert_called_once_with(
+                "Predicting... 50% 17/35 ETA: 0:00:01 47.8 FPS"
+            )
+            instance.set_progress.assert_called_once_with(17, 35, 47.8, 1)
+        assert bridge._last_n_frames == 35
+
+    def test_job_log_with_cr_prefix_strips_before_regex(self):
+        bridge = RemoteProgressBridge()
+        with patch("sleap_rtc.gui.widgets.InferenceProgressDialog") as MockDialog:
+            instance = MagicMock()
+            MockDialog.return_value = instance
+            bridge._dispatch_job_msg(
+                "JOB_LOG",
+                {"text": "CR::Predicting... 100% 35/35 ETA: 0:00:00 47.8 FPS"},
+            )
+            # CR:: prefix must be stripped before the line is shown / parsed.
+            instance.append_log.assert_called_once_with(
+                "Predicting... 100% 35/35 ETA: 0:00:00 47.8 FPS"
+            )
+            instance.set_progress.assert_called_once_with(35, 35, 47.8, 0)
+        assert bridge._last_n_frames == 35
+
+    def test_job_progress_calls_update(self):
+        bridge = RemoteProgressBridge()
+        with patch("sleap_rtc.gui.widgets.InferenceProgressDialog") as MockDialog:
+            instance = MagicMock()
+            MockDialog.return_value = instance
+            payload = {"n_processed": 10, "n_total": 50}
+            bridge._dispatch_job_msg("JOB_PROGRESS", payload)
+            instance.update.assert_called_once_with(payload)
+
+    def test_job_complete_calls_finish_and_predictions_ready(self):
+        bridge = RemoteProgressBridge()
+        received: list[str] = []
+        bridge.set_predictions_ready_callback(received.append)
+        with patch("sleap_rtc.gui.widgets.InferenceProgressDialog") as MockDialog:
+            instance = MagicMock()
+            MockDialog.return_value = instance
+            # Open the dialog with an initial JOB_LOG so the COMPLETE branch
+            # has something to call finish() on.
+            bridge._dispatch_job_msg(
+                "JOB_LOG",
+                {"text": "Predicting... 100% 35/35 ETA: 0:00:00 47.8 FPS"},
+            )
+            bridge._dispatch_job_msg(
+                "JOB_COMPLETE",
+                {
+                    "output_path": "/tmp/out.slp",
+                    "n_with_instances": 30,
+                    "n_empty": 5,
+                },
+            )
+            instance.finish.assert_called_once_with(35, 30, 5)
+        assert received == ["/tmp/out.slp"]
+
+    def test_job_failed_with_no_dialog_creates_one_and_shows_error(self):
+        bridge = RemoteProgressBridge()
+        assert bridge._inference_dialog is None
+        with patch("sleap_rtc.gui.widgets.InferenceProgressDialog") as MockDialog:
+            instance = MagicMock()
+            MockDialog.return_value = instance
+            bridge._dispatch_job_msg("JOB_FAILED", {"message": "subprocess crashed"})
+            MockDialog.assert_called_once()
+            instance.show.assert_called_once()
+            instance.show_error.assert_called_once_with("subprocess crashed")
+
+    def test_job_failed_with_existing_dialog_reuses_it(self):
+        bridge = RemoteProgressBridge()
+        with patch("sleap_rtc.gui.widgets.InferenceProgressDialog") as MockDialog:
+            instance = MagicMock()
+            MockDialog.return_value = instance
+            bridge._dispatch_job_msg("JOB_LOG", {"text": "Booting..."})
+            assert MockDialog.call_count == 1
+            bridge._dispatch_job_msg("JOB_FAILED", {"message": "GPU OOM"})
+            # Dialog must NOT be reconstructed — show_error on the same one.
+            assert MockDialog.call_count == 1
+            instance.show_error.assert_called_once_with("GPU OOM")
+
+    def test_inference_dispatch_unchanged(self, qapp):
+        """Regression: existing INFERENCE_* dispatch path is unaffected."""
+        bridge = RemoteProgressBridge()
+        bridge._dispatch_inference_msg("INFERENCE_BEGIN", {})
+        bridge._dispatch_inference_msg(
+            "INFERENCE_LOG",
+            {"text": "Predicting... 100% 35/35 ETA: 0:00:00 47.8 FPS"},
+        )
+        assert bridge._last_n_frames == 35
+        assert bridge._inference_dialog is not None
+        bridge._inference_dialog.close()

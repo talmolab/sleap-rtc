@@ -2160,3 +2160,39 @@ class TestProtocolConstants:
         from sleap_rtc.protocol import MSG_JOB_LOG
 
         assert MSG_JOB_LOG == "JOB_LOG"
+
+
+class TestRunInferenceAsyncJobMessageForwarding:
+    """Task 9: ``_run_inference_async`` forwards each ``MSG_JOB_*`` wire
+    message to ``on_job_message`` with the typed name and parsed dict.
+    """
+
+    def test_msg_job_progress_forwarded_to_on_job_message(self):
+        from sleap_rtc.api import _dispatch_inference_response
+
+        events: list[tuple[str, dict]] = []
+
+        def _on_job_msg(msg_type, data):
+            events.append((msg_type, data))
+
+        _dispatch_inference_response(
+            "JOB_PROGRESS::" + json.dumps({"frames": 17, "total": 35}),
+            on_job_message=_on_job_msg,
+            on_log=None,
+        )
+
+        assert events == [("JOB_PROGRESS", {"frames": 17, "total": 35})]
+
+    def test_msg_job_log_forwarded_to_both_callbacks(self):
+        from sleap_rtc.api import _dispatch_inference_response
+
+        logs: list[str] = []
+        events: list[tuple[str, dict]] = []
+        _dispatch_inference_response(
+            "JOB_LOG::Predicting... 50% 17/35 ETA: 0:00:01",
+            on_job_message=lambda t, d: events.append((t, d)),
+            on_log=logs.append,
+        )
+
+        assert logs == ["Predicting... 50% 17/35 ETA: 0:00:01"]
+        assert events == [("JOB_LOG", {"text": "Predicting... 50% 17/35 ETA: 0:00:01"})]
