@@ -615,3 +615,132 @@ class TestCancelDuringTrack:
         executor = JobExecutor(worker=MagicMock(), capabilities=MagicMock())
         assert executor._running_process is None
         executor.cancel_running_job()  # must not raise
+
+
+class TestExecuteFromSpecTrackJobLogEmission:
+    """Task 9: track jobs must wrap subprocess output in MSG_JOB_LOG::
+    so the client can dispatch through on_job_message instead of parsing
+    raw strings.  Training jobs keep the legacy bare-line format.
+    """
+
+    @pytest.mark.asyncio
+    async def test_track_lines_emitted_as_msg_job_log(self, tmp_path):
+        from sleap_rtc.jobs.spec import TrackJobSpec
+        from sleap_rtc.worker.job_executor import JobExecutor
+
+        spec = TrackJobSpec(
+            data_path=str(tmp_path / "video.mp4"),
+            model_paths=[str(tmp_path / "model")],
+            output_path=str(tmp_path / "predictions.slp"),
+        )
+        spec_output = tmp_path / "predictions.slp"
+        spec_output.write_bytes(b"fake")
+
+        channel = MagicMock()
+        channel.readyState = "open"
+        channel.send = MagicMock()
+
+        worker = MagicMock()
+        worker.file_manager = MagicMock()
+        worker.file_manager.send_file = AsyncMock()
+
+        # Build a process whose stdout yields two newline-terminated lines.
+        proc = MagicMock()
+        proc.pid = 4242
+        proc.returncode = 0
+
+        chunks = [
+            b"Predicting... 50% 17/35 ETA: 0:00:01\n",
+            b"Predicting... 100% 35/35 ETA: 0:00:00 47.8 FPS\n",
+            b"",  # EOF
+        ]
+
+        async def _read(_n):
+            return chunks.pop(0) if chunks else b""
+
+        proc.stdout = MagicMock()
+        proc.stdout.read = AsyncMock(side_effect=_read)
+        proc.stderr = None  # track-mode merges stderr into stdout
+        proc.wait = AsyncMock()
+
+        executor = JobExecutor(worker=worker, capabilities=MagicMock())
+
+        with patch(
+            "asyncio.create_subprocess_exec",
+            new=AsyncMock(return_value=proc),
+        ):
+            await executor.execute_from_spec(
+                channel,
+                cmd=["true"],
+                job_id="job-log-emit",
+                job_type="track",
+                spec=spec,
+            )
+
+        sent = [c.args[0] for c in channel.send.call_args_list if c.args]
+        log_msgs = [s for s in sent if isinstance(s, str) and s.startswith("JOB_LOG::")]
+        assert len(log_msgs) >= 2, (
+            f"Expected at least 2 MSG_JOB_LOG messages from track stdout, "
+            f"got: {sent!r}"
+        )
+        # Raw subprocess output must NOT be sent without the JOB_LOG:: prefix.
+        bare_predicting = [
+            s for s in sent
+            if isinstance(s, str)
+            and s.startswith("Predicting...")
+            and not s.startswith("JOB_LOG::")
+        ]
+        assert not bare_predicting, (
+            f"Track jobs must wrap subprocess output in JOB_LOG::; got "
+            f"bare lines: {bare_predicting!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_train_lines_remain_bare(self, tmp_path):
+        """Regression: training jobs must keep the legacy bare-line format
+        because _run_training_async's on_log callback expects it.
+        """
+        from sleap_rtc.worker.job_executor import JobExecutor
+
+        channel = MagicMock()
+        channel.readyState = "open"
+        channel.send = MagicMock()
+
+        proc = MagicMock()
+        proc.pid = 4243
+        proc.returncode = 0
+
+        chunks = [b"Epoch 1 - train_loss=0.5\n", b""]
+
+        async def _read(_n):
+            return chunks.pop(0) if chunks else b""
+
+        proc.stdout = MagicMock()
+        proc.stdout.read = AsyncMock(side_effect=_read)
+        proc.stderr = MagicMock()
+        proc.stderr.read = AsyncMock(return_value=b"")
+        proc.wait = AsyncMock()
+
+        executor = JobExecutor(worker=MagicMock(), capabilities=MagicMock())
+
+        with patch(
+            "asyncio.create_subprocess_exec",
+            new=AsyncMock(return_value=proc),
+        ):
+            await executor.execute_from_spec(
+                channel,
+                cmd=["true"],
+                job_id="job-train-bare",
+                job_type="train",
+            )
+
+        sent = [c.args[0] for c in channel.send.call_args_list if c.args]
+        assert any(
+            isinstance(s, str)
+            and s.startswith("Epoch 1")
+            and not s.startswith("JOB_LOG::")
+            for s in sent
+        ), (
+            f"Training stdout must remain bare-line format for legacy "
+            f"on_log compatibility; got {sent!r}"
+        )

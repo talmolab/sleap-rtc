@@ -2153,3 +2153,10 @@ class TestRunInferenceAsyncSignature:
         for name in ("on_channel_ready", "on_log", "on_job_message"):
             assert name in sig.parameters, f"run_inference missing {name}"
             assert sig.parameters[name].default is None
+
+
+class TestProtocolConstants:
+    def test_msg_job_log_exists(self):
+        from sleap_rtc.protocol import MSG_JOB_LOG
+
+        assert MSG_JOB_LOG == "JOB_LOG"

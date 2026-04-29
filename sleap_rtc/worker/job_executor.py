@@ -937,6 +937,7 @@ class JobExecutor:
                 to the client (Task 7). When None, no streaming is performed.
         """
         from sleap_rtc.protocol import (
+            MSG_JOB_LOG,
             MSG_JOB_PROGRESS,
             MSG_JOB_COMPLETE,
             MSG_JOB_FAILED,
@@ -1132,7 +1133,9 @@ class JobExecutor:
                                         job_type == "track"
                                         and channel.readyState == "open"
                                     ):
-                                        channel.send(f"[stderr] {line}\n")
+                                        channel.send(
+                                            f"{MSG_JOB_LOG}{MSG_SEPARATOR}[stderr] {line}\n"
+                                        )
                 except Exception as e:
                     logging.exception(f"[JOB {job_id}] Stderr stream error: {e}")
 
@@ -1214,12 +1217,22 @@ class JobExecutor:
                                 f"subprocess has closed stdout (returncode={process.returncode!r})"
                             )
                             if pending_cr and channel.readyState == "open":
-                                channel.send(pending_cr + "\n")
+                                if job_type == "track":
+                                    channel.send(
+                                        f"{MSG_JOB_LOG}{MSG_SEPARATOR}{pending_cr}\n"
+                                    )
+                                else:
+                                    channel.send(pending_cr + "\n")
                             if buf:
                                 line = buf.decode(errors="replace")
                                 logging.info(f"[JOB {job_id}] {line}")
                                 if channel.readyState == "open":
-                                    channel.send(line + "\n")
+                                    if job_type == "track":
+                                        channel.send(
+                                            f"{MSG_JOB_LOG}{MSG_SEPARATOR}{line}\n"
+                                        )
+                                    else:
+                                        channel.send(line + "\n")
                             break
 
                         buf += chunk
@@ -1251,11 +1264,28 @@ class JobExecutor:
                                 # \r version to avoid duplicate sends)
                                 pending_cr = ""
                                 if channel.readyState == "open":
-                                    channel.send(text + "\n")
+                                    if job_type == "track":
+                                        # Wrap subprocess stdout in a typed
+                                        # protocol message so the client's
+                                        # response loop can route it via
+                                        # on_job_message (Task 9). Training
+                                        # keeps the legacy bare-string format
+                                        # that _run_training_async's on_log
+                                        # callback expects.
+                                        channel.send(
+                                            f"{MSG_JOB_LOG}{MSG_SEPARATOR}{text}"
+                                        )
+                                    else:
+                                        channel.send(text + "\n")
                             else:  # \r — forward as CR:: for live progress display
                                 pending_cr = text
                                 if channel.readyState == "open":
-                                    channel.send(f"CR::{text}")
+                                    if job_type == "track":
+                                        channel.send(
+                                            f"{MSG_JOB_LOG}{MSG_SEPARATOR}CR::{text}"
+                                        )
+                                    else:
+                                        channel.send(f"CR::{text}")
 
                             # Extract progress info for training jobs
                             if job_type == "train":
