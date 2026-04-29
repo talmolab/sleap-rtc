@@ -524,6 +524,20 @@ class RemoteProgressBridge(QObject):
             logger.info(f"Inference skipped: {reason}")
             # No dialog shown for skipped inference.
 
+    def show_eager_dialog(self):
+        """Create and show the InferenceProgressDialog immediately.
+
+        Call this right after constructing the bridge so the user sees
+        'Waiting for worker to start inference...' while the WebRTC
+        connection and job submission happen in the background.
+        """
+        from sleap_rtc.gui.widgets import InferenceProgressDialog
+
+        if self._inference_dialog is None:
+            self._inference_dialog = InferenceProgressDialog()
+            self._connect_cancel_to_send_fn(self._inference_dialog)
+            self._inference_dialog.show_waiting()
+
     def handle_job_message(self, msg_type: str, data: dict):
         """Thread-safe entry point for standalone-track JOB_* messages.
 
@@ -569,6 +583,13 @@ class RemoteProgressBridge(QObject):
                 self._inference_dialog = InferenceProgressDialog()
                 self._connect_cancel_to_send_fn(self._inference_dialog)
                 self._inference_dialog.show()
+            else:
+                # Transition from "waiting" → live: reset to determinate progress
+                if self._inference_dialog._progress_bar.maximum() == 0:
+                    self._inference_dialog._status_label.setText(
+                        "Running inference…"
+                    )
+                    self._inference_dialog._progress_bar.setRange(0, 100)
             self._inference_dialog.append_log(clean)
             # Parse progress from rich progress bar lines, e.g.:
             #   "Predicting... 100% 35/35 ETA: 0:00:00 Elapsed: 0:00:01 47.8 FPS"
@@ -596,6 +617,13 @@ class RemoteProgressBridge(QObject):
                 self._inference_dialog = InferenceProgressDialog()
                 self._connect_cancel_to_send_fn(self._inference_dialog)
                 self._inference_dialog.show()
+            else:
+                # Transition from "waiting" → live: reset to determinate progress
+                if self._inference_dialog._progress_bar.maximum() == 0:
+                    self._inference_dialog._status_label.setText(
+                        "Running inference…"
+                    )
+                    self._inference_dialog._progress_bar.setRange(0, 100)
             self._inference_dialog.update(data)
 
         elif msg_type == "JOB_COMPLETE":

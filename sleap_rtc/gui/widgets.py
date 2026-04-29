@@ -3531,6 +3531,12 @@ class InferenceProgressDialog(QDialog):
     # Public API
     # ------------------------------------------------------------------
 
+    def show_waiting(self):
+        """Show a 'waiting for worker' state with indeterminate progress."""
+        self._status_label.setText("Waiting for worker to start inference…")
+        self._progress_bar.setRange(0, 0)  # indeterminate
+        self.show()
+
     def update(self, data: dict):
         """Update the dialog with a progress payload from INFERENCE_PROGRESS.
 
