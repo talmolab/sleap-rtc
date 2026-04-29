@@ -2154,6 +2154,31 @@ class TestRunInferenceAsyncSignature:
             assert name in sig.parameters, f"run_inference missing {name}"
             assert sig.parameters[name].default is None
 
+    def test_run_inference_async_has_frame_filter(self):
+        import inspect
+        from sleap_rtc.api import _run_inference_async
+
+        sig = inspect.signature(_run_inference_async)
+        assert "frame_filter" in sig.parameters
+        assert sig.parameters["frame_filter"].default is None
+
+    def test_run_inference_async_has_video_index(self):
+        import inspect
+        from sleap_rtc.api import _run_inference_async
+
+        sig = inspect.signature(_run_inference_async)
+        assert "video_index" in sig.parameters
+        assert sig.parameters["video_index"].default is None
+
+    def test_run_inference_wrapper_has_frame_filter_and_video_index(self):
+        import inspect
+        from sleap_rtc.api import run_inference
+
+        sig = inspect.signature(run_inference)
+        for name in ("frame_filter", "video_index"):
+            assert name in sig.parameters, f"run_inference missing {name}"
+            assert sig.parameters[name].default is None
+
 
 class TestProtocolConstants:
     def test_msg_job_log_exists(self):

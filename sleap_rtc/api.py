@@ -2343,6 +2343,8 @@ def run_inference(
     peak_threshold: float | None = None,
     only_suggested_frames: bool = False,
     frames: str | None = None,
+    frame_filter: str | None = None,
+    video_index: int | None = None,
     progress_callback: "Callable[[ProgressEvent], None] | None" = None,
     timeout: float = 3600.0,  # 1 hour default
     on_channel_ready: "Callable[[Callable[[str], None]], None] | None" = None,
@@ -2364,6 +2366,10 @@ def run_inference(
         peak_threshold: Peak detection threshold.
         only_suggested_frames: Only run on suggested frames.
         frames: Frame range string (e.g., "0-100,200-300").
+        frame_filter: Which subset of frames to run inference on. One of
+            "suggested", "user", "predicted", "random", or None (all frames).
+        video_index: Restrict inference to a single video by index. None means
+            all videos in the labels file.
         progress_callback: Function called with progress updates.
         timeout: Maximum time to wait for job completion in seconds.
         on_channel_ready: Optional callback invoked once with a thread-safe
@@ -2399,6 +2405,8 @@ def run_inference(
             peak_threshold=peak_threshold,
             only_suggested_frames=only_suggested_frames,
             frames=frames,
+            frame_filter=frame_filter,
+            video_index=video_index,
             progress_callback=progress_callback,
             timeout=timeout,
             on_channel_ready=on_channel_ready,
@@ -2418,8 +2426,10 @@ async def _run_inference_async(
     peak_threshold: float | None,
     only_suggested_frames: bool,
     frames: str | None,
-    progress_callback: "Callable[[ProgressEvent], None] | None",
-    timeout: float,
+    frame_filter: str | None = None,
+    video_index: int | None = None,
+    progress_callback: "Callable[[ProgressEvent], None] | None" = None,
+    timeout: float = 3600.0,
     on_channel_ready: "Callable[[Callable[[str], None]], None] | None" = None,
     on_log: "Callable[[str], None] | None" = None,
     on_job_message: "Callable[[str, dict], None] | None" = None,
@@ -2460,6 +2470,8 @@ async def _run_inference_async(
         peak_threshold=peak_threshold,
         only_suggested_frames=only_suggested_frames,
         frames=frames,
+        frame_filter=frame_filter,
+        video_index=video_index,
     )
 
     # Response handling
