@@ -23,6 +23,11 @@ from aiortc import RTCDataChannel
 # wait 30 real seconds for the watchdog cycle to fire.
 _WATCHDOG_INTERVAL_SECS = 30
 
+# Grace period after SIGTERM before escalating to SIGKILL (cancel_running_job).
+# Short enough for an interactive Cancel button; long enough for the sleap-nn
+# subprocess to flush its progress bar and exit cleanly on most hardware.
+_CANCEL_GRACE_SECS = 5
+
 from sleap_rtc.worker.progress_reporter import ProgressReporter
 
 if TYPE_CHECKING:
@@ -260,8 +265,9 @@ class JobExecutor:
     def cancel_running_job(self):
         """Send SIGTERM to the running job's process group for immediate cancellation.
 
-        If the process doesn't exit within 10 seconds, escalates to SIGKILL.
-        On Windows, falls back to proc.kill() (no process groups).
+        If the process doesn't exit within ``_CANCEL_GRACE_SECS`` seconds,
+        escalates to SIGKILL.  On Windows, falls back to proc.kill() (no
+        process groups).
         """
         proc = self._running_process
         if proc is not None and proc.returncode is None:
@@ -280,15 +286,15 @@ class JobExecutor:
 
                     def _escalate_to_sigkill():
                         try:
-                            proc.wait(timeout=10)
+                            proc.wait(timeout=_CANCEL_GRACE_SECS)
                             logging.info(f"Process {proc.pid} exited after SIGTERM")
                         except Exception:
-                            # Still alive after 10s — force kill
+                            # Still alive after grace period — force kill
                             try:
                                 pgid2 = os.getpgid(proc.pid)
                                 logging.warning(
                                     f"Process group {pgid2} did not exit after "
-                                    f"SIGTERM, escalating to SIGKILL"
+                                    f"SIGTERM ({_CANCEL_GRACE_SECS}s), escalating to SIGKILL"
                                 )
                                 os.killpg(pgid2, signal.SIGKILL)
                             except ProcessLookupError:

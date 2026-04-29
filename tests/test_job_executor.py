@@ -531,3 +531,16 @@ class TestExecuteFromSpecTrackStreaming:
         assert len(complete_msgs) == 1
         payload = json.loads(complete_msgs[0].split("::", 1)[1])
         assert "output_path" not in payload
+
+
+class TestCancelGraceConstant:
+    """The SIGTERM→SIGKILL grace must be 5 seconds (brainstorm decision)."""
+
+    def test_grace_constant_is_five_seconds(self):
+        from sleap_rtc.worker.job_executor import _CANCEL_GRACE_SECS
+
+        assert _CANCEL_GRACE_SECS == 5, (
+            "Brainstorm locked in 5 s grace before SIGKILL escalation. "
+            "If you change this, update the brainstorm doc and the design "
+            "doc together."
+        )
