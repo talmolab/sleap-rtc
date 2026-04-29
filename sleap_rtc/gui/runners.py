@@ -586,9 +586,7 @@ class RemoteProgressBridge(QObject):
             else:
                 # Transition from "waiting" → live: reset to determinate progress
                 if self._inference_dialog._progress_bar.maximum() == 0:
-                    self._inference_dialog._status_label.setText(
-                        "Running inference…"
-                    )
+                    self._inference_dialog._status_label.setText("Running inference…")
                     self._inference_dialog._progress_bar.setRange(0, 100)
             self._inference_dialog.append_log(clean)
             # Parse progress from rich progress bar lines, e.g.:
@@ -620,9 +618,7 @@ class RemoteProgressBridge(QObject):
             else:
                 # Transition from "waiting" → live: reset to determinate progress
                 if self._inference_dialog._progress_bar.maximum() == 0:
-                    self._inference_dialog._status_label.setText(
-                        "Running inference…"
-                    )
+                    self._inference_dialog._status_label.setText("Running inference…")
                     self._inference_dialog._progress_bar.setRange(0, 100)
             self._inference_dialog.update(data)
 
