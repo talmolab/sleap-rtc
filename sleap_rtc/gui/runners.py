@@ -124,6 +124,25 @@ class RemoteProgressBridge(QObject):
         """
         self._send_fn = send_fn
 
+    def _connect_cancel_to_send_fn(self, dialog: "QDialog"):
+        """Wire a dialog's Cancel button to send MSG_JOB_CANCEL.
+
+        For training, cancel flows through ZMQ (LossViewer → _poll_commands).
+        For standalone inference the bridge is NOT started (no ZMQ), so we
+        connect the dialog's ``rejected`` signal directly to ``_send_fn``.
+        """
+        from sleap_rtc.protocol import MSG_JOB_CANCEL
+
+        def _on_cancel():
+            if self._send_fn is not None:
+                try:
+                    self._send_fn(MSG_JOB_CANCEL)
+                    logger.info("Sent MSG_JOB_CANCEL to worker")
+                except Exception as e:
+                    logger.warning(f"Failed to send MSG_JOB_CANCEL: {e}")
+
+        dialog.rejected.connect(_on_cancel)
+
     def start(self):
         """Start the ZMQ publisher and subscriber sockets.
 
@@ -548,6 +567,7 @@ class RemoteProgressBridge(QObject):
                 logger.info("Track job log received — opening InferenceProgressDialog")
                 self._last_n_frames = None
                 self._inference_dialog = InferenceProgressDialog()
+                self._connect_cancel_to_send_fn(self._inference_dialog)
                 self._inference_dialog.show()
             self._inference_dialog.append_log(clean)
             # Parse progress from rich progress bar lines, e.g.:
@@ -574,6 +594,7 @@ class RemoteProgressBridge(QObject):
             if self._inference_dialog is None:
                 self._last_n_frames = None
                 self._inference_dialog = InferenceProgressDialog()
+                self._connect_cancel_to_send_fn(self._inference_dialog)
                 self._inference_dialog.show()
             self._inference_dialog.update(data)
 
