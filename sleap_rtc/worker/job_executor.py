@@ -1435,7 +1435,16 @@ class JobExecutor:
                     and not stopped_early
                     and process.returncode == 0
                 ):
-                    output_path = Path(spec.output_path)
+                    # Resolve the output path: use spec.output_path if set,
+                    # otherwise fall back to sleap-nn's default convention
+                    # (data_path with .slp replaced by .predictions.slp).
+                    if spec.output_path is not None:
+                        output_path = Path(spec.output_path)
+                    else:
+                        base = Path(spec.data_path)
+                        output_path = base.with_suffix(
+                            ".predictions" + base.suffix
+                        )
                     if output_path.exists():
                         try:
                             await self.worker.file_manager.send_file(
@@ -1466,7 +1475,7 @@ class JobExecutor:
                         # so the client's _apply_received_predictions(...)
                         # helper (Task 5) can substitute it with the local
                         # tempfile path.
-                        result_data["output_path"] = str(spec.output_path)
+                        result_data["output_path"] = str(output_path)
 
                 if channel.readyState == "open":
                     channel.send(
