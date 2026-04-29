@@ -398,17 +398,20 @@ class _StreamedFileReceiver:
             pass
 
 
-def _apply_received_predictions_to_inference_data(
-    receiver: _StreamedFileReceiver, data: dict
+def _apply_received_predictions(
+    receiver: _StreamedFileReceiver, data: dict, field_name: str
 ) -> None:
-    """Rewrite ``data['predictions_path']`` in-place to the local tempfile
-    path if the receiver has captured a streamed predictions.slp.
+    """Rewrite ``data[field_name]`` in-place to the local tempfile path if
+    the receiver has captured a streamed predictions.slp.
 
-    The original (worker-side) path is preserved as
-    ``data['worker_predictions_path']`` for v2 dual-mode fallback.
+    Used to rewrite worker-side path references in protocol messages
+    (``INFERENCE_COMPLETE.predictions_path``, ``MSG_JOB_COMPLETE.output_path``)
+    to the local tempfile the receiver wrote during streaming. The original
+    (worker-side) path is preserved as ``data['worker_<field_name>']`` for
+    v2 dual-mode fallback.
 
     If the local stream failed (tempfile open failed, close failed, or
-    malformed FILE_META), we log a warning and leave ``predictions_path``
+    malformed FILE_META), we log a warning and leave ``data[field_name]``
     as the worker-side path so downstream code can fall back to it.
     """
     local_path = receiver.take_predictions_path()
@@ -422,8 +425,50 @@ def _apply_received_predictions_to_inference_data(
                 f"falling back to worker-side path"
             )
         return
-    data["worker_predictions_path"] = data.get("predictions_path")
-    data["predictions_path"] = local_path
+    data[f"worker_{field_name}"] = data.get(field_name)
+    data[field_name] = local_path
+
+
+def _dispatch_inference_response(
+    response: str,
+    on_job_message: "Callable[[str, dict], None] | None",
+    on_log: "Callable[[str], None] | None",
+) -> bool:
+    """Dispatch a single MSG_JOB_PROGRESS / MSG_JOB_LOG wire message.
+
+    Returns True if the response was handled (matched a known prefix),
+    False otherwise so the caller's chain can keep checking
+    ACCEPTED/REJECTED/COMPLETE/FAILED itself.
+    """
+    import json
+
+    from sleap_rtc.protocol import (
+        MSG_JOB_PROGRESS,
+        MSG_JOB_LOG,
+        MSG_SEPARATOR,
+    )
+
+    if response.startswith(MSG_JOB_PROGRESS):
+        parts = response.split(MSG_SEPARATOR, 1)
+        raw = parts[1] if len(parts) > 1 else ""
+        if on_job_message is not None:
+            try:
+                data = json.loads(raw)
+            except json.JSONDecodeError:
+                data = {"raw": raw}
+            on_job_message("JOB_PROGRESS", data)
+        return True
+
+    if response.startswith(MSG_JOB_LOG):
+        parts = response.split(MSG_SEPARATOR, 1)
+        text = parts[1] if len(parts) > 1 else ""
+        if on_log is not None:
+            on_log(text)
+        if on_job_message is not None:
+            on_job_message("JOB_LOG", {"text": text})
+        return True
+
+    return False
 
 
 # =============================================================================
@@ -2237,8 +2282,8 @@ async def _run_training_async(
                         # (Task 1), replace the worker-side path with our
                         # local temp path. The worker path is preserved
                         # as worker_predictions_path for v2 dual-mode.
-                        _apply_received_predictions_to_inference_data(
-                            file_receiver, data
+                        _apply_received_predictions(
+                            file_receiver, data, "predictions_path"
                         )
                         on_inference_message("INFERENCE_COMPLETE", data)
                     break  # Terminal inference message — close channel
@@ -2298,8 +2343,13 @@ def run_inference(
     peak_threshold: float | None = None,
     only_suggested_frames: bool = False,
     frames: str | None = None,
+    frame_filter: str | None = None,
+    video_index: int | None = None,
     progress_callback: "Callable[[ProgressEvent], None] | None" = None,
     timeout: float = 3600.0,  # 1 hour default
+    on_channel_ready: "Callable[[Callable[[str], None]], None] | None" = None,
+    on_log: "Callable[[str], None] | None" = None,
+    on_job_message: "Callable[[str, dict], None] | None" = None,
 ) -> InferenceResult:
     """Run inference remotely on a worker.
 
@@ -2316,8 +2366,22 @@ def run_inference(
         peak_threshold: Peak detection threshold.
         only_suggested_frames: Only run on suggested frames.
         frames: Frame range string (e.g., "0-100,200-300").
+        frame_filter: Which subset of frames to run inference on. One of
+            "suggested", "user", "predicted", "random", or None (all frames).
+        video_index: Restrict inference to a single video by index. None means
+            all videos in the labels file.
         progress_callback: Function called with progress updates.
         timeout: Maximum time to wait for job completion in seconds.
+        on_channel_ready: Optional callback invoked once with a thread-safe
+            ``send_fn(str)`` after the data channel is authenticated. The
+            GUI's Cancel button uses this to send ``MSG_JOB_CANCEL`` from
+            the Qt thread without touching the asyncio loop directly.
+        on_log: Optional callback invoked with raw log lines from the
+            worker (Task 9 wiring; accepted in Task 8 for forward
+            compatibility).
+        on_job_message: Optional callback invoked with ``(msg_type, payload)``
+            for typed ``JOB_*`` dispatches (Task 9 wiring; accepted in
+            Task 8 for forward compatibility).
 
     Returns:
         InferenceResult with job outcome and predictions path.
@@ -2341,8 +2405,13 @@ def run_inference(
             peak_threshold=peak_threshold,
             only_suggested_frames=only_suggested_frames,
             frames=frames,
+            frame_filter=frame_filter,
+            video_index=video_index,
             progress_callback=progress_callback,
             timeout=timeout,
+            on_channel_ready=on_channel_ready,
+            on_log=on_log,
+            on_job_message=on_job_message,
         )
     )
 
@@ -2357,8 +2426,13 @@ async def _run_inference_async(
     peak_threshold: float | None,
     only_suggested_frames: bool,
     frames: str | None,
-    progress_callback: "Callable[[ProgressEvent], None] | None",
-    timeout: float,
+    frame_filter: str | None = None,
+    video_index: int | None = None,
+    progress_callback: "Callable[[ProgressEvent], None] | None" = None,
+    timeout: float = 3600.0,
+    on_channel_ready: "Callable[[Callable[[str], None]], None] | None" = None,
+    on_log: "Callable[[str], None] | None" = None,
+    on_job_message: "Callable[[str, dict], None] | None" = None,
 ) -> InferenceResult:
     """Async implementation of run_inference."""
     import json
@@ -2372,6 +2446,7 @@ async def _run_inference_async(
         MSG_JOB_ACCEPTED,
         MSG_JOB_REJECTED,
         MSG_JOB_PROGRESS,
+        MSG_JOB_LOG,
         MSG_JOB_COMPLETE,
         MSG_JOB_FAILED,
         MSG_SEPARATOR,
@@ -2395,6 +2470,8 @@ async def _run_inference_async(
         peak_threshold=peak_threshold,
         only_suggested_frames=only_suggested_frames,
         frames=frames,
+        frame_filter=frame_filter,
+        video_index=video_index,
     )
 
     # Response handling
@@ -2458,13 +2535,38 @@ async def _run_inference_async(
 
             channel_open = asyncio.Event()
 
+            # State machine for incoming FILE_META/bytes/END_OF_FILE
+            # transfers (the post-track predictions.slp stream from the
+            # worker — mirrors the training-side wiring landed in PR #79).
+            file_receiver = _StreamedFileReceiver()
+
             @data_channel.on("open")
             def on_open():
                 channel_open.set()
 
             @data_channel.on("message")
             async def on_message(message):
+                # Filter out the worker's KEEP_ALIVE heartbeat (10-byte
+                # binary) BEFORE any other handling. If we let it fall
+                # through to file_receiver.handle_bytes(), an in-flight
+                # transfer would have those 10 bytes appended to its
+                # tempfile, corrupting the predictions.slp by 10 bytes.
+                if isinstance(message, bytes) and message == b"KEEP_ALIVE":
+                    return
+
+                if isinstance(message, bytes):
+                    # Binary message — treat as a file-transfer chunk.
+                    # If no FILE_META is active, the receiver silently
+                    # drops the bytes (backward-compatible).
+                    file_receiver.handle_bytes(message)
+                    return
+
                 if isinstance(message, str):
+                    # File-transfer control messages (FILE_META, END_OF_FILE)
+                    # are consumed by the receiver and not forwarded.
+                    if file_receiver.handle_string(message):
+                        return
+
                     await response_queue.put(message)
 
             # Send offer
@@ -2502,6 +2604,18 @@ async def _run_inference_async(
             # Authenticate with worker via PSK
             await _authenticate_channel(data_channel, response_queue)
 
+            # Expose thread-safe send function for bidirectional communication.
+            # Mirrors the training-side wire surface in _run_training_async so the
+            # SLEAP GUI can hand the same `send_fn` to its InferenceProgressDialog
+            # Cancel button.
+            if on_channel_ready:
+                loop = asyncio.get_running_loop()
+
+                def _thread_safe_send(msg: str) -> None:
+                    loop.call_soon_threadsafe(data_channel.send, msg)
+
+                on_channel_ready(_thread_safe_send)
+
             # Submit job
             spec_json = spec.to_json()
             submit_msg = (
@@ -2527,6 +2641,9 @@ async def _run_inference_async(
                 except asyncio.TimeoutError:
                     continue
 
+                if _dispatch_inference_response(response, on_job_message, on_log):
+                    continue
+
                 if response.startswith(MSG_JOB_ACCEPTED):
                     parts = response.split(MSG_SEPARATOR)
                     server_job_id = parts[1] if len(parts) > 1 else job_id
@@ -2544,14 +2661,24 @@ async def _run_inference_async(
                     except json.JSONDecodeError:
                         raise ConfigurationError(f"Job rejected: {error_json}")
 
-                elif response.startswith(MSG_JOB_PROGRESS):
-                    pass  # Progress tracked via on_raw_progress (ZMQ) and on_log
-
                 elif response.startswith(MSG_JOB_COMPLETE):
                     parts = response.split(MSG_SEPARATOR, 1)
                     result_json = parts[1] if len(parts) > 1 else "{}"
                     try:
                         result_data = json.loads(result_json)
+                        # If the worker streamed predictions.slp to us
+                        # (Tasks 6–7), replace the worker-side path with
+                        # our local temp path. The worker path is
+                        # preserved as worker_output_path for v2 dual-mode.
+                        _apply_received_predictions(
+                            file_receiver, result_data, "output_path"
+                        )
+                        # Notify the GUI dispatcher BEFORE we build the
+                        # InferenceResult so the progress dialog can finish
+                        # its "complete" animation before this function
+                        # returns. (Task 9)
+                        if on_job_message is not None:
+                            on_job_message("JOB_COMPLETE", result_data)
                         result = InferenceResult(
                             job_id=server_job_id or job_id,
                             success=True,
@@ -2559,6 +2686,8 @@ async def _run_inference_async(
                             predictions_path=result_data.get("output_path"),
                         )
                     except json.JSONDecodeError:
+                        if on_job_message is not None:
+                            on_job_message("JOB_COMPLETE", {})
                         result = InferenceResult(
                             job_id=server_job_id or job_id,
                             success=True,
@@ -2573,8 +2702,15 @@ async def _run_inference_async(
                         error_msg = error_data.get("message", "Job failed")
                         duration = error_data.get("duration_seconds")
                     except json.JSONDecodeError:
+                        error_data = {}
                         error_msg = "Job failed"
                         duration = None
+
+                    if on_job_message is not None:
+                        on_job_message(
+                            "JOB_FAILED",
+                            error_data if error_data else {"message": error_msg},
+                        )
 
                     result = InferenceResult(
                         job_id=server_job_id or job_id,

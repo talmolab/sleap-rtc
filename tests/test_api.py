@@ -1080,6 +1080,334 @@ class TestRunInference:
 
 
 # =============================================================================
+# Inference data-channel message handling (Task 4)
+# =============================================================================
+#
+# When the worker streams predictions.slp via the sequence:
+#   FILE_META::<filename>:<size>:<hint>
+#   <binary chunk 1>
+#   ...
+#   END_OF_FILE
+#   MSG_JOB_COMPLETE::{"output_path": "<worker-side path>", ...}
+#
+# the on_message handler inside _run_inference_async must:
+#   1. Drop b"KEEP_ALIVE" heartbeat bytes BEFORE any other routing
+#      (otherwise they'd be appended to the in-flight tempfile and
+#      corrupt predictions.slp).
+#   2. Route binary messages to file_receiver.handle_bytes().
+#   3. Route file-transfer control strings (FILE_META / END_OF_FILE)
+#      to file_receiver.handle_string() and NOT forward them to the
+#      response_queue.
+#   4. Forward all other strings (MSG_JOB_PROGRESS, MSG_JOB_COMPLETE,
+#      etc.) to the response_queue unchanged.
+#
+# This mirrors the training-side wiring landed in PR #79.
+
+
+class _CapturedOnMessage(Exception):
+    """Sentinel raised by the mock RTCPeerConnection after _run_inference_async
+    has registered its on_message handler, to abort the rest of the function.
+
+    The captured handler is attached to this exception via the .handler attr
+    on the mock data channel — see _make_inference_async_mocks().
+    """
+
+
+def _make_inference_async_mocks():
+    """Build the mock infrastructure needed to drive _run_inference_async far
+    enough to register on_message, then abort.
+
+    Returns a tuple of (patches_to_apply, fake_data_channel) where
+    patches_to_apply is a list of context managers and fake_data_channel
+    exposes the captured on_message via fake_data_channel._handlers["message"].
+    """
+    import asyncio as _asyncio
+
+    class _FakeDataChannel:
+        def __init__(self):
+            self._handlers: dict[str, object] = {}
+
+        def on(self, event):
+            def decorator(fn):
+                self._handlers[event] = fn
+                return fn
+
+            return decorator
+
+        def send(self, *_args, **_kwargs):
+            pass
+
+    fake_data_channel = _FakeDataChannel()
+
+    class _FakePC:
+        def __init__(self):
+            self.localDescription = MagicMock(type="offer", sdp="fake-sdp")
+
+        def createDataChannel(self, _name):
+            return fake_data_channel
+
+        async def createOffer(self):
+            # on_message has been registered by this point — abort the
+            # rest of _run_inference_async by raising the sentinel.
+            raise _CapturedOnMessage()
+
+        async def setLocalDescription(self, _desc):
+            pass
+
+        async def setRemoteDescription(self, _desc):
+            pass
+
+        async def addIceCandidate(self, _cand):
+            pass
+
+        async def close(self):
+            pass
+
+    class _FakeWS:
+        """Minimal async websocket that yields a 'registered_auth' on first
+        recv and would yield a peer_list on the next, satisfying the
+        register + discover_peers loops in _run_inference_async.
+        """
+
+        def __init__(self):
+            self._sent: list = []
+            self._recv_queue = _asyncio.Queue()
+            self._recv_queue.put_nowait(json.dumps({"type": "registered_auth"}))
+            self._recv_queue.put_nowait(
+                json.dumps(
+                    {
+                        "type": "peer_list",
+                        "peers": [{"peer_id": "fake-worker-1"}],
+                    }
+                )
+            )
+
+        async def send(self, msg):
+            self._sent.append(msg)
+
+        async def recv(self):
+            return await self._recv_queue.get()
+
+    fake_ws = _FakeWS()
+
+    class _FakeWSConnect:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return fake_ws
+
+        async def __aexit__(self, *_args):
+            return False
+
+    return fake_data_channel, _FakePC, _FakeWSConnect
+
+
+def _capture_on_message(monkeypatch_jwt: str = "fake-jwt"):
+    """Run _run_inference_async far enough to register on_message, capture
+    it, and return (on_message, file_receiver, response_queue).
+
+    The on_message closure is the actual production closure, with the
+    file_receiver and response_queue extracted from its closure cell so
+    tests can assert state changes.
+    """
+    import asyncio as _asyncio
+
+    fake_data_channel, FakePC, FakeWSConnect = _make_inference_async_mocks()
+
+    from sleap_rtc import api as api_mod
+
+    async def _drive():
+        try:
+            await api_mod._run_inference_async(
+                data_path="/data.slp",
+                model_paths=["/model1"],
+                room_id="room-1",
+                worker_id=None,
+                output_path=None,
+                batch_size=None,
+                peak_threshold=None,
+                only_suggested_frames=False,
+                frames=None,
+                progress_callback=None,
+                timeout=10.0,
+            )
+        except _CapturedOnMessage:
+            pass
+
+    mock_cfg = MagicMock()
+    mock_cfg.signaling_websocket = "ws://fake"
+
+    with (
+        patch("sleap_rtc.auth.credentials.get_valid_jwt", return_value=monkeypatch_jwt),
+        patch("sleap_rtc.config.get_config", return_value=mock_cfg),
+        patch("websockets.connect", FakeWSConnect),
+        patch("aiortc.RTCPeerConnection", FakePC),
+    ):
+        _asyncio.run(_drive())
+
+    on_message = fake_data_channel._handlers.get("message")
+    assert on_message is not None, (
+        "on_message was not registered — the mock chain aborted too early "
+        "or _run_inference_async was refactored without updating the test"
+    )
+
+    # Extract file_receiver and response_queue from the closure cells.
+    cells = {
+        name: cell.cell_contents
+        for name, cell in zip(on_message.__code__.co_freevars, on_message.__closure__)
+    }
+    file_receiver = cells.get("file_receiver")
+    response_queue = cells.get("response_queue")
+    assert file_receiver is not None, (
+        "on_message closure does not capture a 'file_receiver' — Task 4 "
+        "wiring is missing"
+    )
+    assert (
+        response_queue is not None
+    ), "on_message closure does not capture a 'response_queue'"
+    return on_message, file_receiver, response_queue
+
+
+class TestRunInferenceAsyncMessageHandling:
+    """Tests that _run_inference_async's on_message handler routes messages
+    to _StreamedFileReceiver and response_queue per the Task 4 wiring spec.
+
+    These tests drive _run_inference_async with mocked websockets/aiortc
+    far enough to register the on_message closure, then invoke that
+    closure directly with synthesized messages. This mirrors the
+    training-side wiring landed in PR #79.
+    """
+
+    def test_keep_alive_heartbeat_is_dropped_before_receiver(self):
+        """b'KEEP_ALIVE' must be filtered out BEFORE any file_receiver routing.
+
+        Regression: if KEEP_ALIVE bytes fall through to handle_bytes during
+        an in-flight transfer, they'd be appended to the tempfile and
+        corrupt predictions.slp by 10 bytes.
+        """
+        import asyncio as _asyncio
+
+        on_message, file_receiver, response_queue = _capture_on_message()
+
+        # Start an in-flight transfer so handle_bytes WOULD write if called.
+        file_receiver.handle_string("FILE_META::predictions.slp:5:/worker/out")
+        assert file_receiver._pending is not None
+        bytes_before = file_receiver._pending["bytes_written"]
+
+        async def _go():
+            await on_message(b"KEEP_ALIVE")
+
+        _asyncio.run(_go())
+
+        # KEEP_ALIVE must NOT be appended to the in-flight tempfile.
+        assert file_receiver._pending is not None
+        assert file_receiver._pending["bytes_written"] == bytes_before
+        # KEEP_ALIVE must NOT reach response_queue.
+        assert response_queue.qsize() == 0
+
+        # Cleanup: abort the pending transfer so the tempfile is unlinked.
+        file_receiver._abort_pending()
+
+    def test_file_meta_string_is_consumed_by_receiver_not_forwarded(self):
+        """FILE_META::... must be consumed by file_receiver.handle_string and
+        NOT placed on response_queue.
+        """
+        import asyncio as _asyncio
+
+        on_message, file_receiver, response_queue = _capture_on_message()
+
+        async def _go():
+            await on_message("FILE_META::predictions.slp:5:/worker/out")
+
+        _asyncio.run(_go())
+
+        # Receiver opened a pending transfer.
+        assert file_receiver._pending is not None
+        assert file_receiver._pending["filename"] == "predictions.slp"
+        # NOT forwarded to response_queue.
+        assert response_queue.qsize() == 0
+
+        # Cleanup.
+        file_receiver._abort_pending()
+
+    def test_binary_chunk_after_file_meta_is_consumed_by_receiver(self):
+        """A bytes message (after FILE_META has opened a transfer) is
+        written to the receiver's tempfile, NOT placed on response_queue.
+        """
+        import asyncio as _asyncio
+
+        on_message, file_receiver, response_queue = _capture_on_message()
+
+        # Open a pending transfer.
+        file_receiver.handle_string("FILE_META::predictions.slp:11:/worker/out")
+        assert file_receiver._pending is not None
+
+        async def _go():
+            await on_message(b"hello world")
+
+        _asyncio.run(_go())
+
+        # Bytes were written to the tempfile.
+        assert file_receiver._pending["bytes_written"] == len(b"hello world")
+        # NOT forwarded to response_queue.
+        assert response_queue.qsize() == 0
+
+        # Cleanup.
+        file_receiver._abort_pending()
+
+    def test_end_of_file_completes_transfer_and_is_not_forwarded(self):
+        """END_OF_FILE after chunks must be consumed by the receiver,
+        retain the predictions path, and NOT be forwarded to response_queue.
+        """
+        import asyncio as _asyncio
+
+        on_message, file_receiver, response_queue = _capture_on_message()
+
+        async def _go():
+            await on_message("FILE_META::predictions.slp:5:/worker/out")
+            await on_message(b"hello")
+            await on_message("END_OF_FILE")
+
+        _asyncio.run(_go())
+
+        # Receiver completed the transfer and retained the local path.
+        local_path = file_receiver.take_predictions_path()
+        assert local_path is not None
+        assert os.path.exists(local_path)
+        with open(local_path, "rb") as f:
+            assert f.read() == b"hello"
+        # END_OF_FILE was NOT forwarded.
+        assert response_queue.qsize() == 0
+
+        # Cleanup.
+        os.unlink(local_path)
+
+    def test_regular_string_is_forwarded_to_response_queue(self):
+        """A non-file-transfer string like MSG_JOB_PROGRESS::... must be
+        forwarded to response_queue unchanged (regression — preserves the
+        pre-Task-4 behavior for all non-transfer messages).
+        """
+        import asyncio as _asyncio
+
+        on_message, file_receiver, response_queue = _capture_on_message()
+
+        async def _go():
+            await on_message('MSG_JOB_PROGRESS::{"epoch": 1}')
+            await on_message('MSG_JOB_COMPLETE::{"output_path": "/x.slp"}')
+
+        _asyncio.run(_go())
+
+        assert response_queue.qsize() == 2
+        first = response_queue.get_nowait()
+        second = response_queue.get_nowait()
+        assert first == 'MSG_JOB_PROGRESS::{"epoch": 1}'
+        assert second == 'MSG_JOB_COMPLETE::{"output_path": "/x.slp"}'
+        # Receiver state untouched (no FILE_META was sent).
+        assert file_receiver._pending is None
+
+
+# =============================================================================
 # Streamed prediction file reception (Task 2 — Gap 1)
 # =============================================================================
 #
@@ -1245,13 +1573,13 @@ class TestStreamedFileReceiver:
         the receiver must:
          - not retain a predictions path (take_predictions_path() → None)
          - expose a non-empty `take_transfer_error()` string
-        And `_apply_received_predictions_to_inference_data` must NOT
+        And `_apply_received_predictions` must NOT
         substitute `data['predictions_path']` with a local path in that
         case — the worker-side path is kept as the fallback.
         """
         from sleap_rtc.api import (
             _StreamedFileReceiver,
-            _apply_received_predictions_to_inference_data,
+            _apply_received_predictions,
         )
 
         receiver = _StreamedFileReceiver()
@@ -1272,7 +1600,7 @@ class TestStreamedFileReceiver:
         assert receiver.take_transfer_error() is None
 
         # But re-run with a receiver that has a latched failure to verify
-        # that _apply_received_predictions_to_inference_data leaves the
+        # that _apply_received_predictions leaves the
         # worker-side path alone when the stream failed to open.
         receiver2 = _StreamedFileReceiver()
         with patch(
@@ -1282,7 +1610,7 @@ class TestStreamedFileReceiver:
             receiver2.handle_string("FILE_META::predictions.slp:5:/worker/out")
 
         data = {"predictions_path": "/worker/path.slp"}
-        _apply_received_predictions_to_inference_data(receiver2, data)
+        _apply_received_predictions(receiver2, data, "predictions_path")
 
         # Worker-side path preserved; no substitution.
         assert data["predictions_path"] == "/worker/path.slp"
@@ -1388,7 +1716,7 @@ class TestInferenceCompletePathRewrite:
         """
         from sleap_rtc.api import (
             _StreamedFileReceiver,
-            _apply_received_predictions_to_inference_data,
+            _apply_received_predictions,
         )
 
         receiver = _StreamedFileReceiver()
@@ -1398,7 +1726,7 @@ class TestInferenceCompletePathRewrite:
 
         # Parsed INFERENCE_COMPLETE payload (as api.py does via json.loads).
         data = {"predictions_path": "/worker/path.slp"}
-        _apply_received_predictions_to_inference_data(receiver, data)
+        _apply_received_predictions(receiver, data, "predictions_path")
 
         assert data["worker_predictions_path"] == "/worker/path.slp"
         assert data["predictions_path"] != "/worker/path.slp"
@@ -1417,15 +1745,153 @@ class TestInferenceCompletePathRewrite:
         through unchanged."""
         from sleap_rtc.api import (
             _StreamedFileReceiver,
-            _apply_received_predictions_to_inference_data,
+            _apply_received_predictions,
         )
 
         receiver = _StreamedFileReceiver()
         data = {"predictions_path": "/worker/path.slp"}
-        _apply_received_predictions_to_inference_data(receiver, data)
+        _apply_received_predictions(receiver, data, "predictions_path")
 
         assert data == {"predictions_path": "/worker/path.slp"}
         assert "worker_predictions_path" not in data
+
+
+class TestMsgJobCompletePathRewrite:
+    """Tests that the MSG_JOB_COMPLETE dispatch in _run_inference_async
+    substitutes the locally-received tempfile path for result_data['output_path']
+    when a stream was received.
+
+    Mirrors the helper-level test pattern of TestInferenceCompletePathRewrite —
+    we exercise the helper directly with a dict shaped like what
+    json.loads(MSG_JOB_COMPLETE payload) would yield, rather than spinning up a
+    fake aiortc data channel.
+    """
+
+    def test_msg_job_complete_payload_rewritten_to_local_path(self):
+        """Simulate the MSG_JOB_COMPLETE dispatch logic.
+
+        1. Receiver receives predictions.slp stream.
+        2. MSG_JOB_COMPLETE::{"output_path": "/worker/...", "duration_seconds": 1.2}
+           is parsed.
+        3. _apply_received_predictions(receiver, data, "output_path") is invoked.
+        4. data["output_path"] becomes the local tempfile, the worker path
+           is preserved, and unrelated fields like duration_seconds pass through.
+        """
+        from sleap_rtc.api import (
+            _StreamedFileReceiver,
+            _apply_received_predictions,
+        )
+
+        receiver = _StreamedFileReceiver()
+        receiver.handle_string("FILE_META::predictions.slp:5:/worker/out")
+        receiver.handle_bytes(b"hello")
+        receiver.handle_string("END_OF_FILE")
+
+        # Parsed MSG_JOB_COMPLETE payload (as api.py does via json.loads).
+        data = {
+            "output_path": "/worker/path.slp",
+            "duration_seconds": 1.2,
+        }
+        _apply_received_predictions(receiver, data, "output_path")
+
+        assert data["worker_output_path"] == "/worker/path.slp"
+        assert data["output_path"] != "/worker/path.slp"
+        assert os.path.exists(data["output_path"])
+        with open(data["output_path"], "rb") as f:
+            assert f.read() == b"hello"
+        # Unrelated fields pass through untouched.
+        assert data["duration_seconds"] == 1.2
+
+        # After consumption, receiver has no pending path.
+        assert receiver.take_predictions_path() is None
+
+        os.unlink(data["output_path"])
+
+    def test_msg_job_complete_untouched_when_no_stream_received(self):
+        """If no predictions stream arrived (pre-Task-7 worker, or worker did
+        not stream output for a non-track job), the MSG_JOB_COMPLETE payload
+        passes through unchanged.
+        """
+        from sleap_rtc.api import (
+            _StreamedFileReceiver,
+            _apply_received_predictions,
+        )
+
+        receiver = _StreamedFileReceiver()
+        data = {"output_path": "/worker/path.slp", "duration_seconds": 1.2}
+        _apply_received_predictions(receiver, data, "output_path")
+
+        assert data == {"output_path": "/worker/path.slp", "duration_seconds": 1.2}
+        assert "worker_output_path" not in data
+
+    def test_run_inference_async_calls_apply_received_predictions_for_output_path(self):
+        """Source-grep regression: the MSG_JOB_COMPLETE dispatch in
+        _run_inference_async must invoke _apply_received_predictions with
+        the 'output_path' field name.
+        """
+        import inspect
+        from sleap_rtc.api import _run_inference_async
+
+        src = inspect.getsource(_run_inference_async)
+        assert "_apply_received_predictions(" in src, (
+            "Task 5 wiring missing: helper not invoked in _run_inference_async"
+        )
+        assert '"output_path"' in src, (
+            "Task 5 wiring missing: 'output_path' field name not present"
+        )
+
+
+class TestApplyReceivedPredictionsGeneralized:
+    """Tests for the generalized _apply_received_predictions helper.
+
+    Verifies the helper substitutes the configured field name (not just
+    'predictions_path'). Sets up the path for Task 5 (MSG_JOB_COMPLETE
+    using 'output_path' as the field).
+    """
+
+    def test_substitutes_output_path_when_field_name_is_output_path(self, tmp_path):
+        from sleap_rtc.api import _StreamedFileReceiver, _apply_received_predictions
+
+        receiver = _StreamedFileReceiver()
+        receiver.handle_string("FILE_META::predictions.slp:5:/worker/out")
+        receiver.handle_bytes(b"hello")
+        receiver.handle_string("END_OF_FILE")
+
+        data = {"output_path": "/root/vast/predictions.slp"}
+        _apply_received_predictions(receiver, data, "output_path")
+
+        assert data["output_path"] != "/root/vast/predictions.slp"
+        assert data["output_path"].endswith(".slp")
+        assert data["worker_output_path"] == "/root/vast/predictions.slp"
+
+    def test_substitutes_predictions_path_with_explicit_field_name(self, tmp_path):
+        """Regression: existing INFERENCE_COMPLETE call site (with 'predictions_path')
+        still works after the rename."""
+        from sleap_rtc.api import _StreamedFileReceiver, _apply_received_predictions
+
+        receiver = _StreamedFileReceiver()
+        receiver.handle_string("FILE_META::predictions.slp:5:/worker/out")
+        receiver.handle_bytes(b"world")
+        receiver.handle_string("END_OF_FILE")
+
+        data = {"predictions_path": "/root/vast/p.slp"}
+        _apply_received_predictions(receiver, data, "predictions_path")
+
+        assert data["predictions_path"] != "/root/vast/p.slp"
+        assert data["worker_predictions_path"] == "/root/vast/p.slp"
+
+    def test_no_substitution_when_no_predictions_received(self, tmp_path):
+        """If receiver has no captured local path, the data field is left unchanged
+        regardless of which field_name is requested."""
+        from sleap_rtc.api import _StreamedFileReceiver, _apply_received_predictions
+
+        receiver = _StreamedFileReceiver()  # nothing was streamed
+
+        data = {"output_path": "/worker/path.slp"}
+        _apply_received_predictions(receiver, data, "output_path")
+
+        assert data["output_path"] == "/worker/path.slp"
+        assert "worker_output_path" not in data
 
 
 class TestTempPredictionAtexitCleanup:
@@ -1645,3 +2111,113 @@ class TestTempPredictionAtexitCleanup:
             receiver.handle_string("END_OF_FILE")
 
         assert api_mod._temp_prediction_paths == before
+
+
+class TestRunInferenceAsyncSignature:
+    """Task 8: ``_run_inference_async`` and the public ``run_inference``
+    wrapper must accept ``on_channel_ready`` (thread-safe send hook),
+    ``on_log`` (raw log line callback), and ``on_job_message`` (typed
+    JOB_* dispatch callback) so a GUI can wire its Cancel button and
+    progress dialog to the standalone-track flow.
+    """
+
+    def test_run_inference_async_has_on_channel_ready(self):
+        import inspect
+        from sleap_rtc.api import _run_inference_async
+
+        sig = inspect.signature(_run_inference_async)
+        assert "on_channel_ready" in sig.parameters
+        assert sig.parameters["on_channel_ready"].default is None
+
+    def test_run_inference_async_has_on_log(self):
+        import inspect
+        from sleap_rtc.api import _run_inference_async
+
+        sig = inspect.signature(_run_inference_async)
+        assert "on_log" in sig.parameters
+        assert sig.parameters["on_log"].default is None
+
+    def test_run_inference_async_has_on_job_message(self):
+        import inspect
+        from sleap_rtc.api import _run_inference_async
+
+        sig = inspect.signature(_run_inference_async)
+        assert "on_job_message" in sig.parameters
+        assert sig.parameters["on_job_message"].default is None
+
+    def test_run_inference_wrapper_plumbs_through(self):
+        import inspect
+        from sleap_rtc.api import run_inference
+
+        sig = inspect.signature(run_inference)
+        for name in ("on_channel_ready", "on_log", "on_job_message"):
+            assert name in sig.parameters, f"run_inference missing {name}"
+            assert sig.parameters[name].default is None
+
+    def test_run_inference_async_has_frame_filter(self):
+        import inspect
+        from sleap_rtc.api import _run_inference_async
+
+        sig = inspect.signature(_run_inference_async)
+        assert "frame_filter" in sig.parameters
+        assert sig.parameters["frame_filter"].default is None
+
+    def test_run_inference_async_has_video_index(self):
+        import inspect
+        from sleap_rtc.api import _run_inference_async
+
+        sig = inspect.signature(_run_inference_async)
+        assert "video_index" in sig.parameters
+        assert sig.parameters["video_index"].default is None
+
+    def test_run_inference_wrapper_has_frame_filter_and_video_index(self):
+        import inspect
+        from sleap_rtc.api import run_inference
+
+        sig = inspect.signature(run_inference)
+        for name in ("frame_filter", "video_index"):
+            assert name in sig.parameters, f"run_inference missing {name}"
+            assert sig.parameters[name].default is None
+
+
+class TestProtocolConstants:
+    def test_msg_job_log_exists(self):
+        from sleap_rtc.protocol import MSG_JOB_LOG
+
+        assert MSG_JOB_LOG == "JOB_LOG"
+
+
+class TestRunInferenceAsyncJobMessageForwarding:
+    """Task 9: ``_run_inference_async`` forwards each ``MSG_JOB_*`` wire
+    message to ``on_job_message`` with the typed name and parsed dict.
+    """
+
+    def test_msg_job_progress_forwarded_to_on_job_message(self):
+        from sleap_rtc.api import _dispatch_inference_response
+
+        events: list[tuple[str, dict]] = []
+
+        def _on_job_msg(msg_type, data):
+            events.append((msg_type, data))
+
+        _dispatch_inference_response(
+            "JOB_PROGRESS::" + json.dumps({"frames": 17, "total": 35}),
+            on_job_message=_on_job_msg,
+            on_log=None,
+        )
+
+        assert events == [("JOB_PROGRESS", {"frames": 17, "total": 35})]
+
+    def test_msg_job_log_forwarded_to_both_callbacks(self):
+        from sleap_rtc.api import _dispatch_inference_response
+
+        logs: list[str] = []
+        events: list[tuple[str, dict]] = []
+        _dispatch_inference_response(
+            "JOB_LOG::Predicting... 50% 17/35 ETA: 0:00:01",
+            on_job_message=lambda t, d: events.append((t, d)),
+            on_log=logs.append,
+        )
+
+        assert logs == ["Predicting... 50% 17/35 ETA: 0:00:01"]
+        assert events == [("JOB_LOG", {"text": "Predicting... 50% 17/35 ETA: 0:00:01"})]

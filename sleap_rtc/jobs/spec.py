@@ -5,7 +5,7 @@ that can be serialized, validated, and converted to sleap-nn commands.
 """
 
 from dataclasses import dataclass, asdict, field
-from typing import Dict, Optional, List, Union
+from typing import ClassVar, Dict, Optional, List, Set, Union
 import json
 
 
@@ -118,8 +118,14 @@ class TrackJobSpec:
         output_path: Path for output predictions file
         batch_size: Batch size for inference
         peak_threshold: Peak detection threshold (0.0-1.0)
-        only_suggested_frames: Only run inference on suggested frames
+        only_suggested_frames: Deprecated; use frame_filter="suggested" instead.
+            Kept for backward compatibility — when True and frame_filter is None,
+            it auto-migrates to frame_filter="suggested" in __post_init__.
         frames: Frame range string (e.g., "0-100,200-300")
+        frame_filter: Which subset of frames to run inference on. One of
+            "suggested", "user", "predicted", "random", or None (all frames).
+        video_index: Restrict inference to a single video by index. None = all
+            videos in the labels file.
     """
 
     data_path: str
@@ -129,6 +135,30 @@ class TrackJobSpec:
     peak_threshold: Optional[float] = None
     only_suggested_frames: bool = False
     frames: Optional[str] = None
+    frame_filter: Optional[str] = None
+    video_index: Optional[int] = None
+
+    _VALID_FRAME_FILTERS: ClassVar[Set[Optional[str]]] = {
+        None,
+        "suggested",
+        "user",
+        "predicted",
+        "random",
+    }
+
+    def __post_init__(self):
+        """Migrate deprecated only_suggested_frames flag and validate frame_filter."""
+        # Backward-compat migration: only_suggested_frames=True -> frame_filter="suggested"
+        # Only migrate if frame_filter wasn't explicitly set, so explicit values win.
+        if self.only_suggested_frames and self.frame_filter is None:
+            self.frame_filter = "suggested"
+        # Validate frame_filter (after migration so the migrated value is checked).
+        if self.frame_filter not in self._VALID_FRAME_FILTERS:
+            valid = sorted(v for v in self._VALID_FRAME_FILTERS if v is not None)
+            raise ValueError(
+                f"frame_filter must be one of {valid} or None; "
+                f"got {self.frame_filter!r}"
+            )
 
     def to_json(self) -> str:
         """Serialize spec to JSON string."""

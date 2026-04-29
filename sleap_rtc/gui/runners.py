@@ -50,6 +50,8 @@ class RemoteProgressBridge(QObject):
     # on the thread the QObject was created on (the main thread) even when
     # the signal is emitted from a different thread.
     _sig_inference_msg: Signal = Signal(str, object)
+    # Mirror signal for JOB_* messages from the standalone-track flow.
+    _sig_job_msg: Signal = Signal(str, object)
 
     def __init__(
         self,
@@ -80,6 +82,7 @@ class RemoteProgressBridge(QObject):
         if app is not None:
             self.moveToThread(app.thread())
         self._sig_inference_msg.connect(self._dispatch_inference_msg)
+        self._sig_job_msg.connect(self._dispatch_job_msg)
         self._publish_port = publish_port
         self._controller_port = controller_port
         self._model_type = model_type
@@ -120,6 +123,25 @@ class RemoteProgressBridge(QObject):
                 the RTC data channel.
         """
         self._send_fn = send_fn
+
+    def _connect_cancel_to_send_fn(self, dialog: "QDialog"):
+        """Wire a dialog's Cancel button to send MSG_JOB_CANCEL.
+
+        For training, cancel flows through ZMQ (LossViewer → _poll_commands).
+        For standalone inference the bridge is NOT started (no ZMQ), so we
+        connect the dialog's ``rejected`` signal directly to ``_send_fn``.
+        """
+        from sleap_rtc.protocol import MSG_JOB_CANCEL
+
+        def _on_cancel():
+            if self._send_fn is not None:
+                try:
+                    self._send_fn(MSG_JOB_CANCEL)
+                    logger.info("Sent MSG_JOB_CANCEL to worker")
+                except Exception as e:
+                    logger.warning(f"Failed to send MSG_JOB_CANCEL: {e}")
+
+        dialog.rejected.connect(_on_cancel)
 
     def start(self):
         """Start the ZMQ publisher and subscriber sockets.
@@ -501,6 +523,104 @@ class RemoteProgressBridge(QObject):
             reason = data.get("reason", "unknown")
             logger.info(f"Inference skipped: {reason}")
             # No dialog shown for skipped inference.
+
+    def handle_job_message(self, msg_type: str, data: dict):
+        """Thread-safe entry point for standalone-track JOB_* messages.
+
+        This method is intended to be passed as the ``on_job_message``
+        callback to :func:`run_inference` (or :func:`_run_inference_async`).
+        It is called from the WebRTC background thread and marshals the
+        message to the main Qt thread via a queued signal, where
+        :meth:`_dispatch_job_msg` creates and updates the
+        :class:`InferenceProgressDialog`.
+
+        Mirrors :meth:`handle_inference_message` (which routes the
+        post-training inference flow through the same dialog).
+
+        Args:
+            msg_type: One of ``"JOB_LOG"``, ``"JOB_PROGRESS"``,
+                ``"JOB_COMPLETE"``, ``"JOB_FAILED"``.
+            data: Parsed JSON payload dict from the worker message.
+        """
+        self._sig_job_msg.emit(msg_type, data)
+
+    def _dispatch_job_msg(self, msg_type: str, data: dict):
+        """Handle a standalone-track JOB_* message on the main Qt thread.
+
+        Called via the ``_sig_job_msg`` signal so it always runs on the
+        main thread regardless of which thread emitted the signal.
+
+        Mirrors :meth:`_dispatch_inference_msg` exactly — same dialog, same
+        regex parsing — but for the JOB_* wire prefix used by the
+        standalone-track flow rather than the INFERENCE_* prefix used by
+        post-training inference.
+        """
+        from sleap_rtc.gui.widgets import InferenceProgressDialog
+
+        if msg_type == "JOB_LOG":
+            text = data.get("text", "")
+            # The worker forwards tqdm batch updates as ``CR::<line>``;
+            # strip that wire prefix before feeding the line to the dialog
+            # / regex parser so we don't dirty the displayed log.
+            clean = text[4:] if text.startswith("CR::") else text
+            if self._inference_dialog is None:
+                logger.info("Track job log received — opening InferenceProgressDialog")
+                self._last_n_frames = None
+                self._inference_dialog = InferenceProgressDialog()
+                self._connect_cancel_to_send_fn(self._inference_dialog)
+                self._inference_dialog.show()
+            self._inference_dialog.append_log(clean)
+            # Parse progress from rich progress bar lines, e.g.:
+            #   "Predicting... 100% 35/35 ETA: 0:00:00 Elapsed: 0:00:01 47.8 FPS"
+            m = re.search(r"(\d+)/(\d+)", clean)
+            fps_m = re.search(r"([\d.]+)\s*FPS", clean, re.IGNORECASE)
+            if m:
+                n_processed = int(m.group(1))
+                n_total = int(m.group(2))
+                rate = float(fps_m.group(1)) if fps_m else 0.0
+                eta_m = re.search(r"ETA:\s*(\d+):(\d+):(\d+)", clean)
+                eta = 0
+                if eta_m:
+                    h, mn, s = (
+                        int(eta_m.group(1)),
+                        int(eta_m.group(2)),
+                        int(eta_m.group(3)),
+                    )
+                    eta = h * 3600 + mn * 60 + s
+                self._inference_dialog.set_progress(n_processed, n_total, rate, eta)
+                self._last_n_frames = n_total
+
+        elif msg_type == "JOB_PROGRESS":
+            if self._inference_dialog is None:
+                self._last_n_frames = None
+                self._inference_dialog = InferenceProgressDialog()
+                self._connect_cancel_to_send_fn(self._inference_dialog)
+                self._inference_dialog.show()
+            self._inference_dialog.update(data)
+
+        elif msg_type == "JOB_COMPLETE":
+            predictions_path = data.get("output_path", "")
+            n_frames = data.get("n_frames") or self._last_n_frames
+            n_with_instances = data.get("n_with_instances")
+            n_empty = data.get("n_empty")
+            logger.info(f"Track job complete — predictions at {predictions_path}")
+            if self._inference_dialog is not None:
+                self._inference_dialog.finish(n_frames, n_with_instances, n_empty)
+            if self._on_predictions_ready and predictions_path:
+                try:
+                    self._on_predictions_ready(predictions_path)
+                except Exception as e:
+                    logger.error(f"on_predictions_ready callback failed: {e}")
+
+        elif msg_type == "JOB_FAILED":
+            error = data.get("message", data.get("error", "Unknown job error"))
+            logger.error(f"Track job failed: {error}")
+            if self._inference_dialog is None:
+                # No dialog open yet (failure before any log line) —
+                # show one now so the error is visible.
+                self._inference_dialog = InferenceProgressDialog()
+                self._inference_dialog.show()
+            self._inference_dialog.show_error(error)
 
 
 def run_remote_training(

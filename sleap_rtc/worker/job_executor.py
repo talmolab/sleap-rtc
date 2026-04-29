@@ -23,6 +23,11 @@ from aiortc import RTCDataChannel
 # wait 30 real seconds for the watchdog cycle to fire.
 _WATCHDOG_INTERVAL_SECS = 30
 
+# Grace period after SIGTERM before escalating to SIGKILL (cancel_running_job).
+# Short enough for an interactive Cancel button; long enough for the sleap-nn
+# subprocess to flush its progress bar and exit cleanly on most hardware.
+_CANCEL_GRACE_SECS = 5
+
 from sleap_rtc.worker.progress_reporter import ProgressReporter
 
 if TYPE_CHECKING:
@@ -260,8 +265,9 @@ class JobExecutor:
     def cancel_running_job(self):
         """Send SIGTERM to the running job's process group for immediate cancellation.
 
-        If the process doesn't exit within 10 seconds, escalates to SIGKILL.
-        On Windows, falls back to proc.kill() (no process groups).
+        If the process doesn't exit within ``_CANCEL_GRACE_SECS`` seconds,
+        escalates to SIGKILL.  On Windows, falls back to proc.kill() (no
+        process groups).
         """
         proc = self._running_process
         if proc is not None and proc.returncode is None:
@@ -280,15 +286,15 @@ class JobExecutor:
 
                     def _escalate_to_sigkill():
                         try:
-                            proc.wait(timeout=10)
+                            proc.wait(timeout=_CANCEL_GRACE_SECS)
                             logging.info(f"Process {proc.pid} exited after SIGTERM")
                         except Exception:
-                            # Still alive after 10s — force kill
+                            # Still alive after grace period — force kill
                             try:
                                 pgid2 = os.getpgid(proc.pid)
                                 logging.warning(
                                     f"Process group {pgid2} did not exit after "
-                                    f"SIGTERM, escalating to SIGKILL"
+                                    f"SIGTERM ({_CANCEL_GRACE_SECS}s), escalating to SIGKILL"
                                 )
                                 os.killpg(pgid2, signal.SIGKILL)
                             except ProcessLookupError:
@@ -905,6 +911,7 @@ class JobExecutor:
         working_dir: str = None,
         zmq_ports: dict | None = None,
         progress_reporter=None,
+        spec: "TrackJobSpec | TrainJobSpec | None" = None,
     ):
         """Execute a job from a pre-built command list (structured job submission).
 
@@ -925,8 +932,12 @@ class JobExecutor:
                 the duration of this job. When provided, this call does not create
                 a new reporter and does not call async_cleanup on it — the caller
                 is responsible for the reporter's lifecycle.
+            spec: Optional pre-validated TrackJobSpec or TrainJobSpec used by the
+                track branch to access output_path for streaming predictions back
+                to the client (Task 7). When None, no streaming is performed.
         """
         from sleap_rtc.protocol import (
+            MSG_JOB_LOG,
             MSG_JOB_PROGRESS,
             MSG_JOB_COMPLETE,
             MSG_JOB_FAILED,
@@ -1122,7 +1133,9 @@ class JobExecutor:
                                         job_type == "track"
                                         and channel.readyState == "open"
                                     ):
-                                        channel.send(f"[stderr] {line}\n")
+                                        channel.send(
+                                            f"{MSG_JOB_LOG}{MSG_SEPARATOR}[stderr] {line}\n"
+                                        )
                 except Exception as e:
                     logging.exception(f"[JOB {job_id}] Stderr stream error: {e}")
 
@@ -1179,9 +1192,16 @@ class JobExecutor:
 
             memory_monitor_task = asyncio.create_task(_memory_monitor())
 
+            # Captured output path from subprocess stdout (sleap-nn prints
+            # "Predictions output path: <path>" on completion).  Used by the
+            # track-job streaming block below to find the actual output file
+            # regardless of sleap-nn's naming convention.
+            _captured_output_path: str | None = None
+
             # Stream logs with progress extraction
             async def stream_logs_with_progress():
                 """Stream logs and extract progress information."""
+                nonlocal _captured_output_path
                 buf = b""
                 epoch_pattern = re.compile(r"Epoch\s+(\d+)")
                 # Match loss=, loss:, loss  (but not val/loss= or val_loss=)
@@ -1204,12 +1224,22 @@ class JobExecutor:
                                 f"subprocess has closed stdout (returncode={process.returncode!r})"
                             )
                             if pending_cr and channel.readyState == "open":
-                                channel.send(pending_cr + "\n")
+                                if job_type == "track":
+                                    channel.send(
+                                        f"{MSG_JOB_LOG}{MSG_SEPARATOR}{pending_cr}\n"
+                                    )
+                                else:
+                                    channel.send(pending_cr + "\n")
                             if buf:
                                 line = buf.decode(errors="replace")
                                 logging.info(f"[JOB {job_id}] {line}")
                                 if channel.readyState == "open":
-                                    channel.send(line + "\n")
+                                    if job_type == "track":
+                                        channel.send(
+                                            f"{MSG_JOB_LOG}{MSG_SEPARATOR}{line}\n"
+                                        )
+                                    else:
+                                        channel.send(line + "\n")
                             break
 
                         buf += chunk
@@ -1235,17 +1265,49 @@ class JobExecutor:
                             # avoids flooding the terminal with every training
                             # output line at INFO level)
                             logging.debug(f"[JOB {job_id}] {text}")
+
+                            # Capture the actual output path printed by
+                            # sleap-nn ("Predictions output path: <path>").
+                            if (
+                                job_type == "track"
+                                and "Predictions output path:" in text
+                            ):
+                                _captured_output_path = text.split(
+                                    "Predictions output path:", 1
+                                )[1].strip()
+                                logging.info(
+                                    f"[JOB {job_id}] Captured output path: "
+                                    f"{_captured_output_path}"
+                                )
+
                             if sep == b"\n":
                                 # \n supersedes any pending \r line (tqdm
                                 # emits \r...\n for each batch; discard the
                                 # \r version to avoid duplicate sends)
                                 pending_cr = ""
                                 if channel.readyState == "open":
-                                    channel.send(text + "\n")
+                                    if job_type == "track":
+                                        # Wrap subprocess stdout in a typed
+                                        # protocol message so the client's
+                                        # response loop can route it via
+                                        # on_job_message (Task 9). Training
+                                        # keeps the legacy bare-string format
+                                        # that _run_training_async's on_log
+                                        # callback expects.
+                                        channel.send(
+                                            f"{MSG_JOB_LOG}{MSG_SEPARATOR}{text}"
+                                        )
+                                    else:
+                                        channel.send(text + "\n")
                             else:  # \r — forward as CR:: for live progress display
                                 pending_cr = text
                                 if channel.readyState == "open":
-                                    channel.send(f"CR::{text}")
+                                    if job_type == "track":
+                                        channel.send(
+                                            f"{MSG_JOB_LOG}{MSG_SEPARATOR}CR::{text}"
+                                        )
+                                    else:
+                                        channel.send(f"CR::{text}")
 
                             # Extract progress info for training jobs
                             if job_type == "train":
@@ -1383,6 +1445,61 @@ class JobExecutor:
                     "success": True,
                     "stopped_early": stopped_early,
                 }
+
+                # For track jobs, stream the output file to the client BEFORE
+                # signaling completion so MSG_JOB_COMPLETE is the "all bytes
+                # delivered, ready to merge" trigger. Only stream on a clean
+                # success — if the subprocess was stopped early, predictions
+                # are partial / undefined. Mirrors PR #79's run_inference.
+                if (
+                    job_type == "track"
+                    and spec is not None
+                    and not stopped_early
+                    and process.returncode == 0
+                ):
+                    # Resolve the output path.  Priority:
+                    # 1. spec.output_path (user explicitly set it)
+                    # 2. _captured_output_path (parsed from sleap-nn stdout)
+                    # 3. Convention fallback (data_path → .predictions.slp)
+                    if spec.output_path is not None:
+                        output_path = Path(spec.output_path)
+                    elif _captured_output_path is not None:
+                        output_path = Path(_captured_output_path)
+                    else:
+                        base = Path(spec.data_path)
+                        output_path = base.with_suffix(".predictions" + base.suffix)
+                    if output_path.exists():
+                        try:
+                            await self.worker.file_manager.send_file(
+                                channel, str(output_path)
+                            )
+                        except Exception as e:
+                            logging.exception(
+                                f"[JOB {job_id}] Failed to stream output: {e}"
+                            )
+                            error_data = {
+                                "job_id": job_id,
+                                "job_type": job_type,
+                                "duration_seconds": duration_seconds,
+                                "exit_code": process.returncode,
+                                "message": f"failed to stream output: {e}",
+                            }
+                            if channel.readyState == "open":
+                                channel.send(
+                                    f"{MSG_JOB_FAILED}{MSG_SEPARATOR}"
+                                    f"{json.dumps(error_data)}"
+                                )
+                            return {
+                                "success": False,
+                                "stopped_early": False,
+                                "cancelled": False,
+                            }
+                        # Include the worker-side output path in the payload
+                        # so the client's _apply_received_predictions(...)
+                        # helper (Task 5) can substitute it with the local
+                        # tempfile path.
+                        result_data["output_path"] = str(output_path)
+
                 if channel.readyState == "open":
                     channel.send(
                         f"{MSG_JOB_COMPLETE}{MSG_SEPARATOR}{json.dumps(result_data)}"
