@@ -1022,7 +1022,7 @@ async def _discover_workers_async(config, jwt: str, room_id: str) -> list[Worker
                         workers.append(
                             Worker(
                                 id=peer.get("peer_id", ""),
-                                name=properties.get("name", peer.get("peer_id", "")),
+                                name=properties.get("worker_name", peer.get("peer_id", "")),
                                 status=properties.get("status", "unknown"),
                                 gpu_name=properties.get("gpu_name"),
                                 gpu_memory_mb=properties.get("gpu_memory_mb"),

@@ -2221,3 +2221,78 @@ class TestRunInferenceAsyncJobMessageForwarding:
 
         assert logs == ["Predicting... 50% 17/35 ETA: 0:00:01"]
         assert events == [("JOB_LOG", {"text": "Predicting... 50% 17/35 ETA: 0:00:01"})]
+
+
+# =============================================================================
+# list_workers() worker_name resolution Tests
+# =============================================================================
+
+
+class TestListWorkersNameResolution:
+    """Worker name should come from the 'worker_name' property,
+    not the 'name' property (which doesn't exist in the registration payload).
+    Falls back to peer_id if worker_name is missing.
+    """
+
+    def test_worker_name_reads_worker_name_property(self):
+        """list_workers should populate Worker.name from
+        properties['worker_name'], not properties['name']."""
+        from unittest.mock import AsyncMock
+
+        registered_response = json.dumps({"type": "registered_auth"})
+        peer_list_response = json.dumps({
+            "type": "peer_list",
+            "peers": [{
+                "peer_id": "worker-acct_VX9-amick-tr-b368b",
+                "metadata": {
+                    "properties": {
+                        "worker_name": "runai-1",
+                        "status": "available",
+                    }
+                }
+            }]
+        })
+
+        mock_conn = AsyncMock()
+        mock_conn.recv = AsyncMock(
+            side_effect=[registered_response, peer_list_response]
+        )
+        mock_conn.__aenter__ = AsyncMock(return_value=mock_conn)
+        mock_conn.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("websockets.connect", return_value=mock_conn):
+            workers = list_workers("test-room")
+
+        assert len(workers) == 1
+        assert workers[0].name == "runai-1"
+        assert workers[0].id == "worker-acct_VX9-amick-tr-b368b"
+
+    def test_worker_name_falls_back_to_peer_id(self):
+        """When worker_name is missing, fall back to peer_id."""
+        from unittest.mock import AsyncMock
+
+        registered_response = json.dumps({"type": "registered_auth"})
+        peer_list_response = json.dumps({
+            "type": "peer_list",
+            "peers": [{
+                "peer_id": "worker-abc123",
+                "metadata": {
+                    "properties": {
+                        "status": "available",
+                    }
+                }
+            }]
+        })
+
+        mock_conn = AsyncMock()
+        mock_conn.recv = AsyncMock(
+            side_effect=[registered_response, peer_list_response]
+        )
+        mock_conn.__aenter__ = AsyncMock(return_value=mock_conn)
+        mock_conn.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("websockets.connect", return_value=mock_conn):
+            workers = list_workers("test-room")
+
+        assert len(workers) == 1
+        assert workers[0].name == "worker-abc123"
