@@ -2260,7 +2260,14 @@ class TestListWorkersNameResolution:
         mock_conn.__aenter__ = AsyncMock(return_value=mock_conn)
         mock_conn.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("websockets.connect", return_value=mock_conn):
+        mock_config = MagicMock()
+        mock_config.signaling_websocket = "wss://fake"
+
+        with (
+            patch("sleap_rtc.auth.credentials.get_valid_jwt", return_value="fake-jwt"),
+            patch("sleap_rtc.config.get_config", return_value=mock_config),
+            patch("websockets.connect", return_value=mock_conn),
+        ):
             workers = list_workers("test-room")
 
         assert len(workers) == 1
@@ -2291,7 +2298,14 @@ class TestListWorkersNameResolution:
         mock_conn.__aenter__ = AsyncMock(return_value=mock_conn)
         mock_conn.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("websockets.connect", return_value=mock_conn):
+        mock_config = MagicMock()
+        mock_config.signaling_websocket = "wss://fake"
+
+        with (
+            patch("sleap_rtc.auth.credentials.get_valid_jwt", return_value="fake-jwt"),
+            patch("sleap_rtc.config.get_config", return_value=mock_config),
+            patch("websockets.connect", return_value=mock_conn),
+        ):
             workers = list_workers("test-room")
 
         assert len(workers) == 1
