@@ -1192,9 +1192,16 @@ class JobExecutor:
 
             memory_monitor_task = asyncio.create_task(_memory_monitor())
 
+            # Captured output path from subprocess stdout (sleap-nn prints
+            # "Predictions output path: <path>" on completion).  Used by the
+            # track-job streaming block below to find the actual output file
+            # regardless of sleap-nn's naming convention.
+            _captured_output_path: str | None = None
+
             # Stream logs with progress extraction
             async def stream_logs_with_progress():
                 """Stream logs and extract progress information."""
+                nonlocal _captured_output_path
                 buf = b""
                 epoch_pattern = re.compile(r"Epoch\s+(\d+)")
                 # Match loss=, loss:, loss  (but not val/loss= or val_loss=)
@@ -1258,6 +1265,22 @@ class JobExecutor:
                             # avoids flooding the terminal with every training
                             # output line at INFO level)
                             logging.debug(f"[JOB {job_id}] {text}")
+
+                            # Capture the actual output path printed by
+                            # sleap-nn ("Predictions output path: <path>").
+                            if (
+                                job_type == "track"
+                                and "Predictions output path:" in text
+                            ):
+                                _captured_output_path = (
+                                    text.split("Predictions output path:", 1)[1]
+                                    .strip()
+                                )
+                                logging.info(
+                                    f"[JOB {job_id}] Captured output path: "
+                                    f"{_captured_output_path}"
+                                )
+
                             if sep == b"\n":
                                 # \n supersedes any pending \r line (tqdm
                                 # emits \r...\n for each batch; discard the
@@ -1435,11 +1458,14 @@ class JobExecutor:
                     and not stopped_early
                     and process.returncode == 0
                 ):
-                    # Resolve the output path: use spec.output_path if set,
-                    # otherwise fall back to sleap-nn's default convention
-                    # (data_path with .slp replaced by .predictions.slp).
+                    # Resolve the output path.  Priority:
+                    # 1. spec.output_path (user explicitly set it)
+                    # 2. _captured_output_path (parsed from sleap-nn stdout)
+                    # 3. Convention fallback (data_path → .predictions.slp)
                     if spec.output_path is not None:
                         output_path = Path(spec.output_path)
+                    elif _captured_output_path is not None:
+                        output_path = Path(_captured_output_path)
                     else:
                         base = Path(spec.data_path)
                         output_path = base.with_suffix(
