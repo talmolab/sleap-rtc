@@ -49,6 +49,7 @@ __all__ = [
     # Remote execution
     "run_training",
     "run_inference",
+    "run_inference_batch",
     "ProgressEvent",
     "TrainingResult",
     "InferenceResult",
@@ -469,6 +470,22 @@ def _dispatch_inference_response(
         return True
 
     return False
+
+
+def _enriched_job_message_wrapper(
+    on_job_message: "Callable[[str, dict], None] | None",
+    job_index: int,
+    jobs_total: int,
+) -> "Callable[[str, dict], None]":
+    """Wrap on_job_message to inject job_index and jobs_total into payloads."""
+
+    def _wrapper(msg_type: str, data: dict):
+        data["job_index"] = job_index
+        data["jobs_total"] = jobs_total
+        if on_job_message is not None:
+            on_job_message(msg_type, data)
+
+    return _wrapper
 
 
 async def _run_single_spec_async(
@@ -2559,6 +2576,251 @@ def run_inference(
             on_job_message=on_job_message,
         )
     )
+
+
+def run_inference_batch(
+    specs: list["TrackJobSpec"],
+    room_id: str,
+    worker_id: str | None = None,
+    on_channel_ready: "Callable[[Callable[[str], None]], None] | None" = None,
+    on_job_message: "Callable[[str, dict], None] | None" = None,
+    on_log: "Callable[[str], None] | None" = None,
+    on_spec_complete: "Callable[[InferenceResult], None] | None" = None,
+    timeout: float = 3600.0,
+) -> list[InferenceResult]:
+    """Run multiple inference specs sequentially over a single WebRTC connection.
+
+    Opens one WebRTC connection to the worker and submits each spec in order.
+    If a spec fails the batch stops early (fail-fast).
+
+    Args:
+        specs: List of TrackJobSpec instances to run sequentially.
+        room_id: The room ID containing the worker.
+        worker_id: Specific worker ID. If None, auto-selects best available.
+        on_channel_ready: Optional callback invoked once with a thread-safe
+            ``send_fn(str)`` after the data channel is authenticated.
+        on_job_message: Optional callback invoked with ``(msg_type, payload)``
+            for typed ``JOB_*`` dispatches. Payloads are enriched with
+            ``job_index`` and ``jobs_total`` fields.
+        on_log: Optional callback invoked with raw log lines from the worker.
+        on_spec_complete: Optional callback invoked after each spec completes
+            (success or failure) with the corresponding ``InferenceResult``.
+        timeout: Maximum time to wait for each individual spec in seconds.
+
+    Returns:
+        List of InferenceResult, one per spec that was attempted. On fail-fast
+        the list will be shorter than *specs*.
+
+    Raises:
+        AuthenticationError: If user is not logged in.
+        RoomNotFoundError: If room does not exist or has no workers.
+    """
+    import asyncio
+
+    return asyncio.run(
+        _run_inference_batch_async(
+            specs=specs,
+            room_id=room_id,
+            worker_id=worker_id,
+            on_channel_ready=on_channel_ready,
+            on_job_message=on_job_message,
+            on_log=on_log,
+            on_spec_complete=on_spec_complete,
+            timeout=timeout,
+        )
+    )
+
+
+async def _run_inference_batch_async(
+    specs: list["TrackJobSpec"],
+    room_id: str,
+    worker_id: str | None = None,
+    on_channel_ready: "Callable[[Callable[[str], None]], None] | None" = None,
+    on_job_message: "Callable[[str, dict], None] | None" = None,
+    on_log: "Callable[[str], None] | None" = None,
+    on_spec_complete: "Callable[[InferenceResult], None] | None" = None,
+    timeout: float = 3600.0,
+) -> list["InferenceResult"]:
+    """Async implementation of run_inference_batch."""
+    import asyncio
+    import json
+    import uuid
+
+    import websockets
+    from aiortc import RTCPeerConnection, RTCSessionDescription
+
+    from sleap_rtc.auth.credentials import get_valid_jwt
+    from sleap_rtc.config import get_config
+
+    jwt = get_valid_jwt()
+    if jwt is None:
+        raise AuthenticationError("Not logged in. Call login() first.")
+
+    config = get_config()
+    batch_id = str(uuid.uuid4())[:8]
+    peer_id = f"api-infer-{uuid.uuid4().hex[:8]}"
+
+    # Response handling
+    response_queue: asyncio.Queue = asyncio.Queue()
+    pc = None
+
+    try:
+        async with websockets.connect(config.signaling_websocket) as ws:
+            # Register with room
+            register_msg = {
+                "type": "register",
+                "peer_id": peer_id,
+                "room_id": room_id,
+                "role": "client",
+                "jwt": jwt,
+                "metadata": {
+                    "tags": ["sleap-rtc", "api-inference"],
+                    "properties": {"purpose": "remote-inference-batch"},
+                },
+            }
+            await ws.send(json.dumps(register_msg))
+
+            # Wait for registration
+            while True:
+                response = json.loads(await ws.recv())
+                if response.get("type") == "registered_auth":
+                    break
+                if response.get("type") == "error":
+                    raise RoomNotFoundError(
+                        f"Failed to join room: {response.get('message', 'Unknown error')}"
+                    )
+
+            # Discover workers if not specified
+            if worker_id is None:
+                discover_msg = {
+                    "type": "discover_peers",
+                    "from_peer_id": peer_id,
+                    "filters": {
+                        "role": "worker",
+                        "room_id": room_id,
+                        "tags": ["sleap-rtc"],
+                    },
+                }
+                await ws.send(json.dumps(discover_msg))
+
+                while True:
+                    response = json.loads(await ws.recv())
+                    if response.get("type") == "peer_list":
+                        peers = response.get("peers", [])
+                        if not peers:
+                            raise RoomNotFoundError("No workers available in room")
+                        worker_id = peers[0].get("peer_id")
+                        break
+
+            # Create WebRTC connection
+            pc = RTCPeerConnection()
+            data_channel = pc.createDataChannel("inference")
+
+            channel_open = asyncio.Event()
+
+            # State machine for incoming FILE_META/bytes/END_OF_FILE
+            # transfers (the post-track predictions.slp stream from the
+            # worker).
+            file_receiver = _StreamedFileReceiver()
+
+            @data_channel.on("open")
+            def on_open():
+                channel_open.set()
+
+            @data_channel.on("message")
+            async def on_message(message):
+                if isinstance(message, bytes) and message == b"KEEP_ALIVE":
+                    return
+
+                if isinstance(message, bytes):
+                    file_receiver.handle_bytes(message)
+                    return
+
+                if isinstance(message, str):
+                    if file_receiver.handle_string(message):
+                        return
+
+                    await response_queue.put(message)
+
+            # Send offer
+            offer = await pc.createOffer()
+            await pc.setLocalDescription(offer)
+
+            offer_msg = json.dumps(
+                {
+                    "type": pc.localDescription.type,
+                    "sender": peer_id,
+                    "target": worker_id,
+                    "sdp": pc.localDescription.sdp,
+                }
+            )
+            await ws.send(offer_msg)
+
+            # Wait for answer
+            while True:
+                response = json.loads(await ws.recv())
+                if response.get("type") == "answer":
+                    answer = RTCSessionDescription(
+                        sdp=response.get("sdp"),
+                        type="answer",
+                    )
+                    await pc.setRemoteDescription(answer)
+                    break
+                elif response.get("type") == "candidate":
+                    candidate = response.get("candidate")
+                    if candidate:
+                        await pc.addIceCandidate(candidate)
+
+            # Wait for channel
+            await asyncio.wait_for(channel_open.wait(), timeout=30.0)
+
+            # Authenticate with worker via PSK
+            await _authenticate_channel(data_channel, response_queue)
+
+            # Expose thread-safe send function for bidirectional communication.
+            if on_channel_ready:
+                loop = asyncio.get_running_loop()
+
+                def _thread_safe_send(msg: str) -> None:
+                    loop.call_soon_threadsafe(data_channel.send, msg)
+
+                on_channel_ready(_thread_safe_send)
+
+            # Run specs sequentially over the single connection
+            results: list[InferenceResult] = []
+            for i, spec in enumerate(specs):
+                job_id = f"{batch_id}-{i}"
+                enriched = _enriched_job_message_wrapper(
+                    on_job_message, i, len(specs)
+                )
+                try:
+                    result = await _run_single_spec_async(
+                        spec=spec,
+                        job_id=job_id,
+                        data_channel=data_channel,
+                        response_queue=response_queue,
+                        file_receiver=file_receiver,
+                        timeout=timeout,
+                        on_job_message=enriched,
+                        on_log=on_log,
+                    )
+                except (ConfigurationError, JobError) as e:
+                    result = InferenceResult(
+                        job_id=job_id,
+                        success=False,
+                        error_message=str(e),
+                    )
+                results.append(result)
+                if on_spec_complete is not None:
+                    on_spec_complete(result)
+                if not result.success:
+                    break
+
+            return results
+
+    finally:
+        if pc:
+            await pc.close()
 
 
 async def _run_inference_async(

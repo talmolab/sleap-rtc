@@ -2335,3 +2335,57 @@ class TestRunSingleSpecAsync:
             "file_receiver", "timeout", "on_job_message", "on_log",
         }
         assert required.issubset(param_names)
+
+
+# =============================================================================
+# run_inference_batch signature tests
+# =============================================================================
+
+
+class TestRunInferenceBatchSignature:
+    """Verify run_inference_batch exists with the expected signature."""
+
+    def test_batch_is_importable(self):
+        from sleap_rtc.api import run_inference_batch
+        assert callable(run_inference_batch)
+
+    def test_batch_in_all_exports(self):
+        from sleap_rtc import api
+        assert "run_inference_batch" in api.__all__
+
+    def test_batch_accepts_specs_list(self):
+        import inspect
+        from sleap_rtc.api import run_inference_batch
+        sig = inspect.signature(run_inference_batch)
+        assert "specs" in sig.parameters
+
+    def test_batch_accepts_on_spec_complete(self):
+        import inspect
+        from sleap_rtc.api import run_inference_batch
+        sig = inspect.signature(run_inference_batch)
+        assert "on_spec_complete" in sig.parameters
+
+    def test_batch_accepts_on_job_message(self):
+        import inspect
+        from sleap_rtc.api import run_inference_batch
+        sig = inspect.signature(run_inference_batch)
+        assert "on_job_message" in sig.parameters
+
+    def test_batch_accepts_on_log(self):
+        import inspect
+        from sleap_rtc.api import run_inference_batch
+        sig = inspect.signature(run_inference_batch)
+        assert "on_log" in sig.parameters
+
+    def test_batch_accepts_room_id_and_worker_id(self):
+        import inspect
+        from sleap_rtc.api import run_inference_batch
+        sig = inspect.signature(run_inference_batch)
+        assert "room_id" in sig.parameters
+        assert "worker_id" in sig.parameters
+
+    def test_batch_accepts_on_channel_ready(self):
+        import inspect
+        from sleap_rtc.api import run_inference_batch
+        sig = inspect.signature(run_inference_batch)
+        assert "on_channel_ready" in sig.parameters
