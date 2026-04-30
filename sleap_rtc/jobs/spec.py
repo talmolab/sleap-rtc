@@ -137,6 +137,7 @@ class TrackJobSpec:
     frames: Optional[str] = None
     frame_filter: Optional[str] = None
     video_index: Optional[int] = None
+    path_mappings: Dict[str, str] = field(default_factory=dict)
 
     _VALID_FRAME_FILTERS: ClassVar[Set[Optional[str]]] = {
         None,
