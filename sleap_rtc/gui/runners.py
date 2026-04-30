@@ -524,19 +524,19 @@ class RemoteProgressBridge(QObject):
             logger.info(f"Inference skipped: {reason}")
             # No dialog shown for skipped inference.
 
-    def show_eager_dialog(self):
+    def show_eager_dialog(self, worker_name: str | None = None):
         """Create and show the InferenceProgressDialog immediately.
 
         Call this right after constructing the bridge so the user sees
-        'Waiting for worker to start inference...' while the WebRTC
-        connection and job submission happen in the background.
+        'Waiting to start remote inference on <worker> worker...' while
+        the WebRTC connection and job submission happen in the background.
         """
         from sleap_rtc.gui.widgets import InferenceProgressDialog
 
         if self._inference_dialog is None:
             self._inference_dialog = InferenceProgressDialog()
             self._connect_cancel_to_send_fn(self._inference_dialog)
-            self._inference_dialog.show_waiting()
+            self._inference_dialog.show_waiting(worker_name=worker_name)
 
     def handle_job_message(self, msg_type: str, data: dict):
         """Thread-safe entry point for standalone-track JOB_* messages.

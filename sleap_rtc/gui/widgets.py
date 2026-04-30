@@ -3444,6 +3444,20 @@ class RemoteTrainingWidget(QGroupBox):
             return None  # Auto-select
         return self._worker_combo.itemData(self._worker_combo.currentIndex())
 
+    def get_selected_worker_name(self) -> str | None:
+        """Get the display name of the currently selected worker.
+
+        Returns:
+            Worker name string, or None if auto-select or no selection.
+        """
+        if self._auto_worker_radio.isChecked():
+            return None
+        text = self._worker_combo.currentText()
+        if not text or text in ("No workers available", "Loading workers..."):
+            return None
+        # Display format is "worker-name (GPU, XXG) - status"; extract just the name
+        return text.split(" (")[0].split(" - ")[0].strip()
+
     def is_auto_worker_selection(self) -> bool:
         """Check if auto worker selection is enabled.
 
@@ -3536,9 +3550,16 @@ class InferenceProgressDialog(QDialog):
     # Public API
     # ------------------------------------------------------------------
 
-    def show_waiting(self):
+    def show_waiting(self, worker_name: str | None = None):
         """Show a 'waiting for worker' state with indeterminate progress."""
-        self._status_label.setText("Waiting for worker to start inference…")
+        if worker_name:
+            self._status_label.setText(
+                f"Waiting to start remote inference on "
+                f'<span style="color: green;">{worker_name}</span> worker…'
+            )
+            self._status_label.setTextFormat(Qt.RichText)
+        else:
+            self._status_label.setText("Waiting to start remote inference…")
         self._progress_bar.setRange(0, 0)  # indeterminate
         self.show()
 
