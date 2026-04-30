@@ -588,6 +588,13 @@ class RemoteProgressBridge(QObject):
                 if self._inference_dialog._progress_bar.maximum() == 0:
                     self._inference_dialog._status_label.setText("Running inference…")
                     self._inference_dialog._progress_bar.setRange(0, 100)
+            # Multi-spec batch: show "video N of M" in the status label
+            jobs_total = data.get("jobs_total", 1)
+            job_index = data.get("job_index", 0)
+            if jobs_total > 1:
+                self._inference_dialog._status_label.setText(
+                    f"Running inference… (video {job_index + 1} of {jobs_total})"
+                )
             self._inference_dialog.append_log(clean)
             # Parse progress from rich progress bar lines, e.g.:
             #   "Predicting... 100% 35/35 ETA: 0:00:00 Elapsed: 0:00:01 47.8 FPS"
@@ -627,9 +634,20 @@ class RemoteProgressBridge(QObject):
             n_frames = data.get("n_frames") or self._last_n_frames
             n_with_instances = data.get("n_with_instances")
             n_empty = data.get("n_empty")
+            jobs_total = data.get("jobs_total", 1)
+            job_index = data.get("job_index", 0)
+            is_final = job_index >= jobs_total - 1
             logger.info(f"Track job complete — predictions at {predictions_path}")
             if self._inference_dialog is not None:
-                self._inference_dialog.finish(n_frames, n_with_instances, n_empty)
+                if is_final:
+                    self._inference_dialog.finish(n_frames, n_with_instances, n_empty)
+                else:
+                    # Mid-batch: reset for next spec
+                    self._inference_dialog._status_label.setText(
+                        f"Starting video {job_index + 2} of {jobs_total}…"
+                    )
+                    self._inference_dialog._progress_bar.setRange(0, 0)  # indeterminate
+                    self._inference_dialog._progress_bar.setValue(0)
             if self._on_predictions_ready and predictions_path:
                 try:
                     self._on_predictions_ready(predictions_path)

@@ -1353,3 +1353,125 @@ class TestHandleJobMessage:
         assert bridge._last_n_frames == 35
         assert bridge._inference_dialog is not None
         bridge._inference_dialog.close()
+
+
+class TestDispatchJobMsgMultiSpec:
+    """Verify _dispatch_job_msg reads job_index/jobs_total for multi-spec."""
+
+    def test_first_job_log_shows_video_1_of_3(self):
+        bridge = RemoteProgressBridge()
+        with patch("sleap_rtc.gui.widgets.InferenceProgressDialog") as MockDialog:
+            instance = MagicMock()
+            MockDialog.return_value = instance
+            bridge._dispatch_job_msg("JOB_LOG", {
+                "text": "Starting...", "job_index": 0, "jobs_total": 3,
+            })
+            MockDialog.assert_called_once()
+            instance.show.assert_called_once()
+            # After creating dialog with multi-spec, status should show video count
+            instance._status_label.setText.assert_called_with(
+                "Running inference… (video 1 of 3)"
+            )
+
+    def test_second_spec_log_updates_to_video_2_of_3(self):
+        bridge = RemoteProgressBridge()
+        with patch("sleap_rtc.gui.widgets.InferenceProgressDialog") as MockDialog:
+            instance = MagicMock()
+            # First call: dialog just created, maximum returns default (not 0)
+            # After first JOB_LOG creates dialog, subsequent calls check maximum()
+            instance._progress_bar.maximum.return_value = 100
+            MockDialog.return_value = instance
+            # First spec
+            bridge._dispatch_job_msg("JOB_LOG", {
+                "text": "line1", "job_index": 0, "jobs_total": 3,
+            })
+            # Complete first spec (mid-batch)
+            bridge._dispatch_job_msg("JOB_COMPLETE", {
+                "output_path": "/tmp/pred0.slp", "job_index": 0, "jobs_total": 3,
+            })
+            # Second spec starts — after mid-batch complete, progress bar was
+            # reset to indeterminate (max=0)
+            instance._progress_bar.maximum.return_value = 0
+            bridge._dispatch_job_msg("JOB_LOG", {
+                "text": "line2", "job_index": 1, "jobs_total": 3,
+            })
+            # The last setText call should be the video 2 of 3 label
+            calls = instance._status_label.setText.call_args_list
+            last_label = calls[-1][0][0]
+            assert "2 of 3" in last_label
+
+    def test_single_spec_no_video_label(self):
+        """When jobs_total=1, don't show 'video 1 of 1' — same as current behavior."""
+        bridge = RemoteProgressBridge()
+        with patch("sleap_rtc.gui.widgets.InferenceProgressDialog") as MockDialog:
+            instance = MagicMock()
+            MockDialog.return_value = instance
+            bridge._dispatch_job_msg("JOB_LOG", {
+                "text": "line1", "job_index": 0, "jobs_total": 1,
+            })
+            # Status label should NOT contain "of" — no multi-spec label
+            for call in instance._status_label.setText.call_args_list:
+                assert "of" not in call[0][0].lower()
+
+    def test_no_enrichment_fields_works_like_before(self):
+        """Without job_index/jobs_total (pre-batch callers), no crash."""
+        bridge = RemoteProgressBridge()
+        with patch("sleap_rtc.gui.widgets.InferenceProgressDialog") as MockDialog:
+            instance = MagicMock()
+            MockDialog.return_value = instance
+            bridge._dispatch_job_msg("JOB_LOG", {"text": "hello"})
+            MockDialog.assert_called_once()
+            instance.show.assert_called_once()
+            instance.append_log.assert_called_once_with("hello")
+
+    def test_job_complete_mid_batch_resets_progress(self):
+        """JOB_COMPLETE for a non-final spec resets progress bar to indeterminate."""
+        bridge = RemoteProgressBridge()
+        with patch("sleap_rtc.gui.widgets.InferenceProgressDialog") as MockDialog:
+            instance = MagicMock()
+            MockDialog.return_value = instance
+            # Open dialog
+            bridge._dispatch_job_msg("JOB_LOG", {
+                "text": "Predicting... 50% 5/10", "job_index": 0, "jobs_total": 3,
+            })
+            # Complete first spec (non-final)
+            bridge._dispatch_job_msg("JOB_COMPLETE", {
+                "output_path": "/tmp/pred.slp", "job_index": 0, "jobs_total": 3,
+            })
+            # Should NOT call finish() — mid-batch
+            instance.finish.assert_not_called()
+            # Should reset to indeterminate
+            instance._progress_bar.setRange.assert_called_with(0, 0)
+            instance._progress_bar.setValue.assert_called_with(0)
+
+    def test_job_complete_final_spec_calls_finish(self):
+        """JOB_COMPLETE for the final spec calls finish() as normal."""
+        bridge = RemoteProgressBridge()
+        with patch("sleap_rtc.gui.widgets.InferenceProgressDialog") as MockDialog:
+            instance = MagicMock()
+            MockDialog.return_value = instance
+            # Open dialog
+            bridge._dispatch_job_msg("JOB_LOG", {
+                "text": "Predicting... 100% 10/10", "job_index": 2, "jobs_total": 3,
+            })
+            bridge._dispatch_job_msg("JOB_COMPLETE", {
+                "output_path": "/tmp/pred.slp", "job_index": 2, "jobs_total": 3,
+            })
+            # Final spec — should call finish()
+            instance.finish.assert_called_once()
+
+    def test_mid_batch_complete_still_fires_predictions_ready(self):
+        """on_predictions_ready fires for every spec, not just the final one."""
+        bridge = RemoteProgressBridge()
+        received: list[str] = []
+        bridge.set_predictions_ready_callback(received.append)
+        with patch("sleap_rtc.gui.widgets.InferenceProgressDialog") as MockDialog:
+            instance = MagicMock()
+            MockDialog.return_value = instance
+            bridge._dispatch_job_msg("JOB_LOG", {
+                "text": "line1", "job_index": 0, "jobs_total": 3,
+            })
+            bridge._dispatch_job_msg("JOB_COMPLETE", {
+                "output_path": "/tmp/pred0.slp", "job_index": 0, "jobs_total": 3,
+            })
+        assert received == ["/tmp/pred0.slp"]
