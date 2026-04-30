@@ -2347,6 +2347,7 @@ def run_inference(
     frames: str | None = None,
     frame_filter: str | None = None,
     video_index: int | None = None,
+    path_mappings: dict[str, str] | None = None,
     progress_callback: "Callable[[ProgressEvent], None] | None" = None,
     timeout: float = 3600.0,  # 1 hour default
     on_channel_ready: "Callable[[Callable[[str], None]], None] | None" = None,
@@ -2372,6 +2373,9 @@ def run_inference(
             "suggested", "user", "predicted", "random", or None (all frames).
         video_index: Restrict inference to a single video by index. None means
             all videos in the labels file.
+        path_mappings: Maps original client-side paths to resolved worker paths.
+            The worker uses these to rewrite video paths inside the SLP before
+            running sleap-nn. Mirrors the same parameter on run_training.
         progress_callback: Function called with progress updates.
         timeout: Maximum time to wait for job completion in seconds.
         on_channel_ready: Optional callback invoked once with a thread-safe
@@ -2409,6 +2413,7 @@ def run_inference(
             frames=frames,
             frame_filter=frame_filter,
             video_index=video_index,
+            path_mappings=path_mappings,
             progress_callback=progress_callback,
             timeout=timeout,
             on_channel_ready=on_channel_ready,
@@ -2430,6 +2435,7 @@ async def _run_inference_async(
     frames: str | None,
     frame_filter: str | None = None,
     video_index: int | None = None,
+    path_mappings: dict[str, str] | None = None,
     progress_callback: "Callable[[ProgressEvent], None] | None" = None,
     timeout: float = 3600.0,
     on_channel_ready: "Callable[[Callable[[str], None]], None] | None" = None,
@@ -2474,6 +2480,7 @@ async def _run_inference_async(
         frames=frames,
         frame_filter=frame_filter,
         video_index=video_index,
+        path_mappings=path_mappings or {},
     )
 
     # Response handling
