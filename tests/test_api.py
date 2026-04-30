@@ -2389,3 +2389,85 @@ class TestRunInferenceBatchSignature:
         from sleap_rtc.api import run_inference_batch
         sig = inspect.signature(run_inference_batch)
         assert "on_channel_ready" in sig.parameters
+
+
+class TestEnrichedJobMessageWrapper:
+    """Verify _enriched_job_message_wrapper injects job_index/jobs_total."""
+
+    def test_job_log_enriched_with_index(self):
+        """Wrapper injects job_index and jobs_total before forwarding."""
+        from sleap_rtc.api import _enriched_job_message_wrapper
+        captured = []
+        def on_msg(msg_type, data):
+            captured.append((msg_type, data.copy()))
+
+        wrapper = _enriched_job_message_wrapper(on_msg, job_index=1, jobs_total=3)
+        wrapper("JOB_LOG", {"text": "hello"})
+
+        assert len(captured) == 1
+        assert captured[0][0] == "JOB_LOG"
+        assert captured[0][1]["job_index"] == 1
+        assert captured[0][1]["jobs_total"] == 3
+        assert captured[0][1]["text"] == "hello"
+
+    def test_enrichment_with_none_callback_does_not_crash(self):
+        """When on_job_message is None, wrapper still enriches (no-op forward)."""
+        from sleap_rtc.api import _enriched_job_message_wrapper
+        wrapper = _enriched_job_message_wrapper(None, job_index=0, jobs_total=1)
+        # Should not raise
+        data = {"text": "test"}
+        wrapper("JOB_LOG", data)
+        # Data should still be enriched (mutated in-place)
+        assert data["job_index"] == 0
+        assert data["jobs_total"] == 1
+
+    def test_enrichment_preserves_existing_payload_fields(self):
+        """Existing fields in the data dict are not lost."""
+        from sleap_rtc.api import _enriched_job_message_wrapper
+        captured = []
+        wrapper = _enriched_job_message_wrapper(
+            lambda t, d: captured.append(d.copy()), job_index=2, jobs_total=5,
+        )
+        wrapper("JOB_PROGRESS", {"progress": 0.5, "batch": 10})
+        assert captured[0]["progress"] == 0.5
+        assert captured[0]["batch"] == 10
+        assert captured[0]["job_index"] == 2
+        assert captured[0]["jobs_total"] == 5
+
+    def test_different_indices_produce_different_wrappers(self):
+        """Each wrapper instance captures its own job_index."""
+        from sleap_rtc.api import _enriched_job_message_wrapper
+        results = []
+        cb = lambda t, d: results.append(d.copy())
+        w0 = _enriched_job_message_wrapper(cb, job_index=0, jobs_total=3)
+        w1 = _enriched_job_message_wrapper(cb, job_index=1, jobs_total=3)
+        w2 = _enriched_job_message_wrapper(cb, job_index=2, jobs_total=3)
+        w0("JOB_LOG", {"x": 1})
+        w1("JOB_LOG", {"x": 2})
+        w2("JOB_LOG", {"x": 3})
+        assert [r["job_index"] for r in results] == [0, 1, 2]
+        assert all(r["jobs_total"] == 3 for r in results)
+
+    def test_enrichment_works_for_job_complete(self):
+        """JOB_COMPLETE payloads are also enriched."""
+        from sleap_rtc.api import _enriched_job_message_wrapper
+        captured = []
+        wrapper = _enriched_job_message_wrapper(
+            lambda t, d: captured.append((t, d.copy())), job_index=0, jobs_total=1,
+        )
+        wrapper("JOB_COMPLETE", {"output_path": "/tmp/pred.slp"})
+        assert captured[0][0] == "JOB_COMPLETE"
+        assert captured[0][1]["job_index"] == 0
+        assert captured[0][1]["output_path"] == "/tmp/pred.slp"
+
+    def test_enrichment_works_for_job_failed(self):
+        """JOB_FAILED payloads are also enriched."""
+        from sleap_rtc.api import _enriched_job_message_wrapper
+        captured = []
+        wrapper = _enriched_job_message_wrapper(
+            lambda t, d: captured.append((t, d.copy())), job_index=1, jobs_total=2,
+        )
+        wrapper("JOB_FAILED", {"message": "out of memory"})
+        assert captured[0][0] == "JOB_FAILED"
+        assert captured[0][1]["job_index"] == 1
+        assert captured[0][1]["message"] == "out of memory"
