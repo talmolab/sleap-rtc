@@ -542,7 +542,7 @@ class RemoteProgressBridge(QObject):
         """Thread-safe entry point for standalone-track JOB_* messages.
 
         This method is intended to be passed as the ``on_job_message``
-        callback to :func:`run_inference` (or :func:`_run_inference_async`).
+        callback to :func:`run_inference` (or :func:`run_inference_batch`).
         It is called from the WebRTC background thread and marshals the
         message to the main Qt thread via a queued signal, where
         :meth:`_dispatch_job_msg` creates and updates the

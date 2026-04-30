@@ -500,7 +500,7 @@ async def _run_single_spec_async(
 ) -> "InferenceResult":
     """Submit a single TrackJobSpec and process responses until completion.
 
-    This is the job-specific portion extracted from ``_run_inference_async``.
+    This is the job-specific portion extracted from ``_run_inference_batch_async``.
     It sends the spec over *data_channel*, reads responses from
     *response_queue*, and returns an ``InferenceResult`` (success **or**
     failure).  Callers decide whether to raise on failure.
@@ -2552,30 +2552,32 @@ def run_inference(
         ConfigurationError: If job spec is invalid.
         JobError: If the inference job fails.
     """
-    import asyncio
+    from sleap_rtc.jobs.spec import TrackJobSpec
 
-    return asyncio.run(
-        _run_inference_async(
-            data_path=data_path,
-            model_paths=model_paths,
-            room_id=room_id,
-            worker_id=worker_id,
-            output_path=output_path,
-            batch_size=batch_size,
-            peak_threshold=peak_threshold,
-            only_suggested_frames=only_suggested_frames,
-            frames=frames,
-            frame_filter=frame_filter,
-            video_index=video_index,
-            exclude_user_labeled=exclude_user_labeled,
-            path_mappings=path_mappings,
-            progress_callback=progress_callback,
-            timeout=timeout,
-            on_channel_ready=on_channel_ready,
-            on_log=on_log,
-            on_job_message=on_job_message,
-        )
+    spec = TrackJobSpec(
+        data_path=data_path,
+        model_paths=model_paths,
+        output_path=output_path,
+        batch_size=batch_size,
+        peak_threshold=peak_threshold,
+        only_suggested_frames=only_suggested_frames,
+        exclude_user_labeled=exclude_user_labeled,
+        frames=frames,
+        frame_filter=frame_filter,
+        video_index=video_index,
+        path_mappings=path_mappings or {},
     )
+
+    results = run_inference_batch(
+        specs=[spec],
+        room_id=room_id,
+        worker_id=worker_id,
+        on_channel_ready=on_channel_ready,
+        on_job_message=on_job_message,
+        on_log=on_log,
+        timeout=timeout,
+    )
+    return results[0]
 
 
 def run_inference_batch(
@@ -2823,218 +2825,3 @@ async def _run_inference_batch_async(
             await pc.close()
 
 
-async def _run_inference_async(
-    data_path: str,
-    model_paths: list[str],
-    room_id: str,
-    worker_id: str | None,
-    output_path: str | None,
-    batch_size: int | None,
-    peak_threshold: float | None,
-    only_suggested_frames: bool,
-    frames: str | None,
-    frame_filter: str | None = None,
-    video_index: int | None = None,
-    exclude_user_labeled: bool = False,
-    path_mappings: dict[str, str] | None = None,
-    progress_callback: "Callable[[ProgressEvent], None] | None" = None,
-    timeout: float = 3600.0,
-    on_channel_ready: "Callable[[Callable[[str], None]], None] | None" = None,
-    on_log: "Callable[[str], None] | None" = None,
-    on_job_message: "Callable[[str, dict], None] | None" = None,
-) -> InferenceResult:
-    """Async implementation of run_inference."""
-    import json
-    import uuid
-    import websockets
-    from aiortc import RTCPeerConnection, RTCSessionDescription
-    from sleap_rtc.auth.credentials import get_valid_jwt
-    from sleap_rtc.config import get_config
-    from sleap_rtc.jobs.spec import TrackJobSpec
-
-    jwt = get_valid_jwt()
-    if jwt is None:
-        raise AuthenticationError("Not logged in. Call login() first.")
-
-    config = get_config()
-    peer_id = f"api-infer-{uuid.uuid4().hex[:8]}"
-    job_id = str(uuid.uuid4())[:8]
-
-    # Build job spec
-    spec = TrackJobSpec(
-        data_path=data_path,
-        model_paths=model_paths,
-        output_path=output_path,
-        batch_size=batch_size,
-        peak_threshold=peak_threshold,
-        only_suggested_frames=only_suggested_frames,
-        exclude_user_labeled=exclude_user_labeled,
-        frames=frames,
-        frame_filter=frame_filter,
-        video_index=video_index,
-        path_mappings=path_mappings or {},
-    )
-
-    # Response handling
-    import asyncio
-
-    response_queue: asyncio.Queue = asyncio.Queue()
-    pc = None
-
-    try:
-        async with websockets.connect(config.signaling_websocket) as ws:
-            # Register with room
-            register_msg = {
-                "type": "register",
-                "peer_id": peer_id,
-                "room_id": room_id,
-                "role": "client",
-                "jwt": jwt,
-                "metadata": {
-                    "tags": ["sleap-rtc", "api-inference"],
-                    "properties": {"purpose": "remote-inference"},
-                },
-            }
-            await ws.send(json.dumps(register_msg))
-
-            # Wait for registration
-            while True:
-                response = json.loads(await ws.recv())
-                if response.get("type") == "registered_auth":
-                    break
-                if response.get("type") == "error":
-                    raise RoomNotFoundError(
-                        f"Failed to join room: {response.get('message', 'Unknown error')}"
-                    )
-
-            # Discover workers if not specified
-            if worker_id is None:
-                discover_msg = {
-                    "type": "discover_peers",
-                    "from_peer_id": peer_id,
-                    "filters": {
-                        "role": "worker",
-                        "room_id": room_id,
-                        "tags": ["sleap-rtc"],
-                    },
-                }
-                await ws.send(json.dumps(discover_msg))
-
-                while True:
-                    response = json.loads(await ws.recv())
-                    if response.get("type") == "peer_list":
-                        peers = response.get("peers", [])
-                        if not peers:
-                            raise RoomNotFoundError("No workers available in room")
-                        worker_id = peers[0].get("peer_id")
-                        break
-
-            # Create WebRTC connection
-            pc = RTCPeerConnection()
-            data_channel = pc.createDataChannel("inference")
-
-            channel_open = asyncio.Event()
-
-            # State machine for incoming FILE_META/bytes/END_OF_FILE
-            # transfers (the post-track predictions.slp stream from the
-            # worker — mirrors the training-side wiring landed in PR #79).
-            file_receiver = _StreamedFileReceiver()
-
-            @data_channel.on("open")
-            def on_open():
-                channel_open.set()
-
-            @data_channel.on("message")
-            async def on_message(message):
-                # Filter out the worker's KEEP_ALIVE heartbeat (10-byte
-                # binary) BEFORE any other handling. If we let it fall
-                # through to file_receiver.handle_bytes(), an in-flight
-                # transfer would have those 10 bytes appended to its
-                # tempfile, corrupting the predictions.slp by 10 bytes.
-                if isinstance(message, bytes) and message == b"KEEP_ALIVE":
-                    return
-
-                if isinstance(message, bytes):
-                    # Binary message — treat as a file-transfer chunk.
-                    # If no FILE_META is active, the receiver silently
-                    # drops the bytes (backward-compatible).
-                    file_receiver.handle_bytes(message)
-                    return
-
-                if isinstance(message, str):
-                    # File-transfer control messages (FILE_META, END_OF_FILE)
-                    # are consumed by the receiver and not forwarded.
-                    if file_receiver.handle_string(message):
-                        return
-
-                    await response_queue.put(message)
-
-            # Send offer
-            offer = await pc.createOffer()
-            await pc.setLocalDescription(offer)
-
-            offer_msg = json.dumps(
-                {
-                    "type": pc.localDescription.type,
-                    "sender": peer_id,
-                    "target": worker_id,
-                    "sdp": pc.localDescription.sdp,
-                }
-            )
-            await ws.send(offer_msg)
-
-            # Wait for answer
-            while True:
-                response = json.loads(await ws.recv())
-                if response.get("type") == "answer":
-                    answer = RTCSessionDescription(
-                        sdp=response.get("sdp"),
-                        type="answer",
-                    )
-                    await pc.setRemoteDescription(answer)
-                    break
-                elif response.get("type") == "candidate":
-                    candidate = response.get("candidate")
-                    if candidate:
-                        await pc.addIceCandidate(candidate)
-
-            # Wait for channel
-            await asyncio.wait_for(channel_open.wait(), timeout=30.0)
-
-            # Authenticate with worker via PSK
-            await _authenticate_channel(data_channel, response_queue)
-
-            # Expose thread-safe send function for bidirectional communication.
-            # Mirrors the training-side wire surface in _run_training_async so the
-            # SLEAP GUI can hand the same `send_fn` to its InferenceProgressDialog
-            # Cancel button.
-            if on_channel_ready:
-                loop = asyncio.get_running_loop()
-
-                def _thread_safe_send(msg: str) -> None:
-                    loop.call_soon_threadsafe(data_channel.send, msg)
-
-                on_channel_ready(_thread_safe_send)
-
-            result = await _run_single_spec_async(
-                spec=spec,
-                job_id=job_id,
-                data_channel=data_channel,
-                response_queue=response_queue,
-                file_receiver=file_receiver,
-                timeout=timeout,
-                on_job_message=on_job_message,
-                on_log=on_log,
-            )
-
-    finally:
-        if pc:
-            await pc.close()
-
-    if not result.success:
-        raise JobError(
-            result.error_message or "Inference failed",
-            job_id=result.job_id,
-        )
-
-    return result
