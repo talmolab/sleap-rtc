@@ -2342,20 +2342,34 @@ class RTCWorkerClient:
                 )
                 return
 
-            # Apply path_mappings to remap client-side paths to worker paths
-            if isinstance(spec, TrainJobSpec) and getattr(spec, "path_mappings", None):
-                mappings = spec.path_mappings
+            # Apply path_mappings to remap client-side paths to worker paths.
+            # Both TrainJobSpec and TrackJobSpec carry path_mappings from the
+            # client's presubmission flow.
+            mappings = getattr(spec, "path_mappings", None) or {}
+            if mappings:
                 logging.info(f"Applying path mappings: {mappings}")
-                if spec.labels_path and spec.labels_path in mappings:
-                    spec.labels_path = mappings[spec.labels_path]
-                if spec.val_labels_path and spec.val_labels_path in mappings:
-                    spec.val_labels_path = mappings[spec.val_labels_path]
 
-                # Build video-only filename_map (exclude the SLP file mapping itself)
-                # and write a resolved SLP so sleap-nn never sees stale video paths.
-                # write_slp_with_new_paths uses open_videos=False, avoiding ~14s/video
-                # OpenCV timeouts on non-existent NFS paths.
-                for slp_attr in ("labels_path", "val_labels_path"):
+                # Remap top-level SLP path attributes.
+                if isinstance(spec, TrainJobSpec):
+                    for attr in ("labels_path", "val_labels_path"):
+                        val = getattr(spec, attr, None)
+                        if val and val in mappings:
+                            setattr(spec, attr, mappings[val])
+                elif isinstance(spec, TrackJobSpec):
+                    if spec.data_path in mappings:
+                        spec.data_path = mappings[spec.data_path]
+
+                # Build video-only filename_map (exclude the SLP file mapping
+                # itself) and write a resolved SLP so sleap-nn never sees
+                # stale video paths.  write_slp_with_new_paths uses
+                # open_videos=False, avoiding ~14s/video OpenCV timeouts on
+                # non-existent NFS paths.
+                slp_attrs = (
+                    ("labels_path", "val_labels_path")
+                    if isinstance(spec, TrainJobSpec)
+                    else ("data_path",)
+                )
+                for slp_attr in slp_attrs:
                     slp_path = getattr(spec, slp_attr, None)
                     if not slp_path:
                         continue

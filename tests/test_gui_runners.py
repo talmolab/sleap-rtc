@@ -1315,6 +1315,33 @@ class TestHandleJobMessage:
             assert MockDialog.call_count == 1
             instance.show_error.assert_called_once_with("GPU OOM")
 
+    def test_show_eager_dialog_creates_waiting_state(self):
+        bridge = RemoteProgressBridge()
+        with patch("sleap_rtc.gui.widgets.InferenceProgressDialog") as mock_cls:
+            mock_dialog = MagicMock()
+            mock_cls.return_value = mock_dialog
+
+            bridge.show_eager_dialog()
+
+            mock_cls.assert_called_once()
+            mock_dialog.show_waiting.assert_called_once()
+
+    def test_first_job_log_transitions_from_waiting_to_live(self):
+        bridge = RemoteProgressBridge()
+        with patch("sleap_rtc.gui.widgets.InferenceProgressDialog") as mock_cls:
+            mock_dialog = MagicMock()
+            mock_dialog._progress_bar.maximum.return_value = 0  # indeterminate
+            mock_cls.return_value = mock_dialog
+
+            bridge.show_eager_dialog()
+            bridge._dispatch_job_msg("JOB_LOG", {"text": "Predicting... 1/10"})
+
+            # Should NOT create a second dialog
+            assert mock_cls.call_count == 1
+            # Should transition from waiting to live
+            mock_dialog._status_label.setText.assert_called_with("Running inference…")
+            mock_dialog._progress_bar.setRange.assert_called_with(0, 100)
+
     def test_inference_dispatch_unchanged(self, qapp):
         """Regression: existing INFERENCE_* dispatch path is unaffected."""
         bridge = RemoteProgressBridge()
