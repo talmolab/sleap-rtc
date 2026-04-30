@@ -190,6 +190,9 @@ class CommandBuilder:
             if flag is not None:
                 cmd.append(flag)
 
+        if spec.exclude_user_labeled:
+            cmd.append("--exclude_user_labeled")
+
         if spec.video_index is not None:
             cmd.extend(["--video_index", str(spec.video_index)])
 

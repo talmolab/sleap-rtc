@@ -134,6 +134,7 @@ class TrackJobSpec:
     batch_size: Optional[int] = None
     peak_threshold: Optional[float] = None
     only_suggested_frames: bool = False
+    exclude_user_labeled: bool = False
     frames: Optional[str] = None
     frame_filter: Optional[str] = None
     video_index: Optional[int] = None
