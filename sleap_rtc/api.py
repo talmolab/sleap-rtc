@@ -471,6 +471,142 @@ def _dispatch_inference_response(
     return False
 
 
+async def _run_single_spec_async(
+    spec: "TrackJobSpec",
+    job_id: str,
+    data_channel,
+    response_queue: "asyncio.Queue",
+    file_receiver: "_StreamedFileReceiver",
+    timeout: float,
+    on_job_message: "Callable[[str, dict], None] | None" = None,
+    on_log: "Callable[[str], None] | None" = None,
+) -> "InferenceResult":
+    """Submit a single TrackJobSpec and process responses until completion.
+
+    This is the job-specific portion extracted from ``_run_inference_async``.
+    It sends the spec over *data_channel*, reads responses from
+    *response_queue*, and returns an ``InferenceResult`` (success **or**
+    failure).  Callers decide whether to raise on failure.
+
+    Raises:
+        JobError: If the overall timeout is exceeded.
+        ConfigurationError: If the worker rejects the job.
+    """
+    import asyncio
+    import json
+
+    from sleap_rtc.protocol import (
+        MSG_JOB_SUBMIT,
+        MSG_JOB_ACCEPTED,
+        MSG_JOB_REJECTED,
+        MSG_JOB_COMPLETE,
+        MSG_JOB_FAILED,
+        MSG_SEPARATOR,
+    )
+
+    # Submit job
+    spec_json = spec.to_json()
+    submit_msg = (
+        f"{MSG_JOB_SUBMIT}{MSG_SEPARATOR}{job_id}{MSG_SEPARATOR}{spec_json}"
+    )
+    data_channel.send(submit_msg)
+
+    # Process responses
+    start_time = asyncio.get_event_loop().time()
+    server_job_id = None
+
+    while True:
+        elapsed = asyncio.get_event_loop().time() - start_time
+        remaining = timeout - elapsed
+        if remaining <= 0:
+            raise JobError("Inference timed out", job_id=job_id)
+
+        try:
+            response = await asyncio.wait_for(
+                response_queue.get(),
+                timeout=min(remaining, 60.0),
+            )
+        except asyncio.TimeoutError:
+            continue
+
+        if _dispatch_inference_response(response, on_job_message, on_log):
+            continue
+
+        if response.startswith(MSG_JOB_ACCEPTED):
+            parts = response.split(MSG_SEPARATOR)
+            server_job_id = parts[1] if len(parts) > 1 else job_id
+
+        elif response.startswith(MSG_JOB_REJECTED):
+            parts = response.split(MSG_SEPARATOR, 2)
+            error_json = parts[2] if len(parts) > 2 else "{}"
+            try:
+                error_data = json.loads(error_json)
+                errors = error_data.get("errors", [])
+                error_msgs = [e.get("message", "Unknown") for e in errors]
+                raise ConfigurationError(
+                    f"Job rejected: {'; '.join(error_msgs)}"
+                )
+            except json.JSONDecodeError:
+                raise ConfigurationError(f"Job rejected: {error_json}")
+
+        elif response.startswith(MSG_JOB_COMPLETE):
+            parts = response.split(MSG_SEPARATOR, 1)
+            result_json = parts[1] if len(parts) > 1 else "{}"
+            try:
+                result_data = json.loads(result_json)
+                # If the worker streamed predictions.slp to us
+                # (Tasks 6-7), replace the worker-side path with
+                # our local temp path. The worker path is
+                # preserved as worker_output_path for v2 dual-mode.
+                _apply_received_predictions(
+                    file_receiver, result_data, "output_path"
+                )
+                # Notify the GUI dispatcher BEFORE we build the
+                # InferenceResult so the progress dialog can finish
+                # its "complete" animation before this function
+                # returns. (Task 9)
+                if on_job_message is not None:
+                    on_job_message("JOB_COMPLETE", result_data)
+                return InferenceResult(
+                    job_id=server_job_id or job_id,
+                    success=True,
+                    duration_seconds=result_data.get("duration_seconds"),
+                    predictions_path=result_data.get("output_path"),
+                )
+            except json.JSONDecodeError:
+                if on_job_message is not None:
+                    on_job_message("JOB_COMPLETE", {})
+                return InferenceResult(
+                    job_id=server_job_id or job_id,
+                    success=True,
+                )
+
+        elif response.startswith(MSG_JOB_FAILED):
+            parts = response.split(MSG_SEPARATOR, 2)
+            error_json = parts[2] if len(parts) > 2 else "{}"
+            try:
+                error_data = json.loads(error_json)
+                error_msg = error_data.get("message", "Job failed")
+                duration = error_data.get("duration_seconds")
+            except json.JSONDecodeError:
+                error_data = {}
+                error_msg = "Job failed"
+                duration = None
+
+            if on_job_message is not None:
+                on_job_message(
+                    "JOB_FAILED",
+                    error_data if error_data else {"message": error_msg},
+                )
+
+            return InferenceResult(
+                job_id=server_job_id or job_id,
+                success=False,
+                duration_seconds=duration,
+                error_message=error_msg,
+            )
+
+
 # =============================================================================
 # Data Classes
 # =============================================================================
@@ -2452,16 +2588,6 @@ async def _run_inference_async(
     from aiortc import RTCPeerConnection, RTCSessionDescription
     from sleap_rtc.auth.credentials import get_valid_jwt
     from sleap_rtc.config import get_config
-    from sleap_rtc.protocol import (
-        MSG_JOB_SUBMIT,
-        MSG_JOB_ACCEPTED,
-        MSG_JOB_REJECTED,
-        MSG_JOB_PROGRESS,
-        MSG_JOB_LOG,
-        MSG_JOB_COMPLETE,
-        MSG_JOB_FAILED,
-        MSG_SEPARATOR,
-    )
     from sleap_rtc.jobs.spec import TrackJobSpec
 
     jwt = get_valid_jwt()
@@ -2491,7 +2617,6 @@ async def _run_inference_async(
     import asyncio
 
     response_queue: asyncio.Queue = asyncio.Queue()
-    result: InferenceResult | None = None
     pc = None
 
     try:
@@ -2629,116 +2754,20 @@ async def _run_inference_async(
 
                 on_channel_ready(_thread_safe_send)
 
-            # Submit job
-            spec_json = spec.to_json()
-            submit_msg = (
-                f"{MSG_JOB_SUBMIT}{MSG_SEPARATOR}{job_id}{MSG_SEPARATOR}{spec_json}"
+            result = await _run_single_spec_async(
+                spec=spec,
+                job_id=job_id,
+                data_channel=data_channel,
+                response_queue=response_queue,
+                file_receiver=file_receiver,
+                timeout=timeout,
+                on_job_message=on_job_message,
+                on_log=on_log,
             )
-            data_channel.send(submit_msg)
-
-            # Process responses
-            start_time = asyncio.get_event_loop().time()
-            server_job_id = None
-
-            while True:
-                elapsed = asyncio.get_event_loop().time() - start_time
-                remaining = timeout - elapsed
-                if remaining <= 0:
-                    raise JobError("Inference timed out", job_id=job_id)
-
-                try:
-                    response = await asyncio.wait_for(
-                        response_queue.get(),
-                        timeout=min(remaining, 60.0),
-                    )
-                except asyncio.TimeoutError:
-                    continue
-
-                if _dispatch_inference_response(response, on_job_message, on_log):
-                    continue
-
-                if response.startswith(MSG_JOB_ACCEPTED):
-                    parts = response.split(MSG_SEPARATOR)
-                    server_job_id = parts[1] if len(parts) > 1 else job_id
-
-                elif response.startswith(MSG_JOB_REJECTED):
-                    parts = response.split(MSG_SEPARATOR, 2)
-                    error_json = parts[2] if len(parts) > 2 else "{}"
-                    try:
-                        error_data = json.loads(error_json)
-                        errors = error_data.get("errors", [])
-                        error_msgs = [e.get("message", "Unknown") for e in errors]
-                        raise ConfigurationError(
-                            f"Job rejected: {'; '.join(error_msgs)}"
-                        )
-                    except json.JSONDecodeError:
-                        raise ConfigurationError(f"Job rejected: {error_json}")
-
-                elif response.startswith(MSG_JOB_COMPLETE):
-                    parts = response.split(MSG_SEPARATOR, 1)
-                    result_json = parts[1] if len(parts) > 1 else "{}"
-                    try:
-                        result_data = json.loads(result_json)
-                        # If the worker streamed predictions.slp to us
-                        # (Tasks 6–7), replace the worker-side path with
-                        # our local temp path. The worker path is
-                        # preserved as worker_output_path for v2 dual-mode.
-                        _apply_received_predictions(
-                            file_receiver, result_data, "output_path"
-                        )
-                        # Notify the GUI dispatcher BEFORE we build the
-                        # InferenceResult so the progress dialog can finish
-                        # its "complete" animation before this function
-                        # returns. (Task 9)
-                        if on_job_message is not None:
-                            on_job_message("JOB_COMPLETE", result_data)
-                        result = InferenceResult(
-                            job_id=server_job_id or job_id,
-                            success=True,
-                            duration_seconds=result_data.get("duration_seconds"),
-                            predictions_path=result_data.get("output_path"),
-                        )
-                    except json.JSONDecodeError:
-                        if on_job_message is not None:
-                            on_job_message("JOB_COMPLETE", {})
-                        result = InferenceResult(
-                            job_id=server_job_id or job_id,
-                            success=True,
-                        )
-                    break
-
-                elif response.startswith(MSG_JOB_FAILED):
-                    parts = response.split(MSG_SEPARATOR, 2)
-                    error_json = parts[2] if len(parts) > 2 else "{}"
-                    try:
-                        error_data = json.loads(error_json)
-                        error_msg = error_data.get("message", "Job failed")
-                        duration = error_data.get("duration_seconds")
-                    except json.JSONDecodeError:
-                        error_data = {}
-                        error_msg = "Job failed"
-                        duration = None
-
-                    if on_job_message is not None:
-                        on_job_message(
-                            "JOB_FAILED",
-                            error_data if error_data else {"message": error_msg},
-                        )
-
-                    result = InferenceResult(
-                        job_id=server_job_id or job_id,
-                        success=False,
-                        duration_seconds=duration,
-                        error_message=error_msg,
-                    )
-                    break
 
     finally:
         if pc:
             await pc.close()
-
-    if result is None:
-        raise JobError("Inference ended unexpectedly", job_id=job_id)
 
     if not result.success:
         raise JobError(

@@ -1826,15 +1826,15 @@ class TestMsgJobCompletePathRewrite:
 
     def test_run_inference_async_calls_apply_received_predictions_for_output_path(self):
         """Source-grep regression: the MSG_JOB_COMPLETE dispatch in
-        _run_inference_async must invoke _apply_received_predictions with
-        the 'output_path' field name.
+        _run_single_spec_async (called by _run_inference_async) must invoke
+        _apply_received_predictions with the 'output_path' field name.
         """
         import inspect
-        from sleap_rtc.api import _run_inference_async
+        from sleap_rtc.api import _run_single_spec_async
 
-        src = inspect.getsource(_run_inference_async)
+        src = inspect.getsource(_run_single_spec_async)
         assert "_apply_received_predictions(" in src, (
-            "Task 5 wiring missing: helper not invoked in _run_inference_async"
+            "Task 5 wiring missing: helper not invoked in _run_single_spec_async"
         )
         assert '"output_path"' in src, (
             "Task 5 wiring missing: 'output_path' field name not present"
@@ -2310,3 +2310,28 @@ class TestListWorkersNameResolution:
 
         assert len(workers) == 1
         assert workers[0].name == "worker-abc123"
+
+
+# =============================================================================
+# _run_single_spec_async helper extraction tests
+# =============================================================================
+
+
+class TestRunSingleSpecAsync:
+    """Verify the extracted _run_single_spec_async helper exists with expected signature."""
+
+    def test_helper_exists_and_is_callable(self):
+        from sleap_rtc.api import _run_single_spec_async
+        import inspect
+        assert inspect.iscoroutinefunction(_run_single_spec_async)
+
+    def test_helper_accepts_required_params(self):
+        import inspect
+        from sleap_rtc.api import _run_single_spec_async
+        sig = inspect.signature(_run_single_spec_async)
+        param_names = set(sig.parameters.keys())
+        required = {
+            "spec", "job_id", "data_channel", "response_queue",
+            "file_receiver", "timeout", "on_job_message", "on_log",
+        }
+        assert required.issubset(param_names)
