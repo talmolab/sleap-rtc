@@ -523,9 +523,7 @@ async def _run_single_spec_async(
 
     # Submit job
     spec_json = spec.to_json()
-    submit_msg = (
-        f"{MSG_JOB_SUBMIT}{MSG_SEPARATOR}{job_id}{MSG_SEPARATOR}{spec_json}"
-    )
+    submit_msg = f"{MSG_JOB_SUBMIT}{MSG_SEPARATOR}{job_id}{MSG_SEPARATOR}{spec_json}"
     data_channel.send(submit_msg)
 
     # Process responses
@@ -560,9 +558,7 @@ async def _run_single_spec_async(
                 error_data = json.loads(error_json)
                 errors = error_data.get("errors", [])
                 error_msgs = [e.get("message", "Unknown") for e in errors]
-                raise ConfigurationError(
-                    f"Job rejected: {'; '.join(error_msgs)}"
-                )
+                raise ConfigurationError(f"Job rejected: {'; '.join(error_msgs)}")
             except json.JSONDecodeError:
                 raise ConfigurationError(f"Job rejected: {error_json}")
 
@@ -575,9 +571,7 @@ async def _run_single_spec_async(
                 # (Tasks 6-7), replace the worker-side path with
                 # our local temp path. The worker path is
                 # preserved as worker_output_path for v2 dual-mode.
-                _apply_received_predictions(
-                    file_receiver, result_data, "output_path"
-                )
+                _apply_received_predictions(file_receiver, result_data, "output_path")
                 # Notify the GUI dispatcher BEFORE we build the
                 # InferenceResult so the progress dialog can finish
                 # its "complete" animation before this function
@@ -2792,9 +2786,7 @@ async def _run_inference_batch_async(
             results: list[InferenceResult] = []
             for i, spec in enumerate(specs):
                 job_id = f"{batch_id}-{i}"
-                enriched = _enriched_job_message_wrapper(
-                    on_job_message, i, len(specs)
-                )
+                enriched = _enriched_job_message_wrapper(on_job_message, i, len(specs))
                 try:
                     result = await _run_single_spec_async(
                         spec=spec,
@@ -2823,5 +2815,3 @@ async def _run_inference_batch_async(
     finally:
         if pc:
             await pc.close()
-
-
