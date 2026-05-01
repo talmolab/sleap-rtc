@@ -49,6 +49,7 @@ __all__ = [
     # Remote execution
     "run_training",
     "run_inference",
+    "run_inference_batch",
     "ProgressEvent",
     "TrainingResult",
     "InferenceResult",
@@ -469,6 +470,152 @@ def _dispatch_inference_response(
         return True
 
     return False
+
+
+def _enriched_job_message_wrapper(
+    on_job_message: "Callable[[str, dict], None] | None",
+    job_index: int,
+    jobs_total: int,
+) -> "Callable[[str, dict], None]":
+    """Wrap on_job_message to inject job_index and jobs_total into payloads."""
+
+    def _wrapper(msg_type: str, data: dict):
+        data["job_index"] = job_index
+        data["jobs_total"] = jobs_total
+        if on_job_message is not None:
+            on_job_message(msg_type, data)
+
+    return _wrapper
+
+
+async def _run_single_spec_async(
+    spec: "TrackJobSpec",
+    job_id: str,
+    data_channel,
+    response_queue: "asyncio.Queue",
+    file_receiver: "_StreamedFileReceiver",
+    timeout: float,
+    on_job_message: "Callable[[str, dict], None] | None" = None,
+    on_log: "Callable[[str], None] | None" = None,
+) -> "InferenceResult":
+    """Submit a single TrackJobSpec and process responses until completion.
+
+    This is the job-specific portion extracted from ``_run_inference_batch_async``.
+    It sends the spec over *data_channel*, reads responses from
+    *response_queue*, and returns an ``InferenceResult`` (success **or**
+    failure).  Callers decide whether to raise on failure.
+
+    Raises:
+        JobError: If the overall timeout is exceeded.
+        ConfigurationError: If the worker rejects the job.
+    """
+    import asyncio
+    import json
+
+    from sleap_rtc.protocol import (
+        MSG_JOB_SUBMIT,
+        MSG_JOB_ACCEPTED,
+        MSG_JOB_REJECTED,
+        MSG_JOB_COMPLETE,
+        MSG_JOB_FAILED,
+        MSG_SEPARATOR,
+    )
+
+    # Submit job
+    spec_json = spec.to_json()
+    submit_msg = f"{MSG_JOB_SUBMIT}{MSG_SEPARATOR}{job_id}{MSG_SEPARATOR}{spec_json}"
+    data_channel.send(submit_msg)
+
+    # Process responses
+    start_time = asyncio.get_event_loop().time()
+    server_job_id = None
+
+    while True:
+        elapsed = asyncio.get_event_loop().time() - start_time
+        remaining = timeout - elapsed
+        if remaining <= 0:
+            raise JobError("Inference timed out", job_id=job_id)
+
+        try:
+            response = await asyncio.wait_for(
+                response_queue.get(),
+                timeout=min(remaining, 60.0),
+            )
+        except asyncio.TimeoutError:
+            continue
+
+        if _dispatch_inference_response(response, on_job_message, on_log):
+            continue
+
+        if response.startswith(MSG_JOB_ACCEPTED):
+            parts = response.split(MSG_SEPARATOR)
+            server_job_id = parts[1] if len(parts) > 1 else job_id
+
+        elif response.startswith(MSG_JOB_REJECTED):
+            parts = response.split(MSG_SEPARATOR, 2)
+            error_json = parts[2] if len(parts) > 2 else "{}"
+            try:
+                error_data = json.loads(error_json)
+                errors = error_data.get("errors", [])
+                error_msgs = [e.get("message", "Unknown") for e in errors]
+                raise ConfigurationError(f"Job rejected: {'; '.join(error_msgs)}")
+            except json.JSONDecodeError:
+                raise ConfigurationError(f"Job rejected: {error_json}")
+
+        elif response.startswith(MSG_JOB_COMPLETE):
+            parts = response.split(MSG_SEPARATOR, 1)
+            result_json = parts[1] if len(parts) > 1 else "{}"
+            try:
+                result_data = json.loads(result_json)
+                # If the worker streamed predictions.slp to us
+                # (Tasks 6-7), replace the worker-side path with
+                # our local temp path. The worker path is
+                # preserved as worker_output_path for v2 dual-mode.
+                _apply_received_predictions(file_receiver, result_data, "output_path")
+                # Notify the GUI dispatcher BEFORE we build the
+                # InferenceResult so the progress dialog can finish
+                # its "complete" animation before this function
+                # returns. (Task 9)
+                if on_job_message is not None:
+                    on_job_message("JOB_COMPLETE", result_data)
+                return InferenceResult(
+                    job_id=server_job_id or job_id,
+                    success=True,
+                    duration_seconds=result_data.get("duration_seconds"),
+                    predictions_path=result_data.get("output_path"),
+                )
+            except json.JSONDecodeError:
+                if on_job_message is not None:
+                    on_job_message("JOB_COMPLETE", {})
+                return InferenceResult(
+                    job_id=server_job_id or job_id,
+                    success=True,
+                )
+
+        elif response.startswith(MSG_JOB_FAILED):
+            parts = response.split(MSG_SEPARATOR, 2)
+            error_json = parts[2] if len(parts) > 2 else "{}"
+            try:
+                error_data = json.loads(error_json)
+                error_msg = error_data.get("message", "Job failed")
+                duration = error_data.get("duration_seconds")
+            except json.JSONDecodeError:
+                error_data = {}
+                error_msg = "Job failed"
+                duration = None
+
+            if on_job_message is not None:
+                on_job_message(
+                    "JOB_FAILED",
+                    error_data if error_data else {"message": error_msg},
+                )
+
+            return InferenceResult(
+                job_id=server_job_id or job_id,
+                success=False,
+                duration_seconds=duration,
+                error_message=error_msg,
+            )
 
 
 # =============================================================================
@@ -2399,80 +2546,8 @@ def run_inference(
         ConfigurationError: If job spec is invalid.
         JobError: If the inference job fails.
     """
-    import asyncio
-
-    return asyncio.run(
-        _run_inference_async(
-            data_path=data_path,
-            model_paths=model_paths,
-            room_id=room_id,
-            worker_id=worker_id,
-            output_path=output_path,
-            batch_size=batch_size,
-            peak_threshold=peak_threshold,
-            only_suggested_frames=only_suggested_frames,
-            frames=frames,
-            frame_filter=frame_filter,
-            video_index=video_index,
-            exclude_user_labeled=exclude_user_labeled,
-            path_mappings=path_mappings,
-            progress_callback=progress_callback,
-            timeout=timeout,
-            on_channel_ready=on_channel_ready,
-            on_log=on_log,
-            on_job_message=on_job_message,
-        )
-    )
-
-
-async def _run_inference_async(
-    data_path: str,
-    model_paths: list[str],
-    room_id: str,
-    worker_id: str | None,
-    output_path: str | None,
-    batch_size: int | None,
-    peak_threshold: float | None,
-    only_suggested_frames: bool,
-    frames: str | None,
-    frame_filter: str | None = None,
-    video_index: int | None = None,
-    exclude_user_labeled: bool = False,
-    path_mappings: dict[str, str] | None = None,
-    progress_callback: "Callable[[ProgressEvent], None] | None" = None,
-    timeout: float = 3600.0,
-    on_channel_ready: "Callable[[Callable[[str], None]], None] | None" = None,
-    on_log: "Callable[[str], None] | None" = None,
-    on_job_message: "Callable[[str, dict], None] | None" = None,
-) -> InferenceResult:
-    """Async implementation of run_inference."""
-    import json
-    import uuid
-    import websockets
-    from aiortc import RTCPeerConnection, RTCSessionDescription
-    from sleap_rtc.auth.credentials import get_valid_jwt
-    from sleap_rtc.config import get_config
-    from sleap_rtc.protocol import (
-        MSG_JOB_SUBMIT,
-        MSG_JOB_ACCEPTED,
-        MSG_JOB_REJECTED,
-        MSG_JOB_PROGRESS,
-        MSG_JOB_LOG,
-        MSG_JOB_COMPLETE,
-        MSG_JOB_FAILED,
-        MSG_SEPARATOR,
-    )
     from sleap_rtc.jobs.spec import TrackJobSpec
 
-    jwt = get_valid_jwt()
-    if jwt is None:
-        raise AuthenticationError("Not logged in. Call login() first.")
-
-    config = get_config()
-    peer_id = f"api-infer-{uuid.uuid4().hex[:8]}"
-    job_id = str(uuid.uuid4())[:8]
-
-    # Build job spec
     spec = TrackJobSpec(
         data_path=data_path,
         model_paths=model_paths,
@@ -2487,11 +2562,102 @@ async def _run_inference_async(
         path_mappings=path_mappings or {},
     )
 
-    # Response handling
+    results = run_inference_batch(
+        specs=[spec],
+        room_id=room_id,
+        worker_id=worker_id,
+        on_channel_ready=on_channel_ready,
+        on_job_message=on_job_message,
+        on_log=on_log,
+        timeout=timeout,
+    )
+    return results[0]
+
+
+def run_inference_batch(
+    specs: list["TrackJobSpec"],
+    room_id: str,
+    worker_id: str | None = None,
+    on_channel_ready: "Callable[[Callable[[str], None]], None] | None" = None,
+    on_job_message: "Callable[[str, dict], None] | None" = None,
+    on_log: "Callable[[str], None] | None" = None,
+    on_spec_complete: "Callable[[InferenceResult], None] | None" = None,
+    timeout: float = 3600.0,
+) -> list[InferenceResult]:
+    """Run multiple inference specs sequentially over a single WebRTC connection.
+
+    Opens one WebRTC connection to the worker and submits each spec in order.
+    If a spec fails the batch stops early (fail-fast).
+
+    Args:
+        specs: List of TrackJobSpec instances to run sequentially.
+        room_id: The room ID containing the worker.
+        worker_id: Specific worker ID. If None, auto-selects best available.
+        on_channel_ready: Optional callback invoked once with a thread-safe
+            ``send_fn(str)`` after the data channel is authenticated.
+        on_job_message: Optional callback invoked with ``(msg_type, payload)``
+            for typed ``JOB_*`` dispatches. Payloads are enriched with
+            ``job_index`` and ``jobs_total`` fields.
+        on_log: Optional callback invoked with raw log lines from the worker.
+        on_spec_complete: Optional callback invoked after each spec completes
+            (success or failure) with the corresponding ``InferenceResult``.
+        timeout: Maximum time to wait for each individual spec in seconds.
+
+    Returns:
+        List of InferenceResult, one per spec that was attempted. On fail-fast
+        the list will be shorter than *specs*.
+
+    Raises:
+        AuthenticationError: If user is not logged in.
+        RoomNotFoundError: If room does not exist or has no workers.
+    """
     import asyncio
 
+    return asyncio.run(
+        _run_inference_batch_async(
+            specs=specs,
+            room_id=room_id,
+            worker_id=worker_id,
+            on_channel_ready=on_channel_ready,
+            on_job_message=on_job_message,
+            on_log=on_log,
+            on_spec_complete=on_spec_complete,
+            timeout=timeout,
+        )
+    )
+
+
+async def _run_inference_batch_async(
+    specs: list["TrackJobSpec"],
+    room_id: str,
+    worker_id: str | None = None,
+    on_channel_ready: "Callable[[Callable[[str], None]], None] | None" = None,
+    on_job_message: "Callable[[str, dict], None] | None" = None,
+    on_log: "Callable[[str], None] | None" = None,
+    on_spec_complete: "Callable[[InferenceResult], None] | None" = None,
+    timeout: float = 3600.0,
+) -> list["InferenceResult"]:
+    """Async implementation of run_inference_batch."""
+    import asyncio
+    import json
+    import uuid
+
+    import websockets
+    from aiortc import RTCPeerConnection, RTCSessionDescription
+
+    from sleap_rtc.auth.credentials import get_valid_jwt
+    from sleap_rtc.config import get_config
+
+    jwt = get_valid_jwt()
+    if jwt is None:
+        raise AuthenticationError("Not logged in. Call login() first.")
+
+    config = get_config()
+    batch_id = str(uuid.uuid4())[:8]
+    peer_id = f"api-infer-{uuid.uuid4().hex[:8]}"
+
+    # Response handling
     response_queue: asyncio.Queue = asyncio.Queue()
-    result: InferenceResult | None = None
     pc = None
 
     try:
@@ -2505,7 +2671,7 @@ async def _run_inference_async(
                 "jwt": jwt,
                 "metadata": {
                     "tags": ["sleap-rtc", "api-inference"],
-                    "properties": {"purpose": "remote-inference"},
+                    "properties": {"purpose": "remote-inference-batch"},
                 },
             }
             await ws.send(json.dumps(register_msg))
@@ -2550,7 +2716,7 @@ async def _run_inference_async(
 
             # State machine for incoming FILE_META/bytes/END_OF_FILE
             # transfers (the post-track predictions.slp stream from the
-            # worker — mirrors the training-side wiring landed in PR #79).
+            # worker).
             file_receiver = _StreamedFileReceiver()
 
             @data_channel.on("open")
@@ -2559,24 +2725,14 @@ async def _run_inference_async(
 
             @data_channel.on("message")
             async def on_message(message):
-                # Filter out the worker's KEEP_ALIVE heartbeat (10-byte
-                # binary) BEFORE any other handling. If we let it fall
-                # through to file_receiver.handle_bytes(), an in-flight
-                # transfer would have those 10 bytes appended to its
-                # tempfile, corrupting the predictions.slp by 10 bytes.
                 if isinstance(message, bytes) and message == b"KEEP_ALIVE":
                     return
 
                 if isinstance(message, bytes):
-                    # Binary message — treat as a file-transfer chunk.
-                    # If no FILE_META is active, the receiver silently
-                    # drops the bytes (backward-compatible).
                     file_receiver.handle_bytes(message)
                     return
 
                 if isinstance(message, str):
-                    # File-transfer control messages (FILE_META, END_OF_FILE)
-                    # are consumed by the receiver and not forwarded.
                     if file_receiver.handle_string(message):
                         return
 
@@ -2618,9 +2774,6 @@ async def _run_inference_async(
             await _authenticate_channel(data_channel, response_queue)
 
             # Expose thread-safe send function for bidirectional communication.
-            # Mirrors the training-side wire surface in _run_training_async so the
-            # SLEAP GUI can hand the same `send_fn` to its InferenceProgressDialog
-            # Cancel button.
             if on_channel_ready:
                 loop = asyncio.get_running_loop()
 
@@ -2629,121 +2782,36 @@ async def _run_inference_async(
 
                 on_channel_ready(_thread_safe_send)
 
-            # Submit job
-            spec_json = spec.to_json()
-            submit_msg = (
-                f"{MSG_JOB_SUBMIT}{MSG_SEPARATOR}{job_id}{MSG_SEPARATOR}{spec_json}"
-            )
-            data_channel.send(submit_msg)
-
-            # Process responses
-            start_time = asyncio.get_event_loop().time()
-            server_job_id = None
-
-            while True:
-                elapsed = asyncio.get_event_loop().time() - start_time
-                remaining = timeout - elapsed
-                if remaining <= 0:
-                    raise JobError("Inference timed out", job_id=job_id)
-
+            # Run specs sequentially over the single connection
+            results: list[InferenceResult] = []
+            for i, spec in enumerate(specs):
+                job_id = f"{batch_id}-{i}"
+                enriched = _enriched_job_message_wrapper(on_job_message, i, len(specs))
                 try:
-                    response = await asyncio.wait_for(
-                        response_queue.get(),
-                        timeout=min(remaining, 60.0),
+                    result = await _run_single_spec_async(
+                        spec=spec,
+                        job_id=job_id,
+                        data_channel=data_channel,
+                        response_queue=response_queue,
+                        file_receiver=file_receiver,
+                        timeout=timeout,
+                        on_job_message=enriched,
+                        on_log=on_log,
                     )
-                except asyncio.TimeoutError:
-                    continue
-
-                if _dispatch_inference_response(response, on_job_message, on_log):
-                    continue
-
-                if response.startswith(MSG_JOB_ACCEPTED):
-                    parts = response.split(MSG_SEPARATOR)
-                    server_job_id = parts[1] if len(parts) > 1 else job_id
-
-                elif response.startswith(MSG_JOB_REJECTED):
-                    parts = response.split(MSG_SEPARATOR, 2)
-                    error_json = parts[2] if len(parts) > 2 else "{}"
-                    try:
-                        error_data = json.loads(error_json)
-                        errors = error_data.get("errors", [])
-                        error_msgs = [e.get("message", "Unknown") for e in errors]
-                        raise ConfigurationError(
-                            f"Job rejected: {'; '.join(error_msgs)}"
-                        )
-                    except json.JSONDecodeError:
-                        raise ConfigurationError(f"Job rejected: {error_json}")
-
-                elif response.startswith(MSG_JOB_COMPLETE):
-                    parts = response.split(MSG_SEPARATOR, 1)
-                    result_json = parts[1] if len(parts) > 1 else "{}"
-                    try:
-                        result_data = json.loads(result_json)
-                        # If the worker streamed predictions.slp to us
-                        # (Tasks 6–7), replace the worker-side path with
-                        # our local temp path. The worker path is
-                        # preserved as worker_output_path for v2 dual-mode.
-                        _apply_received_predictions(
-                            file_receiver, result_data, "output_path"
-                        )
-                        # Notify the GUI dispatcher BEFORE we build the
-                        # InferenceResult so the progress dialog can finish
-                        # its "complete" animation before this function
-                        # returns. (Task 9)
-                        if on_job_message is not None:
-                            on_job_message("JOB_COMPLETE", result_data)
-                        result = InferenceResult(
-                            job_id=server_job_id or job_id,
-                            success=True,
-                            duration_seconds=result_data.get("duration_seconds"),
-                            predictions_path=result_data.get("output_path"),
-                        )
-                    except json.JSONDecodeError:
-                        if on_job_message is not None:
-                            on_job_message("JOB_COMPLETE", {})
-                        result = InferenceResult(
-                            job_id=server_job_id or job_id,
-                            success=True,
-                        )
-                    break
-
-                elif response.startswith(MSG_JOB_FAILED):
-                    parts = response.split(MSG_SEPARATOR, 2)
-                    error_json = parts[2] if len(parts) > 2 else "{}"
-                    try:
-                        error_data = json.loads(error_json)
-                        error_msg = error_data.get("message", "Job failed")
-                        duration = error_data.get("duration_seconds")
-                    except json.JSONDecodeError:
-                        error_data = {}
-                        error_msg = "Job failed"
-                        duration = None
-
-                    if on_job_message is not None:
-                        on_job_message(
-                            "JOB_FAILED",
-                            error_data if error_data else {"message": error_msg},
-                        )
-
+                except (ConfigurationError, JobError) as e:
                     result = InferenceResult(
-                        job_id=server_job_id or job_id,
+                        job_id=job_id,
                         success=False,
-                        duration_seconds=duration,
-                        error_message=error_msg,
+                        error_message=str(e),
                     )
+                results.append(result)
+                if on_spec_complete is not None:
+                    on_spec_complete(result)
+                if not result.success:
                     break
+
+            return results
 
     finally:
         if pc:
             await pc.close()
-
-    if result is None:
-        raise JobError("Inference ended unexpectedly", job_id=job_id)
-
-    if not result.success:
-        raise JobError(
-            result.error_message or "Inference failed",
-            job_id=result.job_id,
-        )
-
-    return result

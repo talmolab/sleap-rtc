@@ -1073,7 +1073,7 @@ class TestRunInference:
             predictions_path="/data/predictions.slp",
         )
 
-        with patch("asyncio.run", return_value=mock_result):
+        with patch("sleap_rtc.api.run_inference_batch", return_value=[mock_result]):
             result = run_inference("/data.slp", ["/model1"], "room-1")
             assert result.success is True
             assert result.predictions_path == "/data/predictions.slp"
@@ -1090,7 +1090,7 @@ class TestRunInference:
 #   END_OF_FILE
 #   MSG_JOB_COMPLETE::{"output_path": "<worker-side path>", ...}
 #
-# the on_message handler inside _run_inference_async must:
+# the on_message handler inside _run_inference_batch_async must:
 #   1. Drop b"KEEP_ALIVE" heartbeat bytes BEFORE any other routing
 #      (otherwise they'd be appended to the in-flight tempfile and
 #      corrupt predictions.slp).
@@ -1105,7 +1105,7 @@ class TestRunInference:
 
 
 class _CapturedOnMessage(Exception):
-    """Sentinel raised by the mock RTCPeerConnection after _run_inference_async
+    """Sentinel raised by the mock RTCPeerConnection after _run_inference_batch_async
     has registered its on_message handler, to abort the rest of the function.
 
     The captured handler is attached to this exception via the .handler attr
@@ -1114,7 +1114,7 @@ class _CapturedOnMessage(Exception):
 
 
 def _make_inference_async_mocks():
-    """Build the mock infrastructure needed to drive _run_inference_async far
+    """Build the mock infrastructure needed to drive _run_inference_batch_async far
     enough to register on_message, then abort.
 
     Returns a tuple of (patches_to_apply, fake_data_channel) where
@@ -1148,7 +1148,7 @@ def _make_inference_async_mocks():
 
         async def createOffer(self):
             # on_message has been registered by this point — abort the
-            # rest of _run_inference_async by raising the sentinel.
+            # rest of _run_inference_batch_async by raising the sentinel.
             raise _CapturedOnMessage()
 
         async def setLocalDescription(self, _desc):
@@ -1166,7 +1166,7 @@ def _make_inference_async_mocks():
     class _FakeWS:
         """Minimal async websocket that yields a 'registered_auth' on first
         recv and would yield a peer_list on the next, satisfying the
-        register + discover_peers loops in _run_inference_async.
+        register + discover_peers loops in _run_inference_batch_async.
         """
 
         def __init__(self):
@@ -1204,7 +1204,7 @@ def _make_inference_async_mocks():
 
 
 def _capture_on_message(monkeypatch_jwt: str = "fake-jwt"):
-    """Run _run_inference_async far enough to register on_message, capture
+    """Run _run_inference_batch_async far enough to register on_message, capture
     it, and return (on_message, file_receiver, response_queue).
 
     The on_message closure is the actual production closure, with the
@@ -1216,20 +1216,19 @@ def _capture_on_message(monkeypatch_jwt: str = "fake-jwt"):
     fake_data_channel, FakePC, FakeWSConnect = _make_inference_async_mocks()
 
     from sleap_rtc import api as api_mod
+    from sleap_rtc.jobs.spec import TrackJobSpec
+
+    spec = TrackJobSpec(
+        data_path="/data.slp",
+        model_paths=["/model1"],
+    )
 
     async def _drive():
         try:
-            await api_mod._run_inference_async(
-                data_path="/data.slp",
-                model_paths=["/model1"],
+            await api_mod._run_inference_batch_async(
+                specs=[spec],
                 room_id="room-1",
                 worker_id=None,
-                output_path=None,
-                batch_size=None,
-                peak_threshold=None,
-                only_suggested_frames=False,
-                frames=None,
-                progress_callback=None,
                 timeout=10.0,
             )
         except _CapturedOnMessage:
@@ -1249,7 +1248,7 @@ def _capture_on_message(monkeypatch_jwt: str = "fake-jwt"):
     on_message = fake_data_channel._handlers.get("message")
     assert on_message is not None, (
         "on_message was not registered — the mock chain aborted too early "
-        "or _run_inference_async was refactored without updating the test"
+        "or _run_inference_batch_async was refactored without updating the test"
     )
 
     # Extract file_receiver and response_queue from the closure cells.
@@ -1270,10 +1269,10 @@ def _capture_on_message(monkeypatch_jwt: str = "fake-jwt"):
 
 
 class TestRunInferenceAsyncMessageHandling:
-    """Tests that _run_inference_async's on_message handler routes messages
+    """Tests that _run_inference_batch_async's on_message handler routes messages
     to _StreamedFileReceiver and response_queue per the Task 4 wiring spec.
 
-    These tests drive _run_inference_async with mocked websockets/aiortc
+    These tests drive _run_inference_batch_async with mocked websockets/aiortc
     far enough to register the on_message closure, then invoke that
     closure directly with synthesized messages. This mirrors the
     training-side wiring landed in PR #79.
@@ -1757,7 +1756,7 @@ class TestInferenceCompletePathRewrite:
 
 
 class TestMsgJobCompletePathRewrite:
-    """Tests that the MSG_JOB_COMPLETE dispatch in _run_inference_async
+    """Tests that the MSG_JOB_COMPLETE dispatch in _run_single_spec_async
     substitutes the locally-received tempfile path for result_data['output_path']
     when a stream was received.
 
@@ -1826,15 +1825,15 @@ class TestMsgJobCompletePathRewrite:
 
     def test_run_inference_async_calls_apply_received_predictions_for_output_path(self):
         """Source-grep regression: the MSG_JOB_COMPLETE dispatch in
-        _run_inference_async must invoke _apply_received_predictions with
-        the 'output_path' field name.
+        _run_single_spec_async must invoke _apply_received_predictions
+        with the 'output_path' field name.
         """
         import inspect
-        from sleap_rtc.api import _run_inference_async
+        from sleap_rtc.api import _run_single_spec_async
 
-        src = inspect.getsource(_run_inference_async)
+        src = inspect.getsource(_run_single_spec_async)
         assert "_apply_received_predictions(" in src, (
-            "Task 5 wiring missing: helper not invoked in _run_inference_async"
+            "Task 5 wiring missing: helper not invoked in _run_single_spec_async"
         )
         assert '"output_path"' in src, (
             "Task 5 wiring missing: 'output_path' field name not present"
@@ -2114,34 +2113,34 @@ class TestTempPredictionAtexitCleanup:
 
 
 class TestRunInferenceAsyncSignature:
-    """Task 8: ``_run_inference_async`` and the public ``run_inference``
+    """Task 8: ``_run_inference_batch_async`` and the public ``run_inference``
     wrapper must accept ``on_channel_ready`` (thread-safe send hook),
     ``on_log`` (raw log line callback), and ``on_job_message`` (typed
     JOB_* dispatch callback) so a GUI can wire its Cancel button and
     progress dialog to the standalone-track flow.
     """
 
-    def test_run_inference_async_has_on_channel_ready(self):
+    def test_run_inference_batch_async_has_on_channel_ready(self):
         import inspect
-        from sleap_rtc.api import _run_inference_async
+        from sleap_rtc.api import _run_inference_batch_async
 
-        sig = inspect.signature(_run_inference_async)
+        sig = inspect.signature(_run_inference_batch_async)
         assert "on_channel_ready" in sig.parameters
         assert sig.parameters["on_channel_ready"].default is None
 
-    def test_run_inference_async_has_on_log(self):
+    def test_run_inference_batch_async_has_on_log(self):
         import inspect
-        from sleap_rtc.api import _run_inference_async
+        from sleap_rtc.api import _run_inference_batch_async
 
-        sig = inspect.signature(_run_inference_async)
+        sig = inspect.signature(_run_inference_batch_async)
         assert "on_log" in sig.parameters
         assert sig.parameters["on_log"].default is None
 
-    def test_run_inference_async_has_on_job_message(self):
+    def test_run_inference_batch_async_has_on_job_message(self):
         import inspect
-        from sleap_rtc.api import _run_inference_async
+        from sleap_rtc.api import _run_inference_batch_async
 
-        sig = inspect.signature(_run_inference_async)
+        sig = inspect.signature(_run_inference_batch_async)
         assert "on_job_message" in sig.parameters
         assert sig.parameters["on_job_message"].default is None
 
@@ -2153,22 +2152,6 @@ class TestRunInferenceAsyncSignature:
         for name in ("on_channel_ready", "on_log", "on_job_message"):
             assert name in sig.parameters, f"run_inference missing {name}"
             assert sig.parameters[name].default is None
-
-    def test_run_inference_async_has_frame_filter(self):
-        import inspect
-        from sleap_rtc.api import _run_inference_async
-
-        sig = inspect.signature(_run_inference_async)
-        assert "frame_filter" in sig.parameters
-        assert sig.parameters["frame_filter"].default is None
-
-    def test_run_inference_async_has_video_index(self):
-        import inspect
-        from sleap_rtc.api import _run_inference_async
-
-        sig = inspect.signature(_run_inference_async)
-        assert "video_index" in sig.parameters
-        assert sig.parameters["video_index"].default is None
 
     def test_run_inference_wrapper_has_frame_filter_and_video_index(self):
         import inspect
@@ -2188,7 +2171,7 @@ class TestProtocolConstants:
 
 
 class TestRunInferenceAsyncJobMessageForwarding:
-    """Task 9: ``_run_inference_async`` forwards each ``MSG_JOB_*`` wire
+    """Task 9: ``_run_single_spec_async`` forwards each ``MSG_JOB_*`` wire
     message to ``on_job_message`` with the typed name and parsed dict.
     """
 
@@ -2310,3 +2293,192 @@ class TestListWorkersNameResolution:
 
         assert len(workers) == 1
         assert workers[0].name == "worker-abc123"
+
+
+# =============================================================================
+# _run_single_spec_async helper extraction tests
+# =============================================================================
+
+
+class TestRunSingleSpecAsync:
+    """Verify the extracted _run_single_spec_async helper exists with expected signature."""
+
+    def test_helper_exists_and_is_callable(self):
+        from sleap_rtc.api import _run_single_spec_async
+        import inspect
+        assert inspect.iscoroutinefunction(_run_single_spec_async)
+
+    def test_helper_accepts_required_params(self):
+        import inspect
+        from sleap_rtc.api import _run_single_spec_async
+        sig = inspect.signature(_run_single_spec_async)
+        param_names = set(sig.parameters.keys())
+        required = {
+            "spec", "job_id", "data_channel", "response_queue",
+            "file_receiver", "timeout", "on_job_message", "on_log",
+        }
+        assert required.issubset(param_names)
+
+
+# =============================================================================
+# run_inference_batch signature tests
+# =============================================================================
+
+
+class TestRunInferenceBatchSignature:
+    """Verify run_inference_batch exists with the expected signature."""
+
+    def test_batch_is_importable(self):
+        from sleap_rtc.api import run_inference_batch
+        assert callable(run_inference_batch)
+
+    def test_batch_in_all_exports(self):
+        from sleap_rtc import api
+        assert "run_inference_batch" in api.__all__
+
+    def test_batch_accepts_specs_list(self):
+        import inspect
+        from sleap_rtc.api import run_inference_batch
+        sig = inspect.signature(run_inference_batch)
+        assert "specs" in sig.parameters
+
+    def test_batch_accepts_on_spec_complete(self):
+        import inspect
+        from sleap_rtc.api import run_inference_batch
+        sig = inspect.signature(run_inference_batch)
+        assert "on_spec_complete" in sig.parameters
+
+    def test_batch_accepts_on_job_message(self):
+        import inspect
+        from sleap_rtc.api import run_inference_batch
+        sig = inspect.signature(run_inference_batch)
+        assert "on_job_message" in sig.parameters
+
+    def test_batch_accepts_on_log(self):
+        import inspect
+        from sleap_rtc.api import run_inference_batch
+        sig = inspect.signature(run_inference_batch)
+        assert "on_log" in sig.parameters
+
+    def test_batch_accepts_room_id_and_worker_id(self):
+        import inspect
+        from sleap_rtc.api import run_inference_batch
+        sig = inspect.signature(run_inference_batch)
+        assert "room_id" in sig.parameters
+        assert "worker_id" in sig.parameters
+
+    def test_batch_accepts_on_channel_ready(self):
+        import inspect
+        from sleap_rtc.api import run_inference_batch
+        sig = inspect.signature(run_inference_batch)
+        assert "on_channel_ready" in sig.parameters
+
+
+class TestEnrichedJobMessageWrapper:
+    """Verify _enriched_job_message_wrapper injects job_index/jobs_total."""
+
+    def test_job_log_enriched_with_index(self):
+        """Wrapper injects job_index and jobs_total before forwarding."""
+        from sleap_rtc.api import _enriched_job_message_wrapper
+        captured = []
+        def on_msg(msg_type, data):
+            captured.append((msg_type, data.copy()))
+
+        wrapper = _enriched_job_message_wrapper(on_msg, job_index=1, jobs_total=3)
+        wrapper("JOB_LOG", {"text": "hello"})
+
+        assert len(captured) == 1
+        assert captured[0][0] == "JOB_LOG"
+        assert captured[0][1]["job_index"] == 1
+        assert captured[0][1]["jobs_total"] == 3
+        assert captured[0][1]["text"] == "hello"
+
+    def test_enrichment_with_none_callback_does_not_crash(self):
+        """When on_job_message is None, wrapper still enriches (no-op forward)."""
+        from sleap_rtc.api import _enriched_job_message_wrapper
+        wrapper = _enriched_job_message_wrapper(None, job_index=0, jobs_total=1)
+        # Should not raise
+        data = {"text": "test"}
+        wrapper("JOB_LOG", data)
+        # Data should still be enriched (mutated in-place)
+        assert data["job_index"] == 0
+        assert data["jobs_total"] == 1
+
+    def test_enrichment_preserves_existing_payload_fields(self):
+        """Existing fields in the data dict are not lost."""
+        from sleap_rtc.api import _enriched_job_message_wrapper
+        captured = []
+        wrapper = _enriched_job_message_wrapper(
+            lambda t, d: captured.append(d.copy()), job_index=2, jobs_total=5,
+        )
+        wrapper("JOB_PROGRESS", {"progress": 0.5, "batch": 10})
+        assert captured[0]["progress"] == 0.5
+        assert captured[0]["batch"] == 10
+        assert captured[0]["job_index"] == 2
+        assert captured[0]["jobs_total"] == 5
+
+    def test_different_indices_produce_different_wrappers(self):
+        """Each wrapper instance captures its own job_index."""
+        from sleap_rtc.api import _enriched_job_message_wrapper
+        results = []
+        cb = lambda t, d: results.append(d.copy())
+        w0 = _enriched_job_message_wrapper(cb, job_index=0, jobs_total=3)
+        w1 = _enriched_job_message_wrapper(cb, job_index=1, jobs_total=3)
+        w2 = _enriched_job_message_wrapper(cb, job_index=2, jobs_total=3)
+        w0("JOB_LOG", {"x": 1})
+        w1("JOB_LOG", {"x": 2})
+        w2("JOB_LOG", {"x": 3})
+        assert [r["job_index"] for r in results] == [0, 1, 2]
+        assert all(r["jobs_total"] == 3 for r in results)
+
+    def test_enrichment_works_for_job_complete(self):
+        """JOB_COMPLETE payloads are also enriched."""
+        from sleap_rtc.api import _enriched_job_message_wrapper
+        captured = []
+        wrapper = _enriched_job_message_wrapper(
+            lambda t, d: captured.append((t, d.copy())), job_index=0, jobs_total=1,
+        )
+        wrapper("JOB_COMPLETE", {"output_path": "/tmp/pred.slp"})
+        assert captured[0][0] == "JOB_COMPLETE"
+        assert captured[0][1]["job_index"] == 0
+        assert captured[0][1]["output_path"] == "/tmp/pred.slp"
+
+    def test_enrichment_works_for_job_failed(self):
+        """JOB_FAILED payloads are also enriched."""
+        from sleap_rtc.api import _enriched_job_message_wrapper
+        captured = []
+        wrapper = _enriched_job_message_wrapper(
+            lambda t, d: captured.append((t, d.copy())), job_index=1, jobs_total=2,
+        )
+        wrapper("JOB_FAILED", {"message": "out of memory"})
+        assert captured[0][0] == "JOB_FAILED"
+        assert captured[0][1]["job_index"] == 1
+        assert captured[0][1]["message"] == "out of memory"
+
+
+class TestRunInferenceDelegatesToBatch:
+    """Verify run_inference delegates to run_inference_batch."""
+
+    def test_run_inference_signature_unchanged(self):
+        """run_inference still accepts all its original parameters."""
+        import inspect
+        from sleap_rtc.api import run_inference
+        sig = inspect.signature(run_inference)
+        expected = {
+            "data_path", "model_paths", "room_id", "worker_id",
+            "output_path", "batch_size", "peak_threshold",
+            "only_suggested_frames", "frames", "frame_filter",
+            "video_index", "exclude_user_labeled", "path_mappings",
+            "progress_callback", "timeout",
+            "on_channel_ready", "on_log", "on_job_message",
+        }
+        assert expected.issubset(set(sig.parameters.keys()))
+
+    def test_run_inference_return_type_is_single_result(self):
+        """Return annotation should be InferenceResult, not a list."""
+        import inspect
+        from sleap_rtc.api import run_inference
+        sig = inspect.signature(run_inference)
+        annotation = str(sig.return_annotation)
+        assert "list" not in annotation.lower()
+        assert "List" not in annotation
