@@ -199,6 +199,34 @@ class CommandBuilder:
         if spec.frames:
             cmd.extend(["--frames", spec.frames])
 
+        # Tracking parameters
+        if spec.tracker or spec.similarity or spec.match or spec.track_window:
+            cmd.append("--tracking")
+        if spec.tracker == "flow":
+            cmd.append("--use_flow")
+        if spec.similarity:
+            if spec.similarity == "centroids":
+                cmd.extend(["--features", "centroids"])
+                cmd.extend(["--scoring_method", "euclidean_dist"])
+            else:
+                cmd.extend(["--scoring_method", spec.similarity])
+        if spec.match:
+            cmd.extend(["--track_matching_method", spec.match])
+        if spec.track_window is not None:
+            cmd.extend(["--tracking_window_size", str(spec.track_window)])
+        if spec.robust is not None:
+            cmd.extend(["--robust_best_instance", str(spec.robust)])
+        if spec.max_tracks is not None:
+            cmd.extend(["--max_tracks", str(spec.max_tracks)])
+        if spec.connect_single_breaks:
+            cmd.append("--post_connect_single_breaks")
+
+        # Preprocessing
+        if spec.ensure_channels == "rgb":
+            cmd.append("--ensure_rgb")
+        elif spec.ensure_channels == "grayscale":
+            cmd.append("--ensure_grayscale")
+
         return cmd
 
     def build_command(

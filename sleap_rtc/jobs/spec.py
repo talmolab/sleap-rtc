@@ -139,6 +139,16 @@ class TrackJobSpec:
     frame_filter: Optional[str] = None
     video_index: Optional[int] = None
     path_mappings: Dict[str, str] = field(default_factory=dict)
+    # Tracking parameters
+    tracker: Optional[str] = None  # "simple" or "flow"
+    similarity: Optional[str] = None  # "oks", "iou", "centroids", "euclidean_dist"
+    match: Optional[str] = None  # "hungarian" or "greedy"
+    track_window: Optional[int] = None
+    robust: Optional[float] = None
+    max_tracks: Optional[int] = None
+    connect_single_breaks: bool = False
+    # Preprocessing
+    ensure_channels: Optional[str] = None  # "rgb" or "grayscale"
 
     _VALID_FRAME_FILTERS: ClassVar[Set[Optional[str]]] = {
         None,
@@ -181,6 +191,8 @@ class TrackJobSpec:
         """Deserialize spec from JSON string."""
         parsed = json.loads(data)
         parsed.pop("type", None)
+        known_fields = {f.name for f in cls.__dataclass_fields__.values()}
+        parsed = {k: v for k, v in parsed.items() if k in known_fields}
         return cls(**parsed)
 
     def to_dict(self) -> dict:
@@ -197,6 +209,8 @@ class TrackJobSpec:
         """Create spec from dictionary."""
         data = dict(data)  # Make a copy
         data.pop("type", None)
+        known_fields = {f.name for f in cls.__dataclass_fields__.values()}
+        data = {k: v for k, v in data.items() if k in known_fields}
         return cls(**data)
 
 
